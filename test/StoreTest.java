@@ -205,6 +205,9 @@ public class StoreTest {
 
         System.out.println("\n" + "=".repeat(54));
         System.out.println("  通过 " + pass + " 项，失败 " + fail + " 项");
+        // 纯 ASCII 统计行：CI 的 locale 不一定是 UTF-8，中文会变成 ?，
+        // verify.py 就抓不到数字。这一行任何编码下都读得出来。
+        System.out.println("STAT " + pass + " " + fail);
         System.out.println("=".repeat(54));
         if (fail > 0) System.exit(1);
     }

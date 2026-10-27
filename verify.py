@@ -164,6 +164,10 @@ def main():
                 m = re.search(r"通过\s*(\d+)\s*项，失败\s*(\d+)\s*项", line)
                 if not m:
                     m = re.search(r"(\d+)\s*项通过，\s*(\d+)\s*项失败", line)
+                if not m:
+                    # 纯 ASCII 统计行：CI 上 locale 可能不是 UTF-8，
+                    # 中文会变成 ?，上面两个正则全部落空。
+                    m = re.search(r"STAT\s+(\d+)\s+(\d+)", line)
                 if m:
                     n_pass, n_fail = int(m.group(1)), int(m.group(2))
         if n_pass is None:

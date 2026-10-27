@@ -55,6 +55,9 @@ public class LinalgTest {
             System.out.println("     ✗ 渲染失败：" + e);
         }
         System.out.println("  线性代数几何：" + pass + " 项通过，" + fails + " 项失败");
+        // 纯 ASCII 统计行：CI 的 locale 不一定是 UTF-8，中文会变成 ?，
+        // verify.py 就抓不到数字。这一行任何编码下都读得出来。
+        System.out.println("STAT " + pass + " " + fails);
         return fails;
     }
 

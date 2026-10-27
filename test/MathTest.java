@@ -49,6 +49,9 @@ public class MathTest {
         geometry();
         System.out.println("  数学引擎：" + pass + " 项通过，"
                 + fails.size() + " 项失败");
+        // 纯 ASCII 统计行：CI 的 locale 不一定是 UTF-8，中文会变成 ?，
+        // verify.py 就抓不到数字。这一行任何编码下都读得出来。
+        System.out.println("STAT " + pass + " " + fails.size());
         for (String f : fails) System.out.println("     ✗ " + f);
         for (String n : notes) System.out.println("     · " + n);
         return fails.size();

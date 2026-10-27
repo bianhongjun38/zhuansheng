@@ -49,6 +49,9 @@ public class KeypadAudit {
             System.out.println("     ✗ 渲染失败：" + e);
         }
         System.out.println("  输入面板：" + pass + " 项通过，" + fails + " 项失败");
+        // 纯 ASCII 统计行：CI 的 locale 不一定是 UTF-8，中文会变成 ?，
+        // verify.py 就抓不到数字。这一行任何编码下都读得出来。
+        System.out.println("STAT " + pass + " " + fails);
         return fails;
     }
 
@@ -58,6 +61,11 @@ public class KeypadAudit {
     }
 
     static void drawPage(String outDir, int which) throws Exception {
+        boolean cjk = hasCjk();
+        if (!cjk) {
+            System.out.println("  注意：当前环境没有中文字形，"
+                    + "中文标签宽度断言跳过（渲染图里中文会是方框）");
+        }
         // 360dp 宽的机身，按键板 6 列、模板 4 列 —— 和 MathView 一致
         int phoneDp = 360;
         int pad = 12;
@@ -171,8 +179,10 @@ public class KeypadAudit {
                 g.setFont(new Font("SansSerif", Font.PLAIN, 8));
                 FontMetrics fm = g.getFontMetrics();
                 int nw = fm.stringWidth(nm);
-                ok("模板名「" + nm + "」不溢出", nw <= tW - 4,
-                   nw + "px / " + (tW - 4) + "px");
+                if (cjk) {
+                    ok("模板名「" + nm + "」不溢出", nw <= tW - 4,
+                       nw + "px / " + (tW - 4) + "px");
+                }
                 g.drawString(nm, cx + (tW - nw) / 2, cy + tmplRowH - 8);
             }
         }
@@ -190,6 +200,26 @@ public class KeypadAudit {
     }
 
     static final Font BASE_FONT = new Font("SansSerif", Font.PLAIN, 11);
+
+    /**
+     * 当前环境有没有中文字形。
+     *
+     * CI 的 Ubuntu runner 常常一个中文字体都没装，drawString 会画出
+     * 空白方框，getFontMetrics 量出的宽度也接近 0 —— 那时"不溢出"
+     * 断言会假通过，等于白测。这里先探测，没有中文就明确跳过并说明，
+     * 而不是拿一个假通过糊过去。
+     */
+    static boolean hasCjk() {
+        try {
+            java.awt.Canvas c = new java.awt.Canvas();
+            java.awt.FontMetrics fm = c.getFontMetrics(
+                    new Font("SansSerif", Font.PLAIN, 14));
+            int w = fm.stringWidth("抛物线");
+            return w > 8;   // 三个汉字至少要有这么宽
+        } catch (Throwable t) {
+            return false;
+        }
+    }
 
     /** Metrics：直接用 AWT 字体度量，和手机上 Paint.measureText 行为一致。 */
     static class FM implements FormulaLayout.Metrics {
