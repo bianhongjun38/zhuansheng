@@ -53,7 +53,11 @@ jobs:
       - name: 构建 APK
         env:
           JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
-        run: python build_apk.py --bump
+        # 不用 --bump：版本号以仓库里的 version.json 为准。
+        # --bump 只在内存里 +1、不写回文件，CI 又不提交，
+        # 会导致每次 tag 构建都产出同一个 versionCode，升级检测失准。
+        # 正确做法：本地 bump 并提交，再打 tag。
+        run: python build_apk.py
 
       - name: 跑全部测试与检查
         env:

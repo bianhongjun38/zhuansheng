@@ -27,12 +27,13 @@ import java.net.URL;
  * 流程：启动后静默查 GitHub Release 最新版 → 有新版才弹窗 →
  * 下载 APK 到 cache → 拉起系统安装器覆盖安装。
  *
- * 为什么要覆盖安装而不是跳浏览器下载：
- *  · 手机上次次要手动找下载目录、点开、允许未知来源，太麻烦
- *  · 装好后进度数据在 SharedPreferences 里，覆盖安装不会丢
+ * 版本比较用 versionName（1.1.0 这种）换算成同单位整数，
+ * 不用 versionCode —— 因为 versionCode 是构建计数（10、11、12），
+ * 和 tag 里的 1.1.0 不是一套单位。混着比会永远判定「有新版」，
+ * 每次启动都弹框，那比没有更新功能更烦。
  *
  * 签名必须始终用同一把钥匙（指纹 05:24:6E:...），否则系统拒绝覆盖，
- * 只能卸载重装 —— 那样进度就没了。所以这个类的错误提示里要讲清楚。
+ * 只能卸载重装 —— 那样进度就没了。
  */
 public class Update {
 
@@ -56,8 +57,13 @@ public class Update {
                         if (!silent) toastOnUi("检查失败：网络不通");
                         return;
                     }
-                    final int remoteCode = parseCode(rel.optString("tag_name", ""));
-                    final int localCode = localVersionCode();
+                    final String tag = rel.optString("tag_name", "");
+                    final int remoteCode = parseVer(tag);
+                    final int localCode = parseVer(localVersionName());
+                    if (remoteCode == 0) {
+                        if (!silent) toastOnUi("已是最新版本 v" + localVersionName());
+                        return;
+                    }
                     if (remoteCode <= localCode) {
                         if (!silent) toastOnUi("已是最新版本 v" + localVersionName());
                         return;
@@ -67,9 +73,10 @@ public class Update {
                         if (!silent) toastOnUi("新版没有找到安装包");
                         return;
                     }
+                    final String ver = tag.replaceFirst("^[vV]", "");
                     final String notes = rel.optString("body", "");
                     ui.post(new Runnable() {
-                        public void run() { askUpdate(remoteCode, notes, apkUrl); }
+                        public void run() { askUpdate(ver, notes, apkUrl); }
                     });
                 } catch (Exception e) {
                     if (!silent) toastOnUi("检查失败：" + e.getClass().getSimpleName());
@@ -100,24 +107,25 @@ public class Update {
         }
     }
 
-    /** tag 形如 v1.0.3 → 10003；版本 1.0.0 → 10000。 */
-    private int parseCode(String tag) {
+    /** "1.1.0" / "v1.1.0" → 10100。解析不了返回 0。 */
+    static int parseVer(String s) {
+        if (s == null) return 0;
         try {
-            String s = tag.trim();
-            if (s.startsWith("v") || s.startsWith("V")) s = s.substring(1);
-            String[] p = s.split("\\.");
-            int maj = p.length > 0 ? Integer.parseInt(p[0].replaceAll("\\D", "0")) : 0;
-            int min = p.length > 1 ? Integer.parseInt(p[1].replaceAll("\\D", "0")) : 0;
-            int pat = p.length > 2 ? Integer.parseInt(p[2].replaceAll("\\D", "0")) : 0;
+            String t = s.trim();
+            if (t.startsWith("v") || t.startsWith("V")) t = t.substring(1);
+            // 去掉可能的后缀，如 1.1.0-beta
+            int cut = t.length();
+            for (int i = 0; i < t.length(); i++) {
+                char ch = t.charAt(i);
+                if (ch != '.' && (ch < '0' || ch > '9')) { cut = i; break; }
+            }
+            t = t.substring(0, cut);
+            if (t.isEmpty()) return 0;
+            String[] p = t.split("\\.");
+            int maj = p.length > 0 ? Integer.parseInt(p[0]) : 0;
+            int min = p.length > 1 ? Integer.parseInt(p[1]) : 0;
+            int pat = p.length > 2 ? Integer.parseInt(p[2]) : 0;
             return maj * 10000 + min * 100 + pat;
-        } catch (Exception e) {
-            return 0;
-        }
-    }
-
-    private int localVersionCode() {
-        try {
-            return act.getPackageManager().getPackageInfo(act.getPackageName(), 0).versionCode;
         } catch (Exception e) {
             return 0;
         }
@@ -125,9 +133,11 @@ public class Update {
 
     private String localVersionName() {
         try {
-            return act.getPackageManager().getPackageInfo(act.getPackageName(), 0).versionName;
+            String n = act.getPackageManager()
+                    .getPackageInfo(act.getPackageName(), 0).versionName;
+            return n == null ? "0.0.0" : n;
         } catch (Exception e) {
-            return "?";
+            return "0.0.0";
         }
     }
 
@@ -144,16 +154,17 @@ public class Update {
         return null;
     }
 
-    private void askUpdate(final int code, String notes, final String url) {
-        String body = "当前 v" + localVersionName() + "，最新 v" + code / 10000 + "."
-                + (code / 100) % 100 + "." + code % 100;
+    private void askUpdate(String ver, String notes, final String url) {
+        String body = "当前 v" + localVersionName() + "，最新 v" + ver + "。";
         if (notes != null && notes.trim().length() > 0) {
-            body += "\n\n" + (notes.length() > 400 ? notes.substring(0, 400) + "…" : notes);
+            String n = notes.trim();
+            body += "\n\n" + (n.length() > 500 ? n.substring(0, 500) + "…" : n);
         }
-        body += "\n\n覆盖安装不会丢失学习进度。";
+        body += "\n\n覆盖安装不会丢失学习进度。"
+                + "\n如果提示「不允许安装」，在系统设置里允许本应用安装未知应用即可。";
 
         new AlertDialog.Builder(act)
-                .setTitle("发现新版本")
+                .setTitle("发现新版本 v" + ver)
                 .setMessage(body)
                 .setPositiveButton("立即更新", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) { download(url); }
@@ -171,14 +182,33 @@ public class Update {
 
         new Thread(new Runnable() {
             public void run() {
-                File out = new File(act.getCacheDir(), "update.apk");
+                final File out = new File(act.getCacheDir(), "update.apk");
                 HttpURLConnection c = null;
                 try {
-                    c = (HttpURLConnection) new URL(url).openConnection();
-                    c.setConnectTimeout(15000);
-                    c.setReadTimeout(60000);
-                    c.setInstanceFollowRedirects(true);
-                    c.setRequestProperty("User-Agent", "zsb-plan");
+                    // Release 资产会 302 到 objects.githubusercontent.com，
+                    // 用 setInstanceFollowRedirects 在部分机型上会丢 redirect，
+                    // 这里手动跟一次。
+                    String target = url;
+                    for (int hop = 0; hop < 5; hop++) {
+                        c = (HttpURLConnection) new URL(target).openConnection();
+                        c.setConnectTimeout(15000);
+                        c.setReadTimeout(60000);
+                        c.setInstanceFollowRedirects(false);
+                        c.setRequestProperty("User-Agent", "zsb-plan");
+                        int sc = c.getResponseCode();
+                        if (sc == 301 || sc == 302 || sc == 303 || sc == 307 || sc == 308) {
+                            String loc = c.getHeaderField("Location");
+                            c.disconnect();
+                            if (loc == null) throw new Exception("重定向无地址");
+                            target = loc;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (c == null) throw new Exception("连接失败");
+                    if (c.getResponseCode() != 200) {
+                        throw new Exception("HTTP " + c.getResponseCode());
+                    }
                     int total = c.getContentLength();
                     InputStream in = c.getInputStream();
                     FileOutputStream fo = new FileOutputStream(out);
@@ -197,8 +227,14 @@ public class Update {
                             }
                         }
                     }
+                    fo.flush();
                     fo.close();
                     in.close();
+
+                    // 下载完整性：APK 至少几 MB，太小说明拿到的是错误页
+                    if (out.length() < 1024 * 1024) {
+                        throw new Exception("文件不完整（" + out.length() + " 字节）");
+                    }
 
                     ui.post(new Runnable() {
                         public void run() {
@@ -210,7 +246,7 @@ public class Update {
                     ui.post(new Runnable() {
                         public void run() {
                             pd.dismiss();
-                            toastOnUi("下载失败：" + e.getClass().getSimpleName());
+                            toastOnUi("下载失败：" + e.getMessage());
                         }
                     });
                 } finally {

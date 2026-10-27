@@ -103,14 +103,16 @@ def main():
                    os.path.join(SRC, "ProgressCode.java"),
                    os.path.join(TEST, "LogicTest.java"),
                    os.path.join(TEST, "StoreTest.java"),
-                   os.path.join(TEST, "CodeTest.java")])
+                   os.path.join(TEST, "CodeTest.java"),
+                   os.path.join(TEST, "VerTest.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
-    # ── 2. 跑三套测试 ───────────────────────────────────
+    # ── 2. 跑四套测试 ───────────────────────────────────
     for cls, label in (("com.zsb.plan.LogicTest", "计划解析与推进逻辑"),
                        ("com.zsb.plan.StoreTest", "状态存储与导入导出"),
-                       ("com.zsb.plan.CodeTest", "进度码编解码")):
+                       ("com.zsb.plan.CodeTest", "进度码编解码"),
+                       ("com.zsb.plan.VerTest", "版本比较")):
         print("\n▶ " + label)
         rc, out = run([JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
                        "-cp", JSON_JAR + os.pathsep + OUT, cls, ASSETS_PLAN])
@@ -126,6 +128,58 @@ def main():
             check(label, False, "没拿到测试统计，输出尾部：" + out[-300:])
         else:
             check(label, n_fail == 0, "%d 项通过 / %d 项失败" % (n_pass, n_fail))
+
+    # ── 2b. 源码一致性：VerTest 里的解析函数必须与 Update 同源 ──
+    # VerTest 复制了一份 parseVer 以便在桌面测试（Update 依赖 Activity 无法直接跑）。
+    # 两份一旦漂移，测试就白测了，所以直接比对函数体。
+    import re
+
+    def extract_fn(path, start_marker):
+        src = open(path, encoding="utf-8").read()
+        i = src.find(start_marker)
+        if i < 0:
+            return None
+        # 从标记处往后数大括号，取到配对的那个
+        j = src.find("{", i)
+        if j < 0:
+            return None
+        depth = 0
+        for k in range(j, len(src)):
+            if src[k] == "{":
+                depth += 1
+            elif src[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    body = src[j:k + 1]
+                    # 注释不算漂移，只比代码
+                    body = re.sub(r"//[^\n]*", "", body)
+                    body = re.sub(r"/\*.*?\*/", "", body, flags=re.S)
+                    return re.sub(r"\s+", " ", body).strip()
+        return None
+
+    fn_update = extract_fn(os.path.join(SRC, "Update.java"), "static int parseVer")
+    fn_test = extract_fn(os.path.join(TEST, "VerTest.java"), "static int parseVer")
+    check("parseVer 两份实现同源", fn_update is not None
+          and fn_update == fn_test,
+          "" if fn_update == fn_test else "Update 与 VerTest 的 parseVer 已漂移，"
+          "改一处必须同步改另一处")
+
+    # ── 2c. 版本号自洽：version.json 的 name 与 code 不能互相倒退 ──
+    import json as _json
+    vj = _json.load(open(os.path.join(PROJ, "version.json"), encoding="utf-8"))
+    vname = vj.get("versionName", "")
+    vcode = int(vj.get("versionCode", 0))
+    ok_name = re.match(r"^\d+\.\d+\.\d+$", vname) is not None
+    check("versionName 形如 x.y.z", ok_name, vname)
+    check("versionCode 为正整数", vcode > 0, "code=%d" % vcode)
+    # versionCode 与 versionName 的次版本号不必相等，但不能明显倒退：
+    # 比如 name 已经是 1.5.0，code 却还是 2，说明有人手改了文件。
+    if ok_name:
+        p = [int(x) for x in vname.split(".")]
+        want_min = p[0] * 100 + p[1]
+        check("versionCode 与 versionName 大致同步", vcode >= want_min // 100,
+              "name=%s code=%d（code 应以 10 为步长递增，"
+              "如 1.1.0→10、1.1.1→11）" % (vname, vcode))
 
     # ── 3. APK 静态检查 ─────────────────────────────────
     print("\n▶ APK 检查")
