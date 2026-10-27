@@ -59,15 +59,36 @@ public class GBattle {
     public boolean wrongDoubled = false;
 
     public GBattle(GameData g, GameData.Enemy e, Random r) {
+        this(g, e, r, null);
+    }
+
+    /**
+     * @param store 存档。用于跨战斗保留血量、兑现篝火挂账的治疗。
+     *              传 null 时按「每场满血、无治疗」跑，不会崩。
+     */
+    public GBattle(GameData g, GameData.Enemy e, Random r, GStore store) {
         G = g; rnd = r;
+        if (g != null && store != null) g.storeRef = store;
         enemy = e;
         enemyMaxHp = e == null ? 60 : e.hp;
         enemyHp = enemyMaxHp;
         enemyChargeNeed = e == null ? 1 : Math.max(1, e.charge);
         enemyCharge = 0;
         playerMaxHp = g.playerHp;
-        playerHp = playerMaxHp;
+
+        // ── 血量跨战斗保留 ────────────────────────────────────
+        // 原来每场战斗都 playerHp = playerMaxHp（满血开局）—— 那样篝火的
+        // 「回复生命」和商店买的治疗全是白买，因为下一场反正满血。
+        // 现在从存档读当前血量：0 表示还没开始过（按满血），
+        // 否则接着上一场结束时的血量，上限拉回 max。
+        int saved = g != null && g.storeRef != null ? g.storeRef.curHp() : -1;
+        if (saved > 0) {
+            playerHp = Math.min(playerMaxHp, saved);
+        } else {
+            playerHp = playerMaxHp;
+        }
         turn = 1;
+        consumeCampHeal();   // 篝火/商店挂账的治疗在这里兑现
         startTurn();
     }
 
@@ -149,7 +170,7 @@ public class GBattle {
 
         lastMsg = (chained ? "同义连锁 ×" + chain + "  " : "") + c.en + "  造成 " + dmg + " 伤害";
 
-        if (enemyHp <= 0) { enemyHp = 0; phase = PHASE_WIN; }
+        if (enemyHp <= 0) { enemyHp = 0; phase = PHASE_WIN; saveHp(); }
         else if (energy <= 0 || hand.isEmpty()) endTurn(false);
         return dmg;
     }
@@ -315,7 +336,35 @@ public class GBattle {
         if (playerHp <= 0) {
             playerHp = 0;
             phase = PHASE_LOSE;
+            saveHp();
         }
+    }
+
+    /**
+     * 把当前血量写进存档，供下一场战斗接着用。
+     *
+     * 胜利时写当前血量；失败时写 0（下次重新满血，因为已经死过了）。
+     * 篝火/商店的治疗在 GStore.campHeal() 里挂账，由 startTurn 之外的地方兑现 ——
+     * 见 consumeCampHeal()。
+     */
+    private void saveHp() {
+        if (G == null || G.storeRef == null) return;
+        G.storeRef.setCurHp(playerHp);
+    }
+
+    /**
+     * 兑现篝火 / 商店挂账的治疗量。
+     *
+     * 挂账发生在非战斗节点（那时没有 GBattle 实例可改），所以必须在
+     * 战斗开始时补上。兑现后清零，避免一路攒成白嫖满血。
+     */
+    private void consumeCampHeal() {
+        if (G == null || G.storeRef == null) return;
+        int h = G.storeRef.campHeal();
+        if (h <= 0) return;
+        playerHp = Math.min(playerMaxHp, playerHp + h);
+        G.storeRef.clearCampHeal();
+        lastMsg = "🔥 篝火/治疗 +" + h + " 生命";
     }
 
     // ── 查询 ─────────────────────────────────────────────

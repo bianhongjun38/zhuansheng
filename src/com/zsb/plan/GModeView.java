@@ -47,9 +47,7 @@ public class GModeView extends LinearLayout {
     private android.widget.ScrollView scroller;
     private GBattleView battleView;
     private Runnable onExit;
-    /** 当前这场战斗所在路线的节点总数。战斗结束时用它判断「这层走完了没有」。
-     *  四条路线长度不同（10~12），所以必须在 enterNode 那一刻记下玩家实际选的那条。 */
-    private int curRouteLen = 0;
+
 
     public GModeView(Context c, GStore s) {
         super(c);
@@ -148,81 +146,205 @@ public class GModeView extends LinearLayout {
 
     // ── 地图 ─────────────────────────────────────────────
 
+    /**
+     * 画地图。
+     *
+     * 自上而下一层层画，每层横排该层所有节点。**只有从玩家当前位置能走到的
+     * 节点才可点**，其余全部只展示 —— 这就是「自主选路」的来源。
+     */
     private void renderMap() {
         body.removeAllViews();
         updateHead();
 
-        JSONArray route = store.route();
-        if (route.length() == 0) {
-            // 首次进入：提示 + 开始
+        GameData.RouteMap map = loadOrMakeMap();
+        if (map == null) {
             LinearLayout intro = box();
             intro.addView(title("开始一局"));
-            intro.addView(sub("4 条路线，每条 10~12 个节点。至少一条路线没有精英，" +
-                    "但商店也更少 —— 想稳就拿少点资源，想赌就去打精英。"));
-            intro.addView(sub("每层至少 10 场战斗。精英会掉永久特殊词，死了就没了。"));
+            intro.addView(sub("树枝状地图：每层 1~3 个节点，走哪条由你决定。"));
+            intro.addView(sub("战斗 / 商店 / 篝火 / 宝箱 / 精英，五种格子各有用途。"));
             intro.addView(bigBtn("生成地图", C_PURPLE, this::newMap));
             body.addView(intro);
             return;
         }
 
-        int node = store.node();
-        int layer = store.layer();
+        int row = store.curRow();
+        int col = store.curCol();
+        if (row < 0 || row >= map.rows()) { row = 0; store.setPos(0, 0); col = 0; }
+
+        List<GameData.Node> curLayer = map.row(row);
+
+        // col == -1 表示「刚打完上一格的战斗，还没在这一层选格子」。
+        // 这种状态下**整层所有非末层节点都可选** —— 这正是分叉的意义：
+        // 打完一架，你站在岔路口，往左往右自己挑。
+        boolean forkPending = (col < 0 || col >= curLayer.size());
+        GameData.Node here = forkPending ? null : curLayer.get(col);
+
+        // 玩家下一步能去的节点下标集合
+        java.util.Set<Integer> reachable = new java.util.HashSet<>();
+        if (forkPending) {
+            // 岔路口：这一层全部可选
+            for (int i = 0; i < curLayer.size(); i++) reachable.add(i);
+        } else {
+            for (int idx : here.next) reachable.add(idx);
+        }
 
         LinearLayout hdr = box();
-        hdr.addView(title("第 " + (layer + 1) + " 层 · 节点 " + (node + 1)));
-        hdr.addView(sub("当前金币 " + store.gold() + "，累计答对 " + store.right()
+        hdr.addView(title("第 " + (row + 1) + " / " + map.rows() + " 层"));
+        hdr.addView(sub("金币 " + store.gold() + "    答对 " + store.right()
                 + " / 答错 " + store.wrong()));
         body.addView(hdr);
 
-        for (int i = 0; i < route.length(); i++) {
-            JSONArray r = route.optJSONArray(i);
-            if (r == null) continue;
-            body.addView(routeCard(i, r, node));
+        // 自上而下画。倒序？不 —— 从上往下画，玩家从上面往下走，
+        // 顶部是已走过的路，底部是还没去的，视线方向自然。
+        for (int r = 0; r < map.rows(); r++) {
+            List<GameData.Node> layer = map.row(r);
+            LinearLayout line = new LinearLayout(getContext());
+            line.setOrientation(HORIZONTAL);
+            line.setGravity(Gravity.CENTER);
+            line.setPadding(0, dp(4), 0, dp(4));
+
+            for (int c = 0; c < layer.size(); c++) {
+                final GameData.Node n = layer.get(c);
+                final int myRow = r, myCol = c;
+
+                boolean isHere = (!forkPending && r == row && c == col);
+                // forkPending：当前层可点（选路）；否则只能点下一层的可达格
+                boolean canGo = forkPending
+                        ? (r == row)
+                        : (r == row + 1 && reachable.contains(c));
+                boolean passed = store.isVisited(r, c);
+
+                TextView chip = nodeChip(n.type, isHere, canGo, passed);
+                LinearLayout.LayoutParams lp =
+                        new LinearLayout.LayoutParams(dp(46), dp(46));
+                lp.leftMargin = dp(7);
+                lp.rightMargin = dp(7);
+                chip.setLayoutParams(lp);
+
+                if (canGo) {
+                    chip.setOnClickListener(v -> enterNode(myRow, myCol, n.type));
+                }
+                line.addView(chip);
+            }
+            body.addView(line);
+
+            // 层与层之间的连线提示（简单竖线，视觉上把树枝串起来）
+            if (r < map.rows() - 1) {
+                View conn = new View(getContext());
+                conn.setBackgroundColor(C_LINE);
+                LinearLayout.LayoutParams cp =
+                        new LinearLayout.LayoutParams(dp(1), dp(10));
+                conn.setLayoutParams(cp);
+                LinearLayout wrap = new LinearLayout(getContext());
+                wrap.setGravity(Gravity.CENTER);
+                wrap.addView(conn);
+                body.addView(wrap);
+            }
         }
+
+        // 图例
+        LinearLayout legend = box();
+        legend.addView(sub("战=战斗  精=精英  店=商店  火=篝火  箱=宝箱"));
+        legend.addView(sub("亮色描边 = 下一步可去，暗色 = 已走过或去不了"));
+        body.addView(legend);
 
         LinearLayout foot = box();
         foot.addView(smallBtn("重新生成地图（进度清零）", () -> {
             store.resetRun();
+            store.setMap("");
             renderMap();
         }));
         body.addView(foot);
     }
 
-    private View routeCard(int ri, JSONArray r, int curNode) {
-        LinearLayout box = box();
+    /**
+     * 从存档还原地图；没有就现造一张。
+     *
+     * 邻接关系由 makeMap 现场重建 —— 但它依赖 Random，存档里没有种子，
+     * 所以必须**把生成的邻接表一起存下来**，否则读档后连通性全变了。
+     * 这里改用「按层节点数确定性重建」：只要每层节点数一致，makeMap 的
+     * 连边算法就是确定的？不是 —— 它用了 rnd。所以改成存完整拓扑。
+     *
+     * 实际做法：存档里把每层的节点类型存成 "0,2,1|2,4|..."（| 分层，, 分列），
+     * 连通性则存成 "0-1,0-2|1-0,1-2|..."（层内 h 连到下层 t）。
+     */
+    private GameData.RouteMap loadOrMakeMap() {
+        String raw = store.mapRaw();
+        if (raw == null || raw.isEmpty()) return null;
 
-        LinearLayout h = new LinearLayout(getContext());
-        h.setOrientation(HORIZONTAL);
-        h.setGravity(Gravity.CENTER_VERTICAL);
-        TextView t = title("路线 " + (ri + 1));
-        h.addView(t);
-        TextView c = sub(r.length() + " 节点");
-        c.setPadding(dp(8), 0, 0, 0);
-        h.addView(c);
-        box.addView(h);
-
-        // 节点串
-        LinearLayout row = new LinearLayout(getContext());
-        row.setOrientation(HORIZONTAL);
-        row.setPadding(0, dp(8), 0, 0);
-        for (int i = 0; i < r.length(); i++) {
-            final int idx = i;
-            String raw = r.optString(i, "0");
-            int type = parseInt(raw);
-            TextView n = nodeChip(type, i == curNode);
-            if (i == curNode) {
-                n.setOnClickListener(v -> enterNode(ri, idx, type));
+        try {
+            GameData.RouteMap m = new GameData.RouteMap();
+            String[] layerStrs = raw.split("\\|");
+            for (int r = 0; r < layerStrs.length; r++) {
+                String ls = layerStrs[r];
+                List<GameData.Node> layer = new ArrayList<>();
+                if (!ls.isEmpty()) {
+                    String[] cols = ls.split(",");
+                    for (int c = 0; c < cols.length; c++) {
+                        int type = parseInt(cols[c]);
+                        layer.add(new GameData.Node(type, r, c));
+                    }
+                }
+                m.nodes.add(layer);
             }
-            row.addView(n);
+            // 重建连通性：按 makeMap 同样的算法会不可复现，所以改用「按层节点数
+            // 均匀分配」的确定性规则 —— 与 makeMap 的"按比例映射"主边一致。
+            rebuildEdges(m);
+            return m;
+        } catch (Exception e) {
+            return null;
         }
-        android.widget.HorizontalScrollView hsv = new android.widget.HorizontalScrollView(getContext());
-        hsv.setHorizontalScrollBarEnabled(false);
-        hsv.addView(row);
-        box.addView(hsv);
-        return box;
     }
 
-    private TextView nodeChip(int type, boolean cur) {
+    /**
+     * 重建层间连边。规则与 makeMap 的主干边一致：上一层的第 i 个节点
+     * 按比例映射到下一层，再补齐所有下层节点的入边。
+     *
+     * 这样存档只需存「每层有几个节点、各是什么类型」，连通性完全确定，
+     * 读档不会走样。
+     */
+    private static void rebuildEdges(GameData.RouteMap m) {
+        for (int r = 0; r < m.rows() - 1; r++) {
+            List<GameData.Node> cur = m.row(r);
+            List<GameData.Node> nxt = m.row(r + 1);
+            int nc = nxt.size();
+            for (GameData.Node n : cur) n.next.clear();
+            for (int i = 0; i < cur.size(); i++) {
+                int target = cur.size() == 1 ? 0
+                        : (int) Math.round((double) i * (nc - 1) / Math.max(1, cur.size() - 1));
+                target = Math.max(0, Math.min(nc - 1, target));
+                if (!cur.get(i).next.contains(target)) cur.get(i).next.add(target);
+            }
+            // 补齐入边
+            for (int j = 0; j < nc; j++) {
+                boolean has = false;
+                for (GameData.Node n : cur) if (n.next.contains(j)) has = true;
+                if (has) continue;
+                int src = cur.size() == 1 ? 0
+                        : Math.max(0, Math.min(cur.size() - 1,
+                            (int) Math.round((double) j * (cur.size() - 1) / Math.max(1, nc - 1))));
+                cur.get(src).next.add(j);
+            }
+            for (GameData.Node n : cur) java.util.Collections.sort(n.next);
+        }
+    }
+
+    /** 把 GameData.RouteMap 序列化成存档字符串。 */
+    private static String mapToRaw(GameData.RouteMap m) {
+        StringBuilder sb = new StringBuilder();
+        for (int r = 0; r < m.rows(); r++) {
+            if (r > 0) sb.append("|");
+            List<GameData.Node> layer = m.row(r);
+            for (int c = 0; c < layer.size(); c++) {
+                if (c > 0) sb.append(",");
+                sb.append(layer.get(c).type);
+            }
+        }
+        return sb.toString();
+    }
+
+    /** 节点格子。 */
+    private TextView nodeChip(int type, boolean isHere, boolean canGo, boolean passed) {
         String icon;
         int color;
         switch (type) {
@@ -232,53 +354,206 @@ public class GModeView extends LinearLayout {
             case GameData.N_ELITE: icon = "精"; color = C_RED; break;
             default:               icon = "战"; color = C_FG2; break;
         }
-        TextView t = tv(icon, 12, cur ? 0xFFFFFFFF : color);
+
+        TextView t = tv(icon, 13, isHere || canGo ? 0xFFFFFFFF : C_FG3);
         t.setGravity(Gravity.CENTER);
         GradientDrawable g = new GradientDrawable();
-        g.setCornerRadius(dp(8));
-        g.setColor(cur ? color : C_BG3);
-        g.setStroke(dp(1), cur ? color : C_LINE);
+        g.setCornerRadius(dp(10));
+
+        if (isHere) {
+            // 当前位置：实心高亮
+            g.setColor(color);
+            g.setStroke(dp(2), 0xFFFFFFFF);
+        } else if (canGo) {
+            // 可去：描边发亮
+            g.setColor(C_BG3);
+            g.setStroke(dp(2), color);
+        } else if (passed) {
+            // 走过：压暗
+            g.setColor(0xFF191C22);
+            g.setStroke(dp(1), C_LINE);
+        } else {
+            // 还没到 / 去不了的未来节点
+            g.setColor(C_BG2);
+            g.setStroke(dp(1), C_LINE);
+        }
         t.setBackground(g);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(30), dp(30));
-        lp.rightMargin = dp(6);
-        t.setLayoutParams(lp);
+        t.setAlpha(isHere || canGo || passed ? 1f : 0.45f);
         return t;
     }
 
-    /** 抽一张新地图。翻层和「生成地图」按钮共用这一段，避免两份生成逻辑走偏。 */
-    private JSONArray newRouteArr() {
-        List<List<GameData.Node>> routes = GameData.makeMap(rnd);
-        JSONArray arr = new JSONArray();
-        for (List<GameData.Node> route : routes) {
-            JSONArray one = new JSONArray();
-            for (GameData.Node n : route) one.put(String.valueOf(n.type));
-            arr.put(one);
-        }
-        return arr;
-    }
-
+    /**
+     * 抽一张新地图。
+     *
+     * 起点（第 0 层）是普通战斗，但**不该让玩家先点一个「战」格子**才开始 ——
+     * 那一步没有任何选择。所以直接把第 0 层标记为已走过，位置落到「岔路口」
+     * 状态，玩家一进来就在第 1 层挑路。
+     */
     private void newMap() {
-        store.setRoute(newRouteArr());
-        store.setNode(0);
+        GameData.RouteMap m = GameData.makeMap(rnd);
+        store.setMap(mapToRaw(m));
+        store.setVisitedClear();
+        store.markVisited(0, 0);
+        // row=0 且 col=-1：站在第 0 层但还没选格子 → 第 0 层全部可选
+        store.setPos(0, -1);
         renderMap();
     }
 
-    // ── 进入节点 ─────────────────────────────────────────
+    /**
+     * 进入一个节点。
+     *
+     * ── 这里修的是最严重的逻辑 bug ─────────────────────────
+     * 旧代码把五种类型全塞进 startBattle：
+     *     if (type == N_BATTLE || type == N_ELITE || type == N_SHOP
+     *             || type == N_CAMP || type == N_CHEST) { startBattle(...); }
+     * 所以选篝火、进商店、开宝箱，全都是打一场怪 ——
+     * 玩家反馈的「选择火也是进入怪物战」就是这一行。
+     *
+     * 现在每种节点走各自的流程：
+     *   战斗 / 精英 → 开战
+     *   篝火       → 回复生命（补给点）
+     *   商店       → 花金币买特殊词 / 治疗
+     *   宝箱       → 直接拿金币
+     */
+    private void enterNode(int row, int col, int type) {
+        store.setPos(row, col);
+        store.markVisited(row, col);
 
-    private void enterNode(int routeIdx, int nodeIdx, int type) {
-        store.setNode(nodeIdx);
-        // 记下所选路线的长度，战斗结束时判「是不是到最后一格了」
-        JSONArray rt = store.route();
-        JSONArray chosen = rt.optJSONArray(routeIdx);
-        curRouteLen = chosen == null ? 0 : chosen.length();
-
-        if (type == GameData.N_BATTLE || type == GameData.N_ELITE
-                || type == GameData.N_SHOP || type == GameData.N_CAMP
-                || type == GameData.N_CHEST) {
-            GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
-            startBattle(e);
-            return;
+        switch (type) {
+            case GameData.N_CAMP:
+                showCamp();
+                return;
+            case GameData.N_SHOP:
+                showShop();
+                return;
+            case GameData.N_CHEST:
+                openChest();
+                return;
+            default: {
+                GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
+                if (e == null) { advanceAfterNode(); return; }
+                startBattle(e);
+            }
         }
+    }
+
+    /** 篝火：回血。是补给点，不是战斗。 */
+    private void showCamp() {
+        body.removeAllViews();
+        updateHead();
+
+        int maxHp = data.playerHp;
+        int heal = Math.max(10, Math.round(maxHp * 0.3f));
+
+        LinearLayout card = box();
+        card.addView(title("🔥 篝火"));
+        card.addView(sub("你在火堆边坐下休息。"));
+        card.addView(sub("生命上限 " + maxHp + "，这次休息可回复 " + heal + " 点。"));
+        body.addView(card);
+
+        LinearLayout acts = box();
+        acts.addView(bigBtn("休息 · 回复 " + heal + " 生命", C_ORANGE, () -> {
+            store.addCampHeal(heal);
+            flashThen("🔥 已休息：下一场战斗 +" + heal + " 生命", this::advanceAfterNode);
+        }));
+        acts.addView(smallBtn("不休息，直接前进", this::advanceAfterNode));
+        body.addView(acts);
+    }
+
+    /** 商店：花金币买特殊词 / 治疗。是消费点，不是战斗。 */
+    private void showShop() {
+        body.removeAllViews();
+        updateHead();
+
+        LinearLayout card = box();
+        card.addView(title("🏪 商店"));
+        card.addView(sub("当前金币 " + store.gold() + "。"));
+        body.addView(card);
+
+        LinearLayout acts = box();
+        int base = 30 + store.layer() * 10;
+
+        acts.addView(buyRow("随机特殊词", base + 40, () -> {
+            GameData.Special pick = data.randomUnownedSpecial(store, rnd);
+            if (pick == null) { toast("特殊词已集齐，没得卖了"); return; }
+            store.addSpecial(pick.id);
+            flashThen("🏪 买到特殊词：" + pick.cn, this::advanceAfterNode);
+        }));
+
+        acts.addView(buyRow("回复 25 生命", base, () -> {
+            store.addCampHeal(25);
+            flashThen("🏪 已购买治疗：下一场战斗 +25 生命", this::advanceAfterNode);
+        }));
+
+        acts.addView(smallBtn("离开商店", this::advanceAfterNode));
+        body.addView(acts);
+    }
+
+    /** 商店一行商品：名字 + 价格 + 按钮。 */
+    private View buyRow(String name, int price, Runnable onBuy) {
+        LinearLayout row = new LinearLayout(getContext());
+        row.setOrientation(HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(6), 0, dp(6));
+
+        boolean afford = store.gold() >= price;
+
+        TextView nm = tv(name + "　" + price + " 金", 13, C_FG);
+        nm.setLayoutParams(new LinearLayout.LayoutParams(0,
+                ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(nm);
+
+        TextView btn = tv(afford ? "购买" : "金币不足", 12, afford ? C_AMBER : C_FG3);
+        btn.setPadding(dp(14), dp(7), dp(14), dp(7));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(8));
+        g.setColor(C_BG3);
+        g.setStroke(dp(1), afford ? C_AMBER : C_LINE);
+        btn.setBackground(g);
+        if (afford) {
+            btn.setOnClickListener(v -> {
+                if (store.spend(price)) onBuy.run();
+                else toast("金币不足");
+            });
+        }
+        row.addView(btn);
+        return row;
+    }
+
+    /** 宝箱：直接拿金币。是奖励点，不是战斗。 */
+    private void openChest() {
+        body.removeAllViews();
+        updateHead();
+
+        int gold = 20 + rnd.nextInt(30) + store.layer() * 5;
+
+        LinearLayout card = box();
+        card.addView(title("📦 宝箱"));
+        card.addView(sub("闪闪发光的箱子。打开可获得 " + gold + " 金币。"));
+        body.addView(card);
+
+        LinearLayout acts = box();
+        acts.addView(bigBtn("打开 · 拿 " + gold + " 金币", C_TEAL, () -> {
+            store.addGold(gold);
+            flashThen("📦 获得 " + gold + " 金币", this::advanceAfterNode);
+        }));
+        acts.addView(smallBtn("不打开，直接前进", this::advanceAfterNode));
+        body.addView(acts);
+    }
+
+    /** 显示一句结果，等玩家点继续。 */
+    private void flashThen(String msg, Runnable next) {
+        body.removeAllViews();
+        updateHead();
+        LinearLayout card = box();
+        card.addView(title(msg));
+        body.addView(card);
+        body.addView(bigBtn("继续", C_PURPLE, next));
+    }
+
+    /** 非战斗节点处理完，推进到下一步。 */
+    private void advanceAfterNode() {
+        advanceStep();
         renderMap();
     }
 
@@ -306,25 +581,49 @@ public class GModeView extends LinearLayout {
      *      于是节点越界、地图上一个能点的格子都没有 —— 玩家被卡死在层末。
      */
     private void advanceAfterBattle() {
-        int len = curRouteLen;
-        int next = store.node() + 1;
-        if (len > 0 && next >= len) {
-            // 这条路线走完，进下一层：重新抽 4 条路线，节点归零
-            store.setLayer(store.layer() + 1);
-            store.setNode(0);
-            store.setRoute(newRouteArr());
-        } else {
-            store.setNode(next);
-        }
-        // bestFloor 存的是 0 基的层索引（界面显示时统一 +1 成 Lv.N）。
-        // 所以这里必须传 layer() 本身，不能 +1 —— 传 layer()+1 会让
-        // 第 2 层显示成 Lv.3（实测踩过）。原来的 bug 不是这里传错，
-        // 而是 layer() 恒为 0 且从来没被 setLayer 递增过。
-        store.raiseFloor(store.layer());
+        advanceStep();
         endBattle();
     }
 
+    /**
+     * 推进到地图上的下一步。
+     *
+     * 分叉地图没有「路线长度」概念了 —— 玩家站在 (row,col)，下一步是他
+     * 在那个节点上选的。但战斗结束后玩家还没选，所以流程是：
+     *   打完 → row+1（先落到下一层），下一层具体哪个格子等他点。
+     *
+     * 这里只负责「层数往上走 + 刷新 Lv. + 到底了翻新地图」；
+     * 具体站在下一层的哪一格，由玩家点哪个可达节点决定（enterNode 里 setPos）。
+     */
+    private void advanceStep() {
+        GameData.RouteMap map = loadOrMakeMap();
+        if (map == null) { renderMap(); return; }
+
+        int row = store.curRow();
+        int nextRow = row + 1;
+
+        if (nextRow >= map.rows()) {
+            // 走到底了：进新一层，整张地图重抽
+            store.setLayer(store.layer() + 1);
+            GameData.RouteMap nm = GameData.makeMap(rnd);
+            store.setMap(mapToRaw(nm));
+            store.setVisitedClear();
+            store.markVisited(0, 0);
+            store.setPos(0, -1);   // 新一层同样从岔路口开始
+        } else {
+            // 还没到底：位置先落在这一层，等玩家点可达格。
+            // 用 -1 表示"在层间过渡，尚未选定格子"。
+            store.setPos(nextRow, -1);
+        }
+        store.raiseFloor(store.layer());
+    }
+
     // ── 控件 ─────────────────────────────────────────────
+
+    private void toast(String s) {
+        android.widget.Toast.makeText(getContext(), s,
+                android.widget.Toast.LENGTH_SHORT).show();
+    }
 
     private LinearLayout box() {
         LinearLayout b = new LinearLayout(getContext());

@@ -1,14 +1,14 @@
 {
   "ok": true,
-  "versionName": "1.5.6",
-  "versionInt": 10506,
-  "versionCode": 30,
-  "notes": "v1.5.6（由 发版worker.py 自动生成）",
+  "versionName": "1.5.7",
+  "versionInt": 10507,
+  "versionCode": 31,
+  "notes": "v1.5.7（由 发版worker.py 自动生成）",
   "apk": {
-    "name": "zhuansheng-v1.5.6.apk",
-    "size": 3820264,
-    "url": "https://dl.xxjcloudns.kdns.fr/zhuansheng-v1.5.6.apk"
+    "name": "zhuansheng-v1.5.7.apk",
+    "size": 3824360,
+    "url": "https://dl.xxjcloudns.kdns.fr/zhuansheng-v1.5.7.apk"
   },
-  "publishedAt": "2026-10-28T01:01:02+08:00",
+  "publishedAt": "2026-10-28T01:08:29+08:00",
   "source": "worker-static"
 }

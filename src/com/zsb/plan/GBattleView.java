@@ -160,7 +160,7 @@ public class GBattleView extends LinearLayout {
     // ── 开始战斗 ─────────────────────────────────────────
 
     public void start(GameData.Enemy e) {
-        battle = new GBattle(data, e, rnd);
+        battle = new GBattle(data, e, rnd, store);
         sprite.load(e == null ? "mists" : e.sprite);
         sprite.play("idle");
         endShown = false;               // 新一场，允许再结算一次
@@ -863,7 +863,7 @@ public class GBattleView extends LinearLayout {
             GStore.Battle b = new GStore.Battle();
             b.day = com.zsb.plan.StateLogic.todayIso();
             b.floor = store.layer();
-            b.node = store.node();
+            b.node = store.curRow();   // 分叉地图下「节点」就是第几层（供排行榜展示用）
             b.win = win;
             b.gold = Math.max(0, store.gold() - bpGold0);
             b.right = Math.max(0, store.right() - bpRight0);

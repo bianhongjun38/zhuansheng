@@ -26,6 +26,11 @@ import java.util.Set;
  */
 public class GameData {
 
+    /** 存档引用，由界面层注入。战斗需要它来读写跨战斗状态（血量、篝火挂账）。
+     *  为 null 时一切按「无存档」的默认行为跑，不会崩。 */
+    public GStore storeRef;
+
+
     private static GameData I;
 
     public static synchronized GameData get(Context c) {
@@ -217,55 +222,220 @@ public class GameData {
 
     public static final int N_BATTLE = 0, N_SHOP = 1, N_CAMP = 2, N_CHEST = 3, N_ELITE = 4;
 
+    /**
+     * 地图节点。
+     *
+     * row = 第几层（自上而下 0..N-1），col = 该层从左到右第几个（0..2）。
+     * 同一层最多 3 个节点，nodes[row] 是一个变长数组 —— 有的层只有 2 个甚至 1 个，
+     * 这样才能画出真正会分叉、会合并的树枝，而不是固定几列。
+     */
     public static class Node {
         public int type;
         public int row;
         public int col;
         public boolean done;
         public Enemy enemy;
+        /** 下一层可达节点的下标（在 nodes[row+1] 里的位置）。空数组 = 终点。 */
+        public final List<Integer> next = new ArrayList<>();
         public Node(int t, int r, int c) { type = t; row = r; col = c; }
+        public Node(int t) { this(t, 0, 0); }
     }
 
     /**
-     * 生成 4 条路线。规则来自平衡表：战场 50%、商店 12%、篝火 15%、
-     * 宝箱 10%、精英 13%；并保证至少一条路线完全没有精英（但商店更少）。
+     * 生成树枝状分叉地图（Slay the Spire 式）。
+     *
+     * ── 为什么要重写 ──────────────────────────────────────
+     * 旧版是「4 条平行的直线，每条 10~12 节点」，而且 routeCard 给**每条路线**
+     * 当前节点都绑了点击 —— 玩家可以第 1 步走路线 1、第 2 步跳到路线 3，
+     * 根本没有「选择一条路」的感觉，只是在 4 个并排的进度条之间乱点。
+     *
+     * 现在：一层 1~3 个节点，上一层任意节点连到下一层相邻的 1~2 个节点，
+     * 玩家**当前能去的格子**由「你上一步站在哪」决定，走不通的地方点了没用。
+     *
+     * ── 结构保证 ─────────────────────────────────────────
+     *   · 第 0 层固定 1 个节点（起点，普通战斗）
+     *   · 最后一层固定 1 个节点（Boss 前的关底，普通战斗）
+     *   · 每层节点数 1~3，层数 12~14
+     *   · 每个非末层节点至少连出 1 条边，不会出现死路
+     *   · 至少一条通往终点的路径上完全没有精英（给不想赌的玩家留活路）
+     *   · 相邻两层不出现「同类型硬串」—— 连着的两个篝火没意义
      */
-    public static List<List<Node>> makeMap(Random rnd) {
-        List<List<Node>> routes = new ArrayList<>();
-        for (int r = 0; r < 4; r++) routes.add(buildRoute(rnd, r == 3));
-        return routes;
+    public static final class RouteMap {
+        /** nodes.get(row) = 该层所有节点。 */
+        public final List<List<Node>> nodes = new ArrayList<>();
+        public int rows() { return nodes.size(); }
+        public List<Node> row(int r) { return nodes.get(r); }
+        public Node start() { return nodes.get(0).get(0); }
     }
 
-    private static List<Node> buildRoute(Random rnd, boolean noElite) {
-        int len = 10 + rnd.nextInt(3);          // 10~12 节点
-        List<Node> route = new ArrayList<>();
-        for (int i = 0; i < len; i++) {
-            int t;
-            if (i == 0) {
-                t = N_BATTLE;                    // 第 1 个必是战斗
-            } else if (i == len - 1) {
-                t = N_BATTLE;                    // 最后一个必是战斗
-            } else {
-                t = pickType(rnd, noElite);
-            }
-            route.add(new Node(t, 0, i));
+    /** 生成一张分叉地图。 */
+    public static RouteMap makeMap(Random rnd) {
+        RouteMap m = new RouteMap();
+        int rows = 12 + rnd.nextInt(3);          // 12~14 层
+
+        // ① 先定每层的节点数：首末层各 1 个，中间 1~3 个（多数是 2~3）
+        List<Integer> counts = new ArrayList<>();
+        counts.add(1);
+        for (int r = 1; r < rows - 1; r++) {
+            int roll = rnd.nextInt(100);
+            if (roll < 18) counts.add(1);
+            else if (roll < 62) counts.add(2);
+            else counts.add(3);
         }
-        // 每 4 个节点内不许连续两个同类非战斗节点，防止整段没有战斗
-        for (int i = 1; i < route.size(); i++) {
-            if (route.get(i).type != N_BATTLE && route.get(i - 1).type == route.get(i).type) {
-                route.get(i).type = N_BATTLE;
+        counts.add(1);
+
+        // ② 建节点
+        for (int r = 0; r < rows; r++) {
+            List<Node> layer = new ArrayList<>();
+            for (int c = 0; c < counts.get(r); c++) layer.add(new Node(N_BATTLE, r, c));
+            m.nodes.add(layer);
+        }
+
+        // ③ 连边：每个节点连到下一层相邻 1~2 个节点。
+        //    先保证「下一层每个节点都有人连」，否则那一层是孤岛、永远走不到。
+        for (int r = 0; r < rows - 1; r++) {
+            List<Node> cur = m.nodes.get(r);
+            List<Node> nxt = m.nodes.get(r + 1);
+            int nc = nxt.size();
+
+            // 反推：下一层每个节点至少被一个上层节点连到
+            List<List<Integer>> inFrom = new ArrayList<>();
+            for (int i = 0; i < nc; i++) inFrom.add(new ArrayList<>());
+            for (int i = 0; i < cur.size(); i++) {
+                // 按比例映射到下一层，保证覆盖
+                int target = cur.size() == 1
+                        ? rnd.nextInt(nc)
+                        : (int) Math.round((double) i * (nc - 1) / Math.max(1, cur.size() - 1));
+                target = Math.max(0, Math.min(nc - 1, target));
+                cur.get(i).next.add(target);
+                inFrom.get(target).add(i);
+            }
+            // 把漏掉的下一层节点补一条边（从最近的上一层节点连过来）
+            for (int j = 0; j < nc; j++) {
+                if (!inFrom.get(j).isEmpty()) continue;
+                int src = cur.size() == 1 ? 0
+                        : Math.max(0, Math.min(cur.size() - 1,
+                            (int) Math.round((double) j * (cur.size() - 1) / Math.max(1, nc - 1))));
+                if (!cur.get(src).next.contains(j)) cur.get(src).next.add(j);
+            }
+            // ⚠ 这里**不能**加随机交叉边。
+            // 存档只存「每层有几个节点、各是什么类型」，读档时 rebuildEdges()
+            // 按同样的比例规则确定性重建 —— 它复现不了 rnd 加的随机边。
+            // 一旦这里用了随机，玩家看到的地图（含随机边）和存档还原后的
+            // 地图（无随机边）就是两张不同的图：岔路消失，而且下面
+            // clearOneElitePath() 基于随机拓扑算出的「无精英路径」
+            // 在真正游玩的那个拓扑上可能根本不存在。
+            for (int i = 0; i < cur.size(); i++) {
+                java.util.Collections.sort(cur.get(i).next);
             }
         }
-        return route;
+
+        // ④ 分配节点类型
+        assignTypes(m, rnd);
+
+        // ⑤ 保证至少有一条路完全没有精英
+        clearOneElitePath(m, rnd);
+
+        // ⑥ 去掉相邻两层的同类非战斗节点（连着的两个篝火 / 两家商店没意义）
+        smoothAdjacent(m);
+
+        return m;
     }
 
-    private static int pickType(Random rnd, boolean noElite) {
-        int roll = rnd.nextInt(100);
-        if (roll < 50) return N_BATTLE;
-        if (roll < 62) return N_SHOP;
-        if (roll < 77) return N_CAMP;
-        if (roll < 87) return N_CHEST;
-        return noElite ? N_BATTLE : N_ELITE;
+    /**
+     * 类型分配。
+     *
+     * 按层的阶段给不同权重 —— 越往后越危险，篝火则集中在中后段当补给点。
+     * 起点和终点固定普通战斗。
+     */
+    private static void assignTypes(RouteMap m, Random rnd) {
+        int rows = m.rows();
+        for (int r = 0; r < rows; r++) {
+            for (Node n : m.nodes.get(r)) {
+                if (r == 0 || r == rows - 1) { n.type = N_BATTLE; continue; }
+
+                // 进度 0..1：越靠后精英概率越高
+                double p = rows <= 1 ? 0 : (double) r / (rows - 1);
+                int roll = rnd.nextInt(100);
+
+                if (p < 0.25) {
+                    // 前段：基本只有战斗和宝箱
+                    if (roll < 72) n.type = N_BATTLE;
+                    else if (roll < 88) n.type = N_CHEST;
+                    else if (roll < 96) n.type = N_SHOP;
+                    else n.type = N_CAMP;
+                } else if (p < 0.6) {
+                    // 中段：商店和篝火开始出现
+                    if (roll < 52) n.type = N_BATTLE;
+                    else if (roll < 68) n.type = N_CAMP;
+                    else if (roll < 80) n.type = N_SHOP;
+                    else if (roll < 90) n.type = N_CHEST;
+                    else n.type = N_ELITE;
+                } else {
+                    // 后段：精英变多，篝火是决战前的补给
+                    if (roll < 44) n.type = N_BATTLE;
+                    else if (roll < 60) n.type = N_CAMP;
+                    else if (roll < 72) n.type = N_SHOP;
+                    else if (roll < 80) n.type = N_CHEST;
+                    else n.type = N_ELITE;
+                }
+            }
+        }
+        // 最后一层前面必须能补一次血：把倒数第二层至少一个节点改成篝火
+        if (rows >= 3) {
+            List<Node> pre = m.nodes.get(rows - 2);
+            boolean hasCamp = false;
+            for (Node n : pre) if (n.type == N_CAMP) hasCamp = true;
+            if (!hasCamp) pre.get(rnd.nextInt(pre.size())).type = N_CAMP;
+        }
+    }
+
+    /**
+     * 保证存在一条从起点到终点、全程没有精英的路径。
+     *
+     * 做法：从起点按「优先选非精英」贪心走到底；沿途如果全是精英，
+     * 就把其中那个精英改成普通战斗。这样不想赌的玩家永远有稳路可走。
+     */
+    private static void clearOneElitePath(RouteMap m, Random rnd) {
+        int rows = m.rows();
+        Node cur = m.start();
+        List<Node> path = new ArrayList<>();
+        path.add(cur);
+        for (int r = 0; r < rows - 1; r++) {
+            List<Node> nxt = m.nodes.get(r + 1);
+            int pick = -1;
+            for (int idx : cur.next) {
+                if (idx >= 0 && idx < nxt.size() && nxt.get(idx).type != N_ELITE) { pick = idx; break; }
+            }
+            if (pick < 0) {
+                // 全是精英：随机选一个，稍后降级
+                pick = cur.next.isEmpty() ? 0 : cur.next.get(0);
+                if (pick >= 0 && pick < nxt.size()) {
+                    Node bad = nxt.get(pick);
+                    bad.type = rnd.nextInt(100) < 55 ? N_BATTLE : N_CAMP;
+                }
+            }
+            if (pick < 0 || pick >= nxt.size()) break;
+            cur = nxt.get(pick);
+            path.add(cur);
+        }
+    }
+
+    /** 同一条边上的两个节点不都是同类非战斗节点。 */
+    private static void smoothAdjacent(RouteMap m) {
+        for (int r = 0; r < m.rows() - 1; r++) {
+            for (Node a : m.nodes.get(r)) {
+                for (int idx : a.next) {
+                    List<Node> nxt = m.nodes.get(r + 1);
+                    if (idx < 0 || idx >= nxt.size()) continue;
+                    Node b = nxt.get(idx);
+                    if (a.type == b.type && a.type != N_BATTLE && b.type != N_BATTLE) {
+                        // 把下层那个换成战斗，避免「篝火→篝火」「商店→商店」
+                        b.type = N_BATTLE;
+                    }
+                }
+            }
+        }
     }
 
     /** 按节点类型与层数挑敌人。 */
@@ -313,6 +483,17 @@ public class GameData {
             this.id = id; this.en = en; this.cn = cn;
             this.desc = desc; this.price = price;
         }
+    }
+
+    /** 随机挑一个玩家还没有的特殊词。全都有了返回 null。 */
+    public Special randomUnownedSpecial(GStore store, java.util.Random rnd) {
+        List<Special> pool = new ArrayList<>();
+        for (Special s : specials) {
+            if (s == null || s.id == null || s.id.isEmpty()) continue;
+            if (!store.hasSpecial(s.id)) pool.add(s);
+        }
+        if (pool.isEmpty()) return null;
+        return pool.get(rnd.nextInt(pool.size()));
     }
 
     // ── 小工具 ───────────────────────────────────────────

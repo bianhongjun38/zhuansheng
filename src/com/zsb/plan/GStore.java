@@ -71,7 +71,81 @@ public class GStore {
 
     // ── 地图进度 ─────────────────────────────────────────
 
-    /** 当前层的路线（4 条，每条是节点类型数组）。 */
+    /**
+     * 地图存档。
+     *
+     * 存的是一个二维数组：map[row][col] = 节点类型（int）。
+     * 每层节点数不固定（1~3），所以是变长二维数组，不是矩形。
+     * 邻接关系（谁能走到谁）由 GameData.Map 现场重建 —— 它只依赖每层节点数，
+     * 存下来会让存档体积翻几倍，而且一旦和类型不同步就是灾难。
+     *
+     * done 用一串 "row,col" 记录，已走过的格子画成暗色。
+     */
+    public String mapRaw() { return sp.getString("map", ""); }
+
+    public void setMap(String s) { sp.edit().putString("map", s).apply(); }
+
+    /** 玩家当前站在哪一层哪一列。走到哪由玩家上一步的选择决定。 */
+    public int curRow() { return sp.getInt("curRow", 0); }
+    public int curCol() { return sp.getInt("curCol", 0); }
+
+    public void setPos(int row, int col) {
+        sp.edit().putInt("curRow", row).putInt("curCol", col).apply();
+    }
+
+    /** 已走过的格子，"row,col" 逗号分隔。 */
+    public String visitedRaw() { return sp.getString("visited", ""); }
+
+    public void markVisited(int row, int col) {
+        String v = visitedRaw();
+        String key = row + "," + col;
+        if (v.isEmpty()) { setVisited(key); return; }
+        String[] parts = v.split(";");
+        for (String s : parts) {
+            if (s.equals(key)) return;
+        }
+        setVisited(v + ";" + key);
+    }
+
+    private void setVisited(String v) { sp.edit().putString("visited", v).apply(); }
+
+    public boolean isVisited(int row, int col) {
+        String v = visitedRaw();
+        if (v.isEmpty()) return false;
+        String key = row + "," + col;
+        for (String s : v.split(";")) {
+            if (s.equals(key)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * 当前生命。跨战斗保留 —— 篝火和商店治疗才有意义。
+     * 0 或负数表示「还没开始过」，战斗里按满血处理。
+     */
+    public int curHp() { return sp.getInt("curHp", -1); }
+
+    public void setCurHp(int hp) { sp.edit().putInt("curHp", Math.max(0, hp)).apply(); }
+
+    /** 清空已访问记录（新地图 / 新一层时用）。 */
+    public void setVisitedClear() { sp.edit().putString("visited", "").apply(); }
+
+    /**
+     * 篝火 / 商店买的治疗量。
+     *
+     * 生命值存在 GBattle 实例里，每场战斗开始时才创建 —— 所以非战斗节点
+     * 的加血没法直接改「当前血量」，只能挂账，等下一场战斗开始时兑现。
+     * 兑现后清零，避免一路攒着变成白嫖满血。
+     */
+    public int campHeal() { return sp.getInt("campHeal", 0); }
+
+    public void addCampHeal(int h) {
+        sp.edit().putInt("campHeal", Math.max(0, campHeal() + h)).apply();
+    }
+
+    public void clearCampHeal() { sp.edit().putInt("campHeal", 0).apply(); }
+
+    /** 兼容旧存档：旧版存的是 4 条平行路线，清掉即可（新版重新生成地图）。 */
     public JSONArray route() {
         try { return new JSONArray(sp.getString("route", "[]")); }
         catch (Exception e) { return new JSONArray(); }
@@ -80,9 +154,6 @@ public class GStore {
     public void setRoute(JSONArray a) {
         sp.edit().putString("route", a.toString()).apply();
     }
-
-    public int node() { return sp.getInt("node", 0); }
-    public void setNode(int n) { sp.edit().putInt("node", n).apply(); }
 
     // ── 每日战绩（排行榜用）───────────────────────────────
     // 为什么要在 SharedPreferences 里再做一份按天分桶，而不是复用 Store 的
