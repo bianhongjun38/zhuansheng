@@ -33,3 +33,6 @@ desktop.ini
 version.local.json
 *.token
 *.secret
+
+# 发版临时文件
+ci_artifact.zip
