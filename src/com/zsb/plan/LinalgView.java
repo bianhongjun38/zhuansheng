@@ -88,8 +88,12 @@ public class LinalgView extends LinearLayout {
 
         // ── 画布 ──
         canvas = new MatCanvas(act);
+        // 固定高度，不用 weight。这个 View 会被包进 ScrollView 打开，
+        // 而 ScrollView 给子视图的高度上限是 UNSPECIFIED，
+        // weight=1 配 height=0 在那种情况下会算出 0 高 —— 画布直接不可见。
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
+        clp.topMargin = dp(2);
         canvas.setLayoutParams(clp);
         GradientDrawable cg = new GradientDrawable();
         cg.setCornerRadius(dp(12));
@@ -250,9 +254,6 @@ public class LinalgView extends LinearLayout {
             lp.rightMargin = dp(6);
             b.setLayoutParams(lp);
             b.setOnClickListener(v -> {
-                for (int k = 0; k < 4; k++) {
-                    et[k].setText(Linalg.fmt(m.a));
-                }
                 et[0].setText(Linalg.fmt(m.a));
                 et[1].setText(Linalg.fmt(m.b));
                 et[2].setText(Linalg.fmt(m.c));
@@ -317,10 +318,14 @@ public class LinalgView extends LinearLayout {
         Linalg.Mat m = cur;
 
         if (tvInfo != null) {
+            double d = Linalg.det(m);
+            // det=0 时说"面积 0 倍"是别扭的，那本来就是被压成线了
+            String area = Math.abs(d) < 5e-4
+                    ? "面积压成 0"
+                    : "面积 ×" + Linalg.fmt(Math.abs(d));
             tvInfo.setText(
                     "矩阵 A = " + m + "\n"
-                    + "行列式 " + Linalg.fmt(Linalg.det(m))
-                    + "（面积 " + Linalg.fmt(Math.abs(Linalg.det(m))) + " 倍）"
+                    + "行列式 " + Linalg.fmt(d) + "（" + area + "）"
                     + "　秩 " + Linalg.rank(m)
                     + "　迹 " + Linalg.fmt(Linalg.trace(m)) + "\n"
                     + "特征值 λ = " + Linalg.eigenText(m));
@@ -334,7 +339,9 @@ public class LinalgView extends LinearLayout {
         ScrollView sv = new ScrollView(act);
         sv.setBackgroundColor(C_BG);
         LinalgView body = new LinalgView(act);
-        sv.addView(body);
+        sv.addView(body, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
         dlg = new AlertDialog.Builder(act, android.R.style.Theme_Material_NoActionBar)
                 .setView(sv)
                 .setNegativeButton("关闭", (d, w) -> d.dismiss())
@@ -480,9 +487,21 @@ public class LinalgView extends LinearLayout {
             }
         }
 
+        /**
+         * 两条基向量。长的先画、短的后画 —— 否则矩阵把两条基向量
+         * 压到同一条方向时（比如 [1,2;2,4]），长的绿箭头会把短的
+         * 红箭头整根盖住，看着像只有一条。
+         */
         private void drawBasis(Canvas c, float cx, float cy, float scale) {
-            arrow(c, cx, cy, scale, 0, 0, cur.a, cur.c, pRed);
-            arrow(c, cx, cy, scale, 0, 0, cur.b, cur.d, pTeal);
+            double lenI = Math.hypot(cur.a, cur.c);
+            double lenJ = Math.hypot(cur.b, cur.d);
+            if (lenI >= lenJ) {
+                arrow(c, cx, cy, scale, 0, 0, cur.a, cur.c, pRed);
+                arrow(c, cx, cy, scale, 0, 0, cur.b, cur.d, pTeal);
+            } else {
+                arrow(c, cx, cy, scale, 0, 0, cur.b, cur.d, pTeal);
+                arrow(c, cx, cy, scale, 0, 0, cur.a, cur.c, pRed);
+            }
         }
 
         private void arrow(Canvas c, float cx, float cy, float scale,
@@ -506,12 +525,24 @@ public class LinalgView extends LinearLayout {
             c.drawPath(head, fp);
         }
 
-        /** 左上角图例。文字是正着画的 —— 这就是不用 concat 的原因。 */
+        /**
+         * 左上角图例。文字是正着画的 —— 这就是不用 concat 的原因。
+         *
+         * 特征轴只在真有实特征方向时才出现。旋转类矩阵（复根）
+         * 画不出金线，若图例还写着"λ 轴"，用户会以为自己漏看了。
+         * 所以按当前矩阵决定这一项显示什么。
+         */
         private void drawLegend(Canvas c) {
             float x = dp0(8), y = dp0(14);
             dotLabel(c, x, y, C_RED, "i'");
             dotLabel(c, x + dp0(46), y, C_TEAL, "j'");
-            dotLabel(c, x + dp0(92), y, C_AMBER, "λ 轴");
+            Linalg.Eigen e = Linalg.eigen(cur);
+            if (Linalg.rank(cur) == 0) return;
+            if (!e.hasReal) {
+                dotLabel(c, x + dp0(92), y, C_FG3, "无实特征轴");
+            } else {
+                dotLabel(c, x + dp0(92), y, C_AMBER, "λ 轴");
+            }
         }
 
         private void dotLabel(Canvas c, float x, float y, int color, String label) {

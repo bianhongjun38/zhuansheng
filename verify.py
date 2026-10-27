@@ -121,7 +121,8 @@ def main():
                    os.path.join(TEST, "PlotAudit.java"),
                    os.path.join(TEST, "ExprInputTest.java"),
                    os.path.join(TEST, "KeypadAudit.java"),
-                   os.path.join(TEST, "LinalgTest.java")])
+                   os.path.join(TEST, "LinalgTest.java"),
+                   os.path.join(TEST, "LinalgViewAudit.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
@@ -144,6 +145,7 @@ def main():
         ("com.zsb.plan.ExprInputTest", "函数输入模板（插入/退格/光标）", None),
         ("com.zsb.plan.KeypadAudit", "输入面板布局（含 PNG 视觉证据）", audit_dir),
         ("com.zsb.plan.LinalgTest", "线性代数几何（特征向量/网格，含 PNG）", audit_dir),
+        ("com.zsb.plan.LinalgViewAudit", "线性变换界面构图（含 PNG）", audit_dir),
     )
     for cls, label, extra_arg in test_table:
         print("\n▶ " + label)
