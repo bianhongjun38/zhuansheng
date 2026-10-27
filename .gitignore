@@ -39,3 +39,4 @@ ci_artifact.zip
 fontlist.txt
 worker/.wrangler/
 .wrangler/
+pages/*.apk

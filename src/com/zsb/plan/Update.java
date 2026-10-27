@@ -37,6 +37,27 @@ import java.net.URL;
  */
 public class Update {
 
+    /**
+     * 更新**主通道**：用户自有域名（Cloudflare Pages 托管，已绑自定义域名）。
+     *
+     * 2026-10-27 直连实测（不带代理，模拟手机）：
+     *   app.xxjcloudns.kdns.fr/update.json   HTTP 200
+     *   app.xxjcloudns.kdns.fr/*.apk          HTTP 206，可断点续传，速度 288KB/s~4.9MB/s
+     *   zsb-update.pages.dev                 HTTP 200 / 810ms（兜底）
+     *   github.com                           HTTP 000 / 超时 12s   ← 被阻断
+     *   api.github.com                       HTTP 200 / 321ms     ← 通，二级兜底
+     *
+     * 为什么不用 Worker：这个账号下**所有** Worker 都返回 1101
+     * （连 3 行 `new Response('pong')` 也一样，10 月就在跑的老 Worker 同样 500），
+     * 是账号级 Workers 运行时故障。Pages 是纯静态托管，不跑 Workers 运行时，不受影响。
+     */
+    private static final String PRIMARY_JSON =
+            "https://app.xxjcloudns.kdns.fr/update.json";
+
+    private static final String PAGES_JSON =
+            "https://zsb-update.pages.dev/update.json";
+
+    /** 兜底：Pages 挂了时退到 GitHub API（注意是 api 域名，不是 github.com）。 */
     private static final String API =
             "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/latest";
 
@@ -52,13 +73,12 @@ public class Update {
         new Thread(new Runnable() {
             public void run() {
                 try {
-                    final JSONObject rel = fetchLatest();
-                    if (rel == null) {
+                    final Latest lt = fetchLatestAny();
+                    if (lt == null) {
                         if (!silent) toastOnUi("检查失败：网络不通");
                         return;
                     }
-                    final String tag = rel.optString("tag_name", "");
-                    final int remoteCode = parseVer(tag);
+                    final int remoteCode = lt.code;
                     final int localCode = parseVer(localVersionName());
                     if (remoteCode == 0) {
                         if (!silent) toastOnUi("已是最新版本 v" + localVersionName());
@@ -68,21 +88,92 @@ public class Update {
                         if (!silent) toastOnUi("已是最新版本 v" + localVersionName());
                         return;
                     }
-                    final String apkUrl = findApk(rel);
-                    if (apkUrl == null) {
+                    if (lt.apkUrl == null) {
                         if (!silent) toastOnUi("新版没有找到安装包");
                         return;
                     }
-                    final String ver = tag.replaceFirst("^[vV]", "");
-                    final String notes = rel.optString("body", "");
                     ui.post(new Runnable() {
-                        public void run() { askUpdate(ver, notes, apkUrl); }
+                        public void run() { askUpdate(lt.ver, lt.notes, lt.apkUrl); }
                     });
                 } catch (Exception e) {
                     if (!silent) toastOnUi("检查失败：" + e.getClass().getSimpleName());
                 }
             }
         }).start();
+    }
+
+    /** 统一后的「最新版」信息，两个来源都归一到这个结构。 */
+    static class Latest {
+        String ver;
+        int code;
+        String notes;
+        String apkUrl;
+    }
+
+    /**
+     * 三级降级：自有域名 → pages.dev → GitHub API。
+     * 返回 null 表示三条路都不通。
+     */
+    private Latest fetchLatestAny() {
+        Latest lt = fetchManifest(PRIMARY_JSON);
+        if (lt != null) return lt;
+        lt = fetchManifest(PAGES_JSON);
+        if (lt != null) return lt;
+        return fetchFromGithub();
+    }
+
+    /** 读一份 update.json 清单。 */
+    private Latest fetchManifest(String src) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(src).openConnection();
+            c.setConnectTimeout(8000);
+            c.setReadTimeout(10000);
+            c.setRequestProperty("User-Agent", "zsb-plan");
+            c.setRequestProperty("Cache-Control", "no-cache");
+            if (c.getResponseCode() != 200) return null;
+            String s = readAll(c.getInputStream());
+            JSONObject o = new JSONObject(s);
+            if (!o.optBoolean("ok", false)) return null;
+            String v = o.optString("versionName", "");
+            int code = o.optInt("versionInt", parseVer(v));
+            if (code == 0) return null;
+            Latest lt = new Latest();
+            lt.ver = v;
+            lt.code = code;
+            lt.notes = o.optString("notes", "");
+            JSONObject apk = o.optJSONObject("apk");
+            if (apk != null) lt.apkUrl = apk.optString("url", null);
+            return lt;
+        } catch (Exception e) {
+            return null;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    /** 兜底通道：GitHub Release。 */
+    private Latest fetchFromGithub() {
+        JSONObject rel = fetchLatest();
+        if (rel == null) return null;
+        String tag = rel.optString("tag_name", "");
+        int code = parseVer(tag);
+        if (code == 0) return null;
+        Latest lt = new Latest();
+        lt.ver = tag.replaceFirst("^[vV]", "");
+        lt.code = code;
+        lt.notes = rel.optString("body", "");
+        lt.apkUrl = findApk(rel);
+        return lt;
+    }
+
+    private static String readAll(InputStream in) throws Exception {
+        BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String ln;
+        while ((ln = r.readLine()) != null) sb.append(ln);
+        r.close();
+        return sb.toString();
     }
 
     private JSONObject fetchLatest() {
@@ -156,16 +247,9 @@ public class Update {
     public void queryLatest(final boolean silent, final OnLatest cb) {
         new Thread(new Runnable() {
             public void run() {
-                JSONObject rel = fetchLatest();
-                final String tag;
-                final int code;
-                if (rel == null) {
-                    tag = null;
-                    code = 0;
-                } else {
-                    tag = rel.optString("tag_name", "").replaceFirst("^[vV]", "");
-                    code = parseVer(tag);
-                }
+                final Latest lt = fetchLatestAny();
+                final String tag = lt == null ? null : lt.ver;
+                final int code = lt == null ? 0 : lt.code;
                 ui.post(new Runnable() {
                     public void run() {
                         if (cb != null) cb.onLatest(tag, code);
