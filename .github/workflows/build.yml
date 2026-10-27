@@ -13,6 +13,11 @@ on:
       - 'docs/**'
   workflow_dispatch:
 
+# 默认 token 是只读的，发 Release 需要写权限。
+# 不写这一段，tag 构建会在「发 Release」步骤报 403 Resource not accessible by integration。
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
