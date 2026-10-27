@@ -3,7 +3,7 @@
   "versionName": "1.5.1",
   "versionInt": 10501,
   "versionCode": 26,
-  "notes": "v1.5.1（versionCode 26）",
+  "notes": "v1.5.1：修复版本号不变导致更新永远收不到的问题；词汇塔（396 同义组 / 1654 词 / 12 角色动画）；账号登录与云端同步",
   "source": "cloudflare-pages",
   "apk": {
     "name": "zhuansheng-v1.5.1.apk",

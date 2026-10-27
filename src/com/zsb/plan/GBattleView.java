@@ -48,6 +48,14 @@ public class GBattleView extends LinearLayout {
     private LinearLayout stage, handRow, optRow;
     private TextView tvMsg, tvEnemyHp, tvPlayerHp, tvIntent;
 
+    /** 战报：每回合发生的事都记在这，点战报条可看全部。 */
+    private final java.util.ArrayList<String> log = new java.util.ArrayList<>();
+    /** 本回合/上一张牌触发了什么，显示在战报条上。 */
+    private String flash = "";
+    /** 战报/状态的浮层；null 表示没打开。 */
+    private android.widget.FrameLayout overlay;
+    private android.app.Dialog dialog;
+
     /** 当前正在答题的牌；null 表示没在答题。 */
     private GCard pending;
     private GQuiz.Q pendingQ;
@@ -98,14 +106,24 @@ public class GBattleView extends LinearLayout {
         mid.addView(tvPlayerHp);
         addView(mid);
 
-        // 提示
-        tvMsg = tv("", 12.5f, C_FG3);
-        tvMsg.setPadding(dp(14), 0, dp(14), dp(6));
+        // 战报条：点开看完整日志（答对/答错/触发效果/增减益都在这）
+        tvMsg = tv("", 12.5f, C_FG2);
+        tvMsg.setPadding(dp(10), dp(6), dp(10), dp(6));
+        tvMsg.setBackground(round(C_BG3, 9, 0));
+        tvMsg.setOnClickListener(v -> showLog());
+        LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        mp.leftMargin = dp(12); mp.rightMargin = dp(12); mp.bottomMargin = dp(4);
+        tvMsg.setLayoutParams(mp);
         addView(tvMsg);
 
-        // 手牌区
-        ScrollView hs = new ScrollView(getContext());
+        // 手牌区：横向滑动。5 张卡共 560dp 远超屏宽（本机 1264px/560dpi≈361dp），
+        // 原来用纵向 ScrollView 装横向排列的卡 → 横向溢出且滑不动，
+        // 第 4 张起被裁在屏幕外。改成 HorizontalScrollView 才能滑完全部。
+        android.widget.HorizontalScrollView hs =
+                new android.widget.HorizontalScrollView(getContext());
         hs.setHorizontalScrollBarEnabled(false);
+        hs.setFillViewport(false);
         handRow = new LinearLayout(getContext());
         handRow.setOrientation(HORIZONTAL);
         handRow.setPadding(dp(10), dp(4), dp(10), dp(8));
@@ -156,7 +174,10 @@ public class GBattleView extends LinearLayout {
                     + " 伤害（还需 " + left + " 回合）");
         }
 
-        tvMsg.setText(battle.lastMsg);
+        // 战报条优先显示最近一次操作结果，其次才是引擎消息
+        String line = flash != null && !flash.isEmpty() ? flash : battle.lastMsg;
+        if (line == null) line = "";
+        tvMsg.setText(line + "\n▸ 点这里看完整战报（" + log.size() + " 条）");
 
         renderHand();
         renderOptions();
@@ -182,7 +203,11 @@ public class GBattleView extends LinearLayout {
         }
     }
 
-    /** 卡面。showPlay=true 时可点出牌。 */
+    /**
+     * 卡面。**故意不显示中文释义** —— 那等于把考题的答案印在题面上，
+     * 正确答案看到「marsh / n / 沼泽」时已经知道该选什么了。
+     * 释义改在答完之后由战报条给出（见 flashResult / showLog）。
+     */
     private View cardView(final GCard c, boolean clickable) {
         LinearLayout box = new LinearLayout(getContext());
         box.setOrientation(VERTICAL);
@@ -193,7 +218,10 @@ public class GBattleView extends LinearLayout {
         g.setStroke(dp(1), c.isAdverb() ? C_PURPLE : C_LINE);
         box.setBackground(g);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(104),
+        // 卡宽 = 屏宽的三分之一，保证一屏恰好看到 3 张、左右露边提示可滑
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int cardW = Math.max(dp(92), (screenW - dp(40)) / 3);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW,
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         lp.rightMargin = dp(8);
         box.setLayoutParams(lp);
@@ -206,13 +234,17 @@ public class GBattleView extends LinearLayout {
         sub.setPadding(0, dp(1), 0, dp(3));
         box.addView(sub);
 
-        TextView cn = tv(c.isAdverb() ? c.desc : c.cn, 11.5f, C_FG2);
-        box.addView(cn);
+        // 副词是机制牌，按名字选就行，不考释义，所以保留效果说明
+        if (c.isAdverb() && c.desc != null && !c.desc.isEmpty()) {
+            TextView cn = tv(c.desc, 11, C_FG2);
+            cn.setMaxLines(3);
+            box.addView(cn);
+        }
 
         // 同义提示：和上一张同义则标出来
         if (battle != null && battle.lastPlayed != null
                 && data.synonym(battle.lastPlayed.id, c.id)) {
-            TextView tip = tv("◆ 连锁 ×" + (battle.chain + 1), 10, C_TEAL);
+            TextView tip = tv("连锁 ×" + (battle.chain + 1), 10, C_TEAL);
             tip.setPadding(0, dp(4), 0, 0);
             box.addView(tip);
         }
@@ -250,7 +282,10 @@ public class GBattleView extends LinearLayout {
                 break;
 
             case GBattle.PHASE_PLAY:
+                if (battle.hand.isEmpty()) break;
+                optRow.addView(smallBtn("当前状态与战报", () -> showStatus()));
                 optRow.addView(smallBtn("结束回合", () -> {
+                    addLog("── 主动结束回合", C_FG3);
                     battle.endTurn(false); render();
                 }));
                 break;
@@ -306,10 +341,17 @@ public class GBattleView extends LinearLayout {
 
         if (right) {
             store.markRight();
+            addLog("✓ 答对：" + (c == null ? "" : c.en + " = " + c.cn), C_GREEN);
             if (c == null) {
                 // 不该发生，防御性处理
             } else if (battle.phase == GBattle.PHASE_PLAY && c.isWord()) {
+                int hpBefore = battle.enemyHp;
                 int dmg = battle.playCard(c);
+                int real = hpBefore - battle.enemyHp;
+                flash = "【攻击】" + c.en + "  造成 " + real + " 伤害"
+                        + (battle.chain > 1 ? "（连锁 ×" + battle.chain + "）" : "");
+                addLog(flash, C_TEAL);
+                if (battle.critReady && dmg > 0) addLog("★ 暴击生效", C_AMBER);
                 sprite.play("attack");
                 postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
             } else if (c.isAdverb()) {
@@ -319,6 +361,8 @@ public class GBattleView extends LinearLayout {
                 battle.energy--;
                 battle.applyAdverb(adverbFx(c.id));
                 battle.lastMsg = "【" + c.en + "】" + c.desc;
+                flash = "【副词】" + c.en + " — " + c.desc;
+                addLog(flash, C_PURPLE);
                 sprite.play("cast");
                 postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
                 if (battle.energy <= 0 || battle.hand.isEmpty()) battle.endTurn(false);
@@ -326,12 +370,13 @@ public class GBattleView extends LinearLayout {
         } else {
             store.markWrong();
             battle.onWrong(c);
+            flash = "✗ 答错：" + explain + "　敌人充能 +2，下次伤害翻倍";
+            addLog(flash, C_RED);
             sprite.play("cast");
             postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
         }
 
         render();
-        toast((right ? "✓ " : "✗ ") + explain);
     }
 
 
@@ -363,6 +408,184 @@ public class GBattleView extends LinearLayout {
             case "presently":      return "enemyFullChargeNext";
             default:               return "";
         }
+    }
+
+    // ── 战报 / 状态 ──────────────────────────────────────
+
+    private void addLog(String s, int color) {
+        if (s == null || s.isEmpty()) return;
+        log.add(s);
+        // 只留最近 120 条，防止长时间对局内存无限增长
+        while (log.size() > 120) log.remove(0);
+    }
+
+    /** 完整战报：在一层可滚动的浮层里显示，带颜色。 */
+    private void showLog() {
+        if (log.isEmpty()) { toast("还没有战报"); return; }
+        android.widget.ScrollView sv = new android.widget.ScrollView(getContext());
+        sv.setBackgroundColor(0x00000000);
+        LinearLayout col = new LinearLayout(getContext());
+        col.setOrientation(VERTICAL);
+        col.setPadding(dp(14), dp(12), dp(14), dp(12));
+        sv.addView(col);
+
+        TextView h = tv("战报（" + log.size() + " 条）", 15, C_FG);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setPadding(0, 0, 0, dp(8));
+        col.addView(h);
+
+        for (String s : log) {
+            TextView r = tv(s, 12, s.startsWith("✓") ? C_GREEN
+                    : s.startsWith("✗") ? C_RED
+                    : s.startsWith("【攻击】") ? C_TEAL
+                    : s.startsWith("【副词】") ? C_PURPLE
+                    : s.startsWith("★") ? C_AMBER
+                    : C_FG2);
+            r.setPadding(0, dp(2), 0, dp(2));
+            col.addView(r);
+        }
+
+        col.addView(smallBtn("关闭", this::hideOverlay));
+
+        showOverlay(sv);
+    }
+
+    /** 当前状态：血量/能量/回合/敌人充能/所有增益减益。 */
+    private void showStatus() {
+        android.widget.ScrollView sv = new android.widget.ScrollView(getContext());
+        sv.setBackgroundColor(0x00000000);
+        LinearLayout col = new LinearLayout(getContext());
+        col.setOrientation(VERTICAL);
+        col.setPadding(dp(14), dp(12), dp(14), dp(12));
+        sv.addView(col);
+
+        TextView h = tv("当前状态", 15, C_FG);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        h.setPadding(0, 0, 0, dp(8));
+        col.addView(h);
+
+        col.addView(statLine("回合", String.valueOf(battle.turn), null));
+        col.addView(statLine("本轮答对", store.right() + " 次", C_GREEN));
+        col.addView(statLine("本轮答错", store.wrong() + " 次", C_RED));
+        col.addView(statLine("生命", battle.playerHp + " / " + battle.playerMaxHp, null));
+        col.addView(statLine("能量", battle.energy + " / " + battle.energyMax, null));
+        col.addView(statLine("手牌", battle.hand.size() + " 张", null));
+        col.addView(statLine("已保牌", battle.kept.size() + " / " + data.keepLimit + " 张", null));
+        if (!battle.kept.isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            for (GCard k : battle.kept) sb.append(k.en).append("  ");
+            col.addView(statLine("保牌内容", sb.toString().trim(), C_TEAL));
+        }
+        if (battle.enemy != null) {
+            int left = battle.enemyChargeNeed - battle.enemyCharge;
+            if (left <= 0) left = 1;
+            col.addView(statLine("敌人", battle.enemy.name, null));
+            col.addView(statLine("敌人血量",
+                    battle.enemyHp + " / " + battle.enemyMaxHp, null));
+            col.addView(statLine("下次攻击",
+                    battle.enemy.atk + " 伤害（还需 " + left + " 回合）", C_AMBER));
+        }
+
+        // ── 增减益 ──
+        TextView bh = tv("当前的增益 / 减益", 13, C_FG);
+        bh.setTypeface(Typeface.DEFAULT_BOLD);
+        bh.setPadding(0, dp(12), 0, dp(4));
+        col.addView(bh);
+
+        boolean any = false;
+        if (battle.turnDamageMul != 1.0) {
+            col.addView(buff("伤害倍率 ×" + fmt(battle.turnDamageMul),
+                    battle.turnDamageMul > 1 ? C_GREEN : C_RED));
+            any = true;
+        }
+        if (battle.turnFlatBonus != 0) {
+            col.addView(buff("固定加成 " + (battle.turnFlatBonus > 0 ? "+" : "")
+                    + battle.turnFlatBonus, battle.turnFlatBonus > 0 ? C_GREEN : C_RED));
+            any = true;
+        }
+        if (battle.critReady) { col.addView(buff("必暴击（下一张牌）", C_AMBER)); any = true; }
+        if (battle.skipEnemyCharge) { col.addView(buff("冻结敌人充能", C_GREEN)); any = true; }
+        if (battle.noAttackThisTurn) { col.addView(buff("本回合无法攻击", C_RED)); any = true; }
+        if (battle.wrongDoubled) { col.addView(buff("敌人下次伤害翻倍", C_RED)); any = true; }
+        if (battle.chain > 1) { col.addView(buff("同义连锁 ×" + battle.chain, C_TEAL)); any = true; }
+        if (battle.extraDraw > 0) { col.addView(buff("额外抽牌 +" + battle.extraDraw, C_GREEN)); any = true; }
+        if (!any) {
+            TextView none = tv("无（本回合状态正常）", 12, C_FG3);
+            none.setPadding(0, dp(2), 0, dp(2));
+            col.addView(none);
+        }
+
+        col.addView(smallBtn("关闭", this::hideOverlay));
+        showOverlay(sv);
+    }
+
+    private TextView statLine(String k, String v, Integer vColor) {
+        TextView t = tv(k + "：" + v, 12.5f, vColor == null ? C_FG2 : vColor);
+        t.setPadding(0, dp(3), 0, dp(3));
+        return t;
+    }
+
+    private TextView buff(String s, int color) {
+        TextView t = tv("· " + s, 12.5f, color);
+        t.setPadding(0, dp(3), 0, dp(3));
+        return t;
+    }
+
+    private static String fmt(double d) {
+        if (Math.abs(d - Math.round(d)) < 0.01) return String.valueOf(Math.round(d));
+        return String.format(java.util.Locale.US, "%.2f", d);
+    }
+
+    /**
+     * 浮层用 Dialog 实现，不挂在 GBattleView 上。
+     *
+     * 踩过的坑：GBattleView 是纵向 LinearLayout，把浮层 addView 到它末尾时，
+     * 就算给浮层设 MATCH_PARENT 也会被其它子 view 抢走高度，
+     * 面板被顶到屏幕外（实测只露出最上面几行）。Dialog 有独立 window，
+     * 不受父布局分配影响。
+     */
+    private void showOverlay(View content) {
+        hideOverlay();
+        int screenH = getResources().getDisplayMetrics().heightPixels;
+
+        dialog = new android.app.Dialog(getContext(), android.R.style.Theme_Translucent_NoTitleBar);
+        android.widget.FrameLayout root = new android.widget.FrameLayout(getContext());
+        root.setOnClickListener(v -> hideOverlay());
+
+        LinearLayout wrap = new LinearLayout(getContext());
+        wrap.setOrientation(VERTICAL);
+        wrap.setBackground(round(C_BG2, 14, C_LINE));
+        wrap.setPadding(dp(6), dp(6), dp(6), dp(6));
+        wrap.setOnClickListener(v -> { });
+        android.widget.FrameLayout.LayoutParams wp =
+                new android.widget.FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        (int) (screenH * 0.62f));
+        wp.gravity = Gravity.CENTER;
+        wp.setMargins(dp(16), 0, dp(16), 0);
+        wrap.setLayoutParams(wp);
+        wrap.addView(content, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        root.addView(wrap);
+
+        dialog.setContentView(root);
+        android.view.Window w = dialog.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0x00000000));
+            w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+            w.setDimAmount(0.75f);
+            w.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+        }
+        dialog.setCanceledOnTouchOutside(true);
+        dialog.show();
+    }
+
+    private void hideOverlay() {
+        if (dialog != null) {
+            try { dialog.dismiss(); } catch (Exception ignore) { }
+            dialog = null;
+        }
+        if (overlay != null) { removeView(overlay); overlay = null; }
     }
 
     // ── 结束 ─────────────────────────────────────────────
@@ -459,6 +682,14 @@ public class GBattleView extends LinearLayout {
     private void toast(String s) {
         android.widget.Toast.makeText(getContext(), s,
                 android.widget.Toast.LENGTH_SHORT).show();
+    }
+
+    private GradientDrawable round(int fill, float radius, int stroke) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(dp(radius));
+        if (stroke != 0) g.setStroke(dp(1), stroke);
+        return g;
     }
 
     private int dp(float v) {

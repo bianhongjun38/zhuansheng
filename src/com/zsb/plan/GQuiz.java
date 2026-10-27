@@ -33,6 +33,28 @@ public class GQuiz {
     public GQuiz(GameData g, Random r) { G = g; rnd = r; }
 
     /**
+     * 释义净化。
+     *
+     * vocab.json 里的 cn 是多义串（「讨论;辩论」「有经验的;熟练的」），
+     * 直接拿去当选项会有两个问题：一是选项框被撑成两三行、四个选项看不全；
+     * 二是干扰项和正确答案可能共享同一个义项字符串，看起来像重复。
+     * 所以选项只取第一个义项（中文分号/逗号/顿号切分），题面才是完整释义。
+     */
+    private static String firstSense(String cn) {
+        if (cn == null) return "";
+        String s = cn.trim();
+        for (String sep : new String[]{"；", ";", "，", ",", "、", "/"}) {
+            int i = s.indexOf(sep);
+            if (i > 0) s = s.substring(0, i).trim();
+        }
+        return s;
+    }
+
+    /** 判重键：按第一个义项比较，避免「讨论;辩论」和「讨论」被当成两个不同选项。 */
+    private static String key(String cn) { return firstSense(cn); }
+
+
+    /**
      * 出题。mode: 0=英译中  1=中译英  2=同义辨析
      * 答完后卡牌效果才生效，所以题目必须用「这张牌的词」当考点。
      */
@@ -52,22 +74,29 @@ public class GQuiz {
         q.prompt = c.en;
         q.sub = c.pos.isEmpty() ? "" : c.pos + ".";
 
+        String right = firstSense(c.cn);
+        if (right.isEmpty()) return null;
+
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        seen.add(key(c.cn));
         List<String> pool = new ArrayList<>();
         for (GCard o : G.words) {
             if (o.id.equals(c.id)) continue;
-            if (o.cn.isEmpty() || o.cn.equals(c.cn)) continue;
-            pool.add(o.cn);
+            String cand = firstSense(o.cn);
+            if (cand.isEmpty()) continue;
+            if (!seen.add(key(o.cn))) continue;
+            pool.add(cand);
         }
         Collections.shuffle(pool, rnd);
         List<String> opts = new ArrayList<>();
-        opts.add(c.cn);
+        opts.add(right);
         for (String s : pool) {
             if (opts.size() >= 4) break;
             if (!opts.contains(s)) opts.add(s);
         }
         Collections.shuffle(opts, rnd);
         q.options = opts.toArray(new String[0]);
-        q.answer = opts.indexOf(c.cn);
+        q.answer = opts.indexOf(right);
         q.explain = c.en + " = " + c.cn + (c.ex.isEmpty() ? "" : "  例：" + c.ex);
         return q;
     }
@@ -76,7 +105,7 @@ public class GQuiz {
     private Q cnToEn(GCard c) {
         Q q = new Q();
         q.card = c;
-        q.prompt = c.cn;
+        q.prompt = firstSense(c.cn);
         q.sub = c.pos.isEmpty() ? "" : c.pos + ".";
 
         List<String> opts = new ArrayList<>();
@@ -84,7 +113,7 @@ public class GQuiz {
         List<GCard> pool = new ArrayList<>();
         for (GCard o : G.words) {
             if (o.id.equals(c.id)) continue;
-            if (o.cn.equals(c.cn)) continue;   // 同义不能当干扰项
+            if (key(o.cn).equals(key(c.cn))) continue;   // 同义不能当干扰项
             if (!o.pos.equals(c.pos)) continue; // 词性不同白送分
             pool.add(o);
         }

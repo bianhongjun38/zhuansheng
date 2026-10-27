@@ -102,9 +102,37 @@ public class GModeView extends LinearLayout {
         addView(scroller);
     }
 
-    /** 从外部进入时调用，决定显示地图还是直接战斗。 */
+    /**
+     * 从外部进入时调用。
+     *
+     * 关键：**战斗中切到别的 tab 再切回来，必须还在战斗里。**
+     * 原来的实现无条件 removeView(battleView) + renderMap()，
+     * 于是玩家去「错题库」看一眼再回来，整场战斗就没了，
+     * 地图回到起点 —— 因为 renderMap() 只读 store 的 node，
+     * 而战斗进度（血量/手牌/回合）只存在 GBattleView 实例里，
+     * 实例被丢掉就全丢了。
+     *
+     * 现在：battleView 还活着且没结束，就原样保留；
+     * 只有战斗真正结束（onFinish 把 battleView 置 null）才回地图。
+     */
     public void show() {
-        if (battleView != null) { removeView(battleView); battleView = null; }
+        if (battleView != null) {
+            // 战斗中：保持战斗界面，只把地图滚动区藏起来
+            if (scroller != null) scroller.setVisibility(View.GONE);
+            battleView.setVisibility(View.VISIBLE);
+            updateHead();
+            return;
+        }
+        if (scroller != null) scroller.setVisibility(View.VISIBLE);
+        renderMap();
+    }
+
+    /** 战斗结束（胜/负都走这里），清掉战斗视图回到地图。 */
+    private void endBattle() {
+        if (battleView != null) {
+            removeView(battleView);
+            battleView = null;
+        }
         if (scroller != null) scroller.setVisibility(View.VISIBLE);
         renderMap();
     }
@@ -251,7 +279,7 @@ public class GModeView extends LinearLayout {
         battleView.setOnFinish(() -> {
             store.raiseFloor(store.layer());
             store.setNode(store.node() + 1);
-            show();
+            endBattle();
         });
         battleView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
