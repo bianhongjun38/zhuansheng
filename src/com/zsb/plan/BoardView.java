@@ -16,12 +16,21 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * 英语闯关排行榜。今日 / 近 7 天两个口径。
+ * 词汇塔排行榜。今日 / 近 7 天两个口径。
+ *
+ * 排序口径：今日通关节点数 → 今日金币 → 正确率 → 首次上报时间。
+ * 为什么主排序是「节点数」而不是「答对题数」：塔的玩法是往上推图，
+ * 推进量才是这段游戏时间里真正发生的事。答对题数会被「反复刷第 1 层
+ * 的简单怪」拉高，和爬到第几层没有关系 —— 拿它当主键，榜上会是一群
+ * 卡在第一层但答了几百题的人。
  *
  * 显示真实用户名 —— 20 个同学一个班，本来就是互相看得见的。
  * 不做匿名化、不做脱敏：那套是为陌生人准备的，这里只会让人找不到自己。
  *
- * 排行榜不需要登录也能看（路过瞄一眼谁在学），但自己的名次要高亮。
+ * ⚠️ 入口是有登录门槛的：MainActivity 那里 `if (!acc.loggedIn()) toast` 拦了一道。
+ * 服务端接口本身是公开的（和 eng/board 一致），但玩家必须先登录才能打开这个
+ * 弹窗 —— 因为「（我）」高亮和后续补传都依赖账号。这里原先的注释写的是
+ * 「不需要登录也能看」，和实际行为不符，已按代码实际行为改正。
  */
 public class BoardView {
 
@@ -85,7 +94,7 @@ public class BoardView {
         top.addView(close);
 
         TextView title = new TextView(act);
-        title.setText("英语闯关榜");
+        title.setText("词汇塔 · 排行");
         title.setTextSize(17);
         title.setTextColor(C_FG);
         title.setTypeface(Typeface.DEFAULT_BOLD);
@@ -160,7 +169,7 @@ public class BoardView {
         tvStatus.setText("正在加载…");
         final String want = range;
         new Thread(() -> {
-            Api.R r = Api.board(want);
+            Api.R r = Api.gameBoard(want);
             act.runOnUiThread(() -> {
                 busy = false;
                 if (!want.equals(range)) return;   // 用户切走了，别用旧数据覆盖
@@ -182,9 +191,9 @@ public class BoardView {
 
         if (arr == null || arr.length() == 0) {
             tvStatus.setTextColor(C_FG3);
-            tvStatus.setText("今天还没有人交卷");
+            tvStatus.setText("今天还没有人爬塔");
             TextView empty = new TextView(act);
-            empty.setText("做完一轮英语训练就会出现在这里。\n"
+            empty.setText("在「词汇塔」里打赢一场战斗就会出现在这里。\n"
                     + "还没有记录说明大家都还没开始，不是出错了。");
             empty.setTextSize(13);
             empty.setTextColor(C_FG3);
@@ -195,22 +204,23 @@ public class BoardView {
         }
 
         tvStatus.setTextColor(C_FG3);
-        tvStatus.setText("day".equals(range) ? (day + "　按答对题数排") : "最近 7 天　按答对题数排");
+        tvStatus.setText(("day".equals(range) ? day : "最近 7 天") + "　按通关节点数排");
 
         Account me = Account.load(act);
         for (int i = 0; i < arr.length(); i++) {
             JSONObject o = arr.optJSONObject(i);
             if (o == null) continue;
             String name = o.optString("username", "?");
-            int score = o.optInt("score", 0);
-            int total = o.optInt("total", 0);
-            int rounds = o.optInt("rounds", 0);
             boolean isMe = me.loggedIn() && me.username.equals(name);
-            listBox.addView(row(i + 1, name, score, total, rounds, isMe));
+            listBox.addView(row(i + 1, name, o, isMe));
         }
     }
 
-    private View row(int rank, String name, int score, int total, int rounds, boolean isMe) {
+    private View row(int rank, String name, JSONObject o, boolean isMe) {
+        int nodes = o.optInt("nodes", 0);
+        int gold = o.optInt("gold", 0);
+        int floor = o.optInt("floor", 0);
+        int rate = o.optInt("rate", 0);
         LinearLayout row = new LinearLayout(act);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.setGravity(Gravity.CENTER_VERTICAL);
@@ -248,11 +258,12 @@ public class BoardView {
         nm.setTypeface(isMe ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
         mid.addView(nm);
 
-        int rate = total > 0 ? score * 100 / total : 0;
         TextView sub = new TextView(act);
-        // 原本写「N 轮 · 共 M 题 · 正确率 X%」，实测这一行比名字列宽出 9px，
-        // 会把右边的分数挤掉。改成短写法，语义没丢。
-        sub.setText(rounds + " 轮 · " + total + " 题 · " + rate + "%");
+        // 宽度是实打实的约束：名字列在 360dp 屏上只分到约 190dp，
+        // 原来「N 轮 · 共 M 题 · 正确率 X%」就超出过 9px 把右边挤掉。
+        // 这里改成三段短写：层（爬到哪）、金币（攒了多少）、正确率（打得准不准）。
+        // 场次不放进来 —— 它和节点数量级接近，信息重复，留着只会挤掉别的东西。
+        sub.setText("第" + (floor + 1) + "层 · " + gold + "金 · " + rate + "%");
         sub.setTextSize(11);
         sub.setTextColor(C_FG3);
         sub.setSingleLine(true);
@@ -263,9 +274,9 @@ public class BoardView {
         row.addView(mid, new LinearLayout.LayoutParams(0,
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        // 分数
+        // 主数字 = 今日通关节点数（排序主键，得让它最醒目）
         TextView sc = new TextView(act);
-        sc.setText(String.valueOf(score));
+        sc.setText(String.valueOf(nodes));
         sc.setTextSize(17);
         sc.setTypeface(Typeface.DEFAULT_BOLD);
         sc.setTextColor(isMe ? C_TEAL : C_FG);

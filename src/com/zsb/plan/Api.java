@@ -186,4 +186,32 @@ public class Api {
     public static R me(String token) {
         return call("GET", "/v1/eng/me", null, token);
     }
+
+    // ── 词汇塔 ────────────────────────────────────────────
+
+    /** 上报一场战斗。rev 是幂等键，同一场重传不会在榜上算两次。 */
+    public static R postBattle(String token, int floor, int node, boolean win,
+                               int gold, int right, int wrong, long ms,
+                               long startedAt, String clientRev) {
+        try {
+            JSONObject p = new JSONObject();
+            p.put("floor", floor);
+            p.put("node", node);
+            p.put("win", win ? 1 : 0);
+            p.put("gold", gold);
+            p.put("right", right);
+            p.put("wrong", wrong);
+            p.put("ms", ms);
+            p.put("startedAt", startedAt);
+            p.put("clientRev", clientRev);
+            return call("POST", "/v1/game/round", p, token);
+        } catch (Exception e) {
+            R r = new R(); r.msg = netMsg(e); return r;
+        }
+    }
+
+    /** 词汇塔排行榜。和英语榜一样不需要登录。 */
+    public static R gameBoard(String range) {
+        return call("GET", "/v1/game/board?range=" + ("week".equals(range) ? "week" : "day"), null, null);
+    }
 }

@@ -47,6 +47,9 @@ public class GModeView extends LinearLayout {
     private android.widget.ScrollView scroller;
     private GBattleView battleView;
     private Runnable onExit;
+    /** 当前这场战斗所在路线的节点总数。战斗结束时用它判断「这层走完了没有」。
+     *  四条路线长度不同（10~12），所以必须在 enterNode 那一刻记下玩家实际选的那条。 */
+    private int curRouteLen = 0;
 
     public GModeView(Context c, GStore s) {
         super(c);
@@ -242,7 +245,8 @@ public class GModeView extends LinearLayout {
         return t;
     }
 
-    private void newMap() {
+    /** 抽一张新地图。翻层和「生成地图」按钮共用这一段，避免两份生成逻辑走偏。 */
+    private JSONArray newRouteArr() {
         List<List<GameData.Node>> routes = GameData.makeMap(rnd);
         JSONArray arr = new JSONArray();
         for (List<GameData.Node> route : routes) {
@@ -250,7 +254,11 @@ public class GModeView extends LinearLayout {
             for (GameData.Node n : route) one.put(String.valueOf(n.type));
             arr.put(one);
         }
-        store.setRoute(arr);
+        return arr;
+    }
+
+    private void newMap() {
+        store.setRoute(newRouteArr());
         store.setNode(0);
         renderMap();
     }
@@ -259,6 +267,10 @@ public class GModeView extends LinearLayout {
 
     private void enterNode(int routeIdx, int nodeIdx, int type) {
         store.setNode(nodeIdx);
+        // 记下所选路线的长度，战斗结束时判「是不是到最后一格了」
+        JSONArray rt = store.route();
+        JSONArray chosen = rt.optJSONArray(routeIdx);
+        curRouteLen = chosen == null ? 0 : chosen.length();
 
         if (type == GameData.N_BATTLE || type == GameData.N_ELITE
                 || type == GameData.N_SHOP || type == GameData.N_CAMP
@@ -276,15 +288,40 @@ public class GModeView extends LinearLayout {
         // 战斗时整块替换掉地图滚动区，否则两者抢高度、战斗界面被压扁
         if (scroller != null) scroller.setVisibility(View.GONE);
         battleView = new GBattleView(getContext(), store);
-        battleView.setOnFinish(() -> {
-            store.raiseFloor(store.layer());
-            store.setNode(store.node() + 1);
-            endBattle();
-        });
+        battleView.setOnFinish(this::advanceAfterBattle);
         battleView.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
         addView(battleView);
         battleView.start(e);
+    }
+
+    /**
+     * 一场战斗结束后推进地图。
+     *
+     * 这里修的是两个老 bug：
+     *   1. 原来是 raiseFloor(store.layer()) —— 参数就是自己，恒等于 0，
+     *      于是 bestFloor 永远是 0、顶栏永远显示 Lv.1。
+     *   2. 原来只做 node+1，没有任何翻层逻辑。node 走到路线最后一个节点后，
+     *      routeCard 只给 i == curNode 的节点绑定点击，而 i 最大就是 len-1，
+     *      于是节点越界、地图上一个能点的格子都没有 —— 玩家被卡死在层末。
+     */
+    private void advanceAfterBattle() {
+        int len = curRouteLen;
+        int next = store.node() + 1;
+        if (len > 0 && next >= len) {
+            // 这条路线走完，进下一层：重新抽 4 条路线，节点归零
+            store.setLayer(store.layer() + 1);
+            store.setNode(0);
+            store.setRoute(newRouteArr());
+        } else {
+            store.setNode(next);
+        }
+        // bestFloor 存的是 0 基的层索引（界面显示时统一 +1 成 Lv.N）。
+        // 所以这里必须传 layer() 本身，不能 +1 —— 传 layer()+1 会让
+        // 第 2 层显示成 Lv.3（实测踩过）。原来的 bug 不是这里传错，
+        // 而是 layer() 恒为 0 且从来没被 setLayer 递增过。
+        store.raiseFloor(store.layer());
+        endBattle();
     }
 
     // ── 控件 ─────────────────────────────────────────────

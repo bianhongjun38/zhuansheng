@@ -146,12 +146,30 @@ public class GBattleView extends LinearLayout {
         addView(stage);
     }
 
+    // ── 排行榜埋点 ────────────────────────────────────────
+    /** 本场战斗的起点快照。结束时算增量，不能直接读累计值 —— 
+     *  否则一台手机玩了一整月的累计数会一次性算到今天头上。 */
+    /** 本场是否已经结算过。render() 每帧都会调 showEnd，没有它就会反复发金币。 */
+    private boolean endShown;
+    private long bpT0;
+    private int bpRight0, bpWrong0, bpGold0;
+    /** 本场的幂等键：start() 生成一次，补传时一直用它。
+     *  这样「上报成功但没收到响应、用户重进又打完一场」不会在榜上算两场。 */
+    private String bpRev = "";
+
     // ── 开始战斗 ─────────────────────────────────────────
 
     public void start(GameData.Enemy e) {
         battle = new GBattle(data, e, rnd);
         sprite.load(e == null ? "mists" : e.sprite);
         sprite.play("idle");
+        endShown = false;               // 新一场，允许再结算一次
+        hideOverlay();                  // 上一场可能留着战报浮层，别带到这一场
+        bpT0 = System.currentTimeMillis();
+        bpRight0 = store.right();
+        bpWrong0 = store.wrong();
+        bpGold0 = store.gold();
+        bpRev = Long.toString(bpT0, 36) + "-" + Integer.toString(rnd.nextInt(1 << 20), 36);
         render();
     }
 
@@ -279,18 +297,37 @@ public class GBattleView extends LinearLayout {
                     battle.chooseKeep(); render();
                 }));
                 optRow.addView(smallBtn("直接攻击（不答题）", () -> {
+                    // attackDirect() 内部会 endTurn()，也就是敌人同样会打你一下。
+                    // 原来直接调它再 render()，敌人这一下的动作完全看不见。
                     int hp0 = battle.enemyHp;
-                battle.attackDirect();
-                flash = "【直接攻击】造成 " + Math.max(0, hp0 - battle.enemyHp) + " 伤害";
-                addLog(flash, C_TEAL);
-                sprite.play("hurt");
-                render();
+                    int myHp0 = battle.playerHp;
+                    int dealt = battle.attackDirect();
+                    flash = "【直接攻击】造成 " + dealt + " 伤害";
+                    addLog(flash, C_TEAL);
+                    if (battle.over()) { render(); return; }
+                    // 敌人反击
+                    if (battle.playerHp < myHp0) {
+                        int took = myHp0 - battle.playerHp;
+                        addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                                + " 反击　你受到 " + took + " 伤害", C_RED);
+                        sprite.play("attack");
+                    } else {
+                        sprite.play("hurt");
+                    }
+                    render();
                 }));
                 break;
 
             case GBattle.PHASE_PLAY:
-                if (battle.hand.isEmpty()) break;
-                optRow.addView(smallBtn("当前状态与战报", () -> showStatus()));
+                // 原来这里写「if (battle.hand.isEmpty()) break;」——
+                // 手牌空了就一个按钮都不渲染，界面上什么都没有，玩家只能
+                // 切 tab 重进。实测撞到过：能量 3/3 回合 1 但底部空白。
+                // 手牌空恰恰是最需要「结束回合」的时候。
+                if (battle.hand.isEmpty()) {
+                    optRow.addView(tv("手牌打空了 —— 结束回合继续", 12.5f, C_FG3));
+                } else {
+                    optRow.addView(smallBtn("当前状态与战报", () -> showStatus()));
+                }
                 optRow.addView(smallBtn("结束回合", () -> {
                     advanceTurn();
                 }));
@@ -376,6 +413,9 @@ public class GBattleView extends LinearLayout {
         pending = null;
         pendingQ = null;
 
+        // 记下出手前的血量，用来判断这一下有没有引出「引擎内部自动结束回合」。
+        int myHpBefore = battle.playerHp;
+
         if (right) {
             store.markRight();
             addLog("✓ 答对：" + (c == null ? "" : c.en + " = " + c.cn), C_GREEN);
@@ -391,6 +431,16 @@ public class GBattleView extends LinearLayout {
                 if (battle.critReady && dmg > 0) addLog("★ 暴击生效", C_AMBER);
                 // 玩家出牌打人，怪物是"挨打"的一方 —— 播 hurt 不是 attack
                 sprite.play("hurt");
+                // playCard() 在「能量打空 / 手牌打空」时会自己调 endTurn(false)，
+                // 也就是敌人已经打完你了。原来这里直接 render()，那一下完全静默：
+                // 不掉血条动画、不写战报，玩家只看到血量数字莫名少了一截。
+                if (battle.playerHp < myHpBefore) {
+                    int took = myHpBefore - battle.playerHp;
+                    addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                            + " 攻击　你受到 " + took + " 伤害", C_RED);
+                    // 敌人真打到了你，播它的攻击动作
+                    if (!battle.over()) sprite.play("attack");
+                }
             } else if (c.isAdverb()) {
                 // 副词：消耗它并按 fx 改写本回合规则
                 battle.hand.remove(c);
@@ -402,6 +452,12 @@ public class GBattleView extends LinearLayout {
                 addLog(flash, C_PURPLE);
                 // 副词是玩家改写规则，怪物侧只轻微受创反馈
                 sprite.play("hurt");
+                if (battle.playerHp < myHpBefore) {
+                    int took = myHpBefore - battle.playerHp;
+                    addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                            + " 攻击　你受到 " + took + " 伤害", C_RED);
+                    if (!battle.over()) sprite.play("attack");
+                }
                 if (battle.energy <= 0 || battle.hand.isEmpty()) advanceTurn();
             }
         } else {
@@ -411,6 +467,14 @@ public class GBattleView extends LinearLayout {
             addLog(flash, C_RED);
             // 答错是玩家失误，怪物只是"蓄力"，播 cast 表现蓄力
             sprite.play("cast");
+            // onWrong() 在手牌因此变空时也会内部 endTurn(false)，敌人会真的打你一下。
+            // 这种情况要按「攻击」演，不能还停在蓄力动作上。
+            if (battle.playerHp < myHpBefore) {
+                int took = myHpBefore - battle.playerHp;
+                addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                        + " 攻击　你受到 " + took + " 伤害", C_RED);
+                if (!battle.over()) sprite.play("attack");
+            }
         }
 
         render();
@@ -614,6 +678,8 @@ public class GBattleView extends LinearLayout {
             w.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
         }
         dialog.setCanceledOnTouchOutside(true);
+        dialog.setCancelable(true);   // 显式声明：BACK 一定能关掉，别把人困在浮层里
+        dialog.setOnCancelListener(d -> { dialog = null; });
         dialog.show();
     }
 
@@ -628,10 +694,13 @@ public class GBattleView extends LinearLayout {
     // ── 结束 ─────────────────────────────────────────────
 
     private void showEnd(boolean win) {
-        if (optRow.getChildCount() > 0
-                && optRow.getTag() != null
-                && "end".equals(optRow.getTag())) return;
-        optRow.setTag("end");
+        // 原来用 optRow.setTag("end") 当守卫，但那个 tag 只设不清：
+        // 打第二场时 start() 没复位它，这里就直接 return，
+        // 「继续」按钮永远加不出来 → onFinish 不触发 → 地图不推进。
+        // 玩家看到的是「打完了但界面没反应」。
+        // 换成每场开头复位的字段，既挡住重复发金币，也不会跨局残留。
+        if (endShown) return;
+        endShown = true;
         optRow.removeAllViews();
 
         TextView t = tv(win ? "胜利" : "失败", 26, win ? C_GREEN : C_RED);
@@ -648,9 +717,102 @@ public class GBattleView extends LinearLayout {
             optRow.addView(g);
         }
 
-        optRow.addView(bigBtn("继续", C_PURPLE, () -> {
-            if (onFinish != null) onFinish.run();
-        }));
+        recordBattle(win);
+
+        if (win) {
+            optRow.addView(bigBtn("继续", C_PURPLE, () -> {
+                if (onFinish != null) onFinish.run();
+            }));
+        } else {
+            // 战败必须重开这一局，不能走 onFinish。
+            // onFinish 挂的是 advanceAfterBattle()，它无条件 node+1（到层末还翻层），
+            // 也就是说「输了也能白拿一个节点」—— 这一局永远输不掉，
+            // 塔就没有任何失败压力。而且 gold/层数还会继续累加。
+            optRow.addView(tv("这一局结束了。金币与特殊词清零，从第 1 层重新开始。",
+                    12.5f, C_FG3));
+            optRow.addView(bigBtn("重新开始", C_PURPLE, () -> {
+                store.resetRun();
+                if (onFinish != null) onFinish.run();
+            }));
+        }
+    }
+
+    /**
+     * 把这一场记进本地并按天聚合，然后后台补传。
+     *
+     * 为什么用「增量」而不是直接读累计值：right()/wrong()/gold() 都是
+     * 这台手机的累计数（一个月的量）。直接上报会让今天凭空涨几千分，
+     * 排行榜立刻变成「谁玩得久谁第一」，和当天表现无关。
+     *
+     * 失败静默：成绩存本地就够了，上传失败不该弹窗打断玩家。
+     */
+    private void recordBattle(boolean win) {
+        try {
+            if (bpRev == null || bpRev.isEmpty()) return;
+            GStore.Battle b = new GStore.Battle();
+            b.day = com.zsb.plan.StateLogic.todayIso();
+            b.floor = store.layer();
+            b.node = store.node();
+            b.win = win;
+            b.gold = Math.max(0, store.gold() - bpGold0);
+            b.right = Math.max(0, store.right() - bpRight0);
+            b.wrong = Math.max(0, store.wrong() - bpWrong0);
+            b.ms = Math.max(0, System.currentTimeMillis() - bpT0);
+            b.started = bpT0;
+            b.rev = bpRev;
+            // 一题都没答就结束的战斗（全程「直接攻击」）不记：
+            // 服务端 empty_battle 会拒收，留着它只会永远堵在队头。
+            if (b.total() > 0) store.addBattle(b);
+        } catch (Exception ignored) {
+            // 记不上不能影响玩家继续玩
+        }
+        uploadPendingBattles();
+    }
+
+    /**
+     * 补传积压的战斗记录。
+     *
+     * 和 EngView.uploadPending 一个套路：同学玩的地方经常没网，
+     * 当场传必失败，所以先落本地，每次战斗结束时顺手试一遍。
+     * 服务器明确回了 ignored=true（用时太短/超上限/越界）也算已处理 ——
+     * 再传一次结果一样，不该无限重试。
+     */
+    private void uploadPendingBattles() {
+        final com.zsb.plan.Account acc = com.zsb.plan.Account.load(getContext());
+        if (!acc.loggedIn()) return;
+        final org.json.JSONArray pend = store.pendingBattles();
+        if (pend.length() == 0) return;
+
+        final java.util.List<org.json.JSONObject> items = new java.util.ArrayList<>();
+        for (int i = 0; i < pend.length(); i++) {
+            org.json.JSONObject o = pend.optJSONObject(i);
+            if (o != null) items.add(o);
+        }
+        if (items.isEmpty()) return;
+
+        new Thread(() -> {
+            for (org.json.JSONObject o : items) {
+                Api.R res = Api.postBattle(acc.token,
+                        o.optInt("floor"), o.optInt("node"), o.optInt("win") == 1,
+                        o.optInt("gold"), o.optInt("r"), o.optInt("w"),
+                        o.optLong("ms"), o.optLong("started"), o.optString("rev"));
+                if (res.ok || (res.body != null && res.body.optBoolean("ignored"))) {
+                    store.markBattleSent(o.optString("rev"));
+                } else if (res.code == 401) {
+                    // 登录过期。这条记录本身是好的，重新登录后还要传 ——
+                    // 所以既不能丢，也不能硬刷，停下来等下次机会。
+                    break;
+                } else if (res.code >= 400 && res.code < 500) {
+                    // 其它 4xx = 服务端明确说「这条我不收」（字段不合法之类）。
+                    // 必须当成已处理扔掉：如果这里 break，队头这条会永远堵住
+                    // 后面所有记录，越积越多、再也传不上去。
+                    store.markBattleSent(o.optString("rev"));
+                } else {
+                    // code==0 是连不上，5xx 是服务器抖了 —— 这两种才值得下次重试
+                    break;
+                }
+            }
+        }).start();
     }
 
     public Runnable onFinish;
