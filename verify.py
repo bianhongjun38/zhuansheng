@@ -73,6 +73,17 @@ for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
 results = []
 
 
+def _ver_int(name):
+    """1.2.2 -> 10202。与 Update.parseVer / 发版pages.ver_int 同一套单位。
+
+    三处必须一致，否则「清单版本 vs 本机版本」会比错。
+    这里刻意重写一遍而不是 import，避免 verify 依赖那几个带副作用
+    （会改文件、会联网）的脚本。
+    """
+    p = [int(x) for x in (name.split(".") + ["0", "0", "0"])[:3]]
+    return p[0] * 10000 + p[1] * 100 + p[2]
+
+
 def check(name, ok, detail=""):
     results.append((name, ok, detail))
     print(("  ✅ " if ok else "  ❌ ") + name + (("  (" + detail + ")") if detail else ""))
@@ -407,6 +418,41 @@ def main():
               PROJ, "src", "com", "zsb", "plan", "MainActivity.java"),
               encoding="utf-8").read(),
           "用户要能看到自己装的是哪一版")
+
+    # ── 更新取值策略（2026-10-27 真实故障）────────────────
+    # 现场：update.json 停在 1.2.3，GitHub 上已 1.4.1，App 却报「已是最新」。
+    # 根因是三源降级"读到第一份就返回"，过期的那份排第一。
+    # 光靠 VerTest 断言不够 —— 还得钉死源码真的改成了取最大值。
+    body = extract_fn(upd_src, "private Latest fetchLatestAny")
+    check("三源取版本最高者，而非读到即返回",
+          body is not None
+          and "lt.code > best.code" in body
+          and "if (lt != null) return lt;" not in body,
+          "过期清单不能压住更新的来源")
+
+    # 清单必须存在且不比 version.json 旧。
+    # 这次翻车就是"发了版没更新清单"，光看代码看不出来。
+    try:
+        vj = json.load(open(os.path.join(PROJ, "version.json"), encoding="utf-8"))
+        man_path = os.path.join(PROJ, "pages", "update.json")
+        if not os.path.exists(man_path):
+            check("pages/update.json 已生成", False, "缺文件：跑 python 发版pages.py")
+        else:
+            man = json.load(open(man_path, encoding="utf-8"))
+            man_int = int(man.get("versionInt") or 0)
+            loc_int = _ver_int(vj["versionName"])
+            check("update.json 不落后于 version.json",
+                  man_int >= loc_int,
+                  "清单 %s / 本地 %s" % (man.get("versionName"), vj["versionName"]))
+            apk = man.get("apk") or {}
+            check("update.json 带安装包地址",
+                  bool(apk.get("url")),
+                  str(apk.get("url")))
+            check("update.json 记录的包就是本地这版",
+                  apk.get("name") == "zhuansheng-v%s.apk" % vj["versionName"],
+                  str(apk.get("name")))
+    except Exception as e:
+        check("update.json 可解析", False, str(e))
 
     return summary()
 

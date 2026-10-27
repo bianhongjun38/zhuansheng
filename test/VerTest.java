@@ -52,6 +52,78 @@ public class VerTest {
         }
     }
 
+    /**
+     * 从若干来源里挑最新的那一份 —— 与 Update.fetchLatestAny 同一策略。
+     * 这里用 int 版本号代替 Latest 对象，逻辑一一对应：
+     *   · 跳过解析失败（0）
+     *   · 版本更高就替换
+     *   · 同版本但当前没下载地址、新的有，就补上地址
+     */
+    static int pickNewest(int bestCode, boolean bestHasUrl,
+                          int code, boolean hasUrl, boolean[] bestHasUrlOut) {
+        if (code == 0) { bestHasUrlOut[0] = bestHasUrl; return bestCode; }
+        if (bestCode == 0) { bestHasUrlOut[0] = hasUrl; return code; }
+        if (code > bestCode) { bestHasUrlOut[0] = hasUrl; return code; }
+        if (code == bestCode && !bestHasUrl && hasUrl) {
+            bestHasUrlOut[0] = true;
+            return bestCode;
+        }
+        bestHasUrlOut[0] = bestHasUrl;
+        return bestCode;
+    }
+
+    /**
+     * 现场故障必须被这次修复挡住。
+     *
+     * 真实情形（2026-10-27 用户报告）：
+     *   手机上装的是旧版（1.2.3 这类），GitHub 上已经有 1.4.1，
+     *   但 App 每次点「检查更新」都回「已是最新版本」。
+     * 因为 update.json 停在 1.2.3，而旧实现拿它当第一顺位且读到即返回。
+     */
+    static void regressionStaleManifestBlocksGithub() {
+        // 三份来源的真实数值（2026-10-27 实测拉到的）
+        int u1 = parseVer("1.2.3");   // app.xxjcloudns.kdns.fr/update.json（过期）
+        int u2 = parseVer("1.2.3");   // zsb-update.pages.dev/update.json（同样过期）
+        int gh = parseVer("v1.4.1");  // api.github.com releases/latest（正确）
+        int local = parseVer("1.2.3"); // 用户手机上实际装的旧版本
+
+        boolean[] hasUrl = new boolean[1];
+        int best = 0;
+        best = pickNewest(best, hasUrl[0], u1, true, hasUrl);
+        best = pickNewest(best, hasUrl[0], u2, true, hasUrl);
+        best = pickNewest(best, hasUrl[0], gh, true, hasUrl);
+
+        eq("过期清单不再压住 GitHub", best, 10401);
+        ok("修复后能识别出有新版（本机 1.2.3）", best > local);
+        // 旧实现拿到的是 u1，且直接 return —— 复现用户看到的错误结论
+        ok("修复前会误判为最新（记录故障）", u1 <= local);
+
+        // 本机已是最新时不能误报（本机 1.4.1、线上也是 1.4.1）
+        ok("本机已最新则不提示", !(best > parseVer("1.4.1")));
+
+        // 只有 GitHub 通、两份清单都拿不到时也要能用
+        boolean[] h2 = new boolean[1];
+        int onlyGh = pickNewest(0, false, gh, true, h2);
+        eq("只剩 GitHub 通道也能拿到版本", onlyGh, 10401);
+        ok("只剩 GitHub 通道时有下载地址", h2[0]);
+
+        // 同版本、Pages 那份因超限把 apk 置 null 的情况：
+        // 版本号补齐后必须把 GitHub 的下载地址补进来
+        boolean[] h3 = new boolean[1];
+        int v1 = pickNewest(0, false, parseVer("1.4.1"), false, h3);
+        ok("同版本无地址时初态正确", v1 == 10401 && !h3[0]);
+        int v2 = pickNewest(v1, h3[0], parseVer("v1.4.1"), true, h3);
+        eq("同版本不降级", v2, 10401);
+        ok("同版本补上了下载地址", h3[0]);
+
+        // 更老的一份不能顶掉更新的
+        boolean[] h4 = new boolean[1];
+        int a = pickNewest(0, false, gh, true, h4);
+        int b = pickNewest(a, h4[0], u1, true, h4);
+        eq("更老的来源不顶掉更新的", b, 10401);
+        ok("老来源不改变地址", h4[0]);
+    }
+
     public static void main(String[] args) {
         System.out.println("▶ 版本比较");
 
@@ -95,6 +167,14 @@ public class VerTest {
         ok("旧写法确实会误判（记录 bug）", oldRemote > oldLocal);
         // 新写法：两边同单位
         ok("新写法不会误判", !(parseVer("v1.1.0") > parseVer("1.1.0")));
+
+        // ── 2026-10-27 真实故障回归 ─────────────────────────
+        // 现场：update.json 停在 1.2.3，GitHub 上已经是 1.4.1，
+        // 本机装 1.4.1，App 却报「已是最新版本」。
+        // 原因不是网络、不是签名，是取值策略：旧实现三源降级
+        // 「第一个能读到就返回」，过期的那份排在第一位，
+        // 于是把后面正确的来源整个挡住。
+        regressionStaleManifestBlocksGithub();
 
         System.out.println("  通过 " + pass + " 项，失败 " + fail + " 项");
         // 纯 ASCII 统计行：CI 的 locale 不一定是 UTF-8，中文会变成 ?，

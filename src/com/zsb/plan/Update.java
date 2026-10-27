@@ -111,15 +111,44 @@ public class Update {
     }
 
     /**
-     * 三级降级：自有域名 → pages.dev → GitHub API。
-     * 返回 null 表示三条路都不通。
+     * 三个来源都查一遍，取**版本号最高**的那个，而不是"第一个能读到就用"。
+     *
+     * 为什么必须改成取最大值：
+     * 前两条通道读的是我们自己域名上的 update.json —— 一份要手动跑
+     * 发版pages.py 才会更新的静态文件。忘了跑，它就永远停在旧版本。
+     * 旧实现里它排在第一位且"读到即返回"，于是：
+     *   update.json 停在 1.2.3，GitHub 上已经是 1.4.1，
+     *   本机 1.4.1 → 10203 <= 10401 → 判定「已是最新版本」。
+     * 明明线上有新版、明明 GitHub 通道完全正常，却被一份过期静态文件
+     * 整个挡住。这不是"某个源挂了"，是取值策略错了。
+     *
+     * 现在任何一份过期都只是被忽略，不会压住更高版本。
+     *
+     * 同版本时优先保留带下载地址的那份：update.json 可能在 APK 超过
+     * Pages 单文件上限时把 apk 置为 null，那时要能补上 GitHub 的地址。
      */
     private Latest fetchLatestAny() {
-        Latest lt = fetchManifest(PRIMARY_JSON);
-        if (lt != null) return lt;
-        lt = fetchManifest(PAGES_JSON);
-        if (lt != null) return lt;
-        return fetchFromGithub();
+        // 探测顺序保持"自有域名优先"——只是不再提前返回，
+        // 三份都要拿到手才能比出最高的那个。
+        Latest[] all = {
+                fetchManifest(PRIMARY_JSON),
+                fetchManifest(PAGES_JSON),
+                fetchFromGithub(),
+        };
+
+        Latest best = null;
+        for (Latest lt : all) {
+            if (lt == null || lt.code == 0) continue;
+            if (best == null) { best = lt; continue; }
+            if (lt.code > best.code) {
+                best = lt;
+            } else if (lt.code == best.code
+                    && best.apkUrl == null && lt.apkUrl != null) {
+                // 版本一样但这份能下载，补上地址
+                best.apkUrl = lt.apkUrl;
+            }
+        }
+        return best;
     }
 
     /** 读一份 update.json 清单。 */

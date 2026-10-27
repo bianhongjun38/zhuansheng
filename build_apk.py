@@ -362,6 +362,23 @@ def main():
     shutil.copy(final, share)
     print("  已复制到：%s" % share)
 
+    # 顺手把 pages/ 下的清单也生成了。
+    #
+    # 这一步以前要手动跑 发版pages.py，于是 1.4.0 / 1.4.1 两次发版都忘了，
+    # update.json 一直停在 1.2.3 —— App 点「检查更新」永远回「已是最新」。
+    # 构建完就把清单写好，不会再有"忘了跑脚本"这种漏。
+    # 真正推到 Cloudflare 仍需手动跑 发版pages.py（要联网、要凭据）。
+    try:
+        sp = os.path.join(PROJ, "发版pages.py")
+        if os.path.exists(sp):
+            subprocess.run([sys.executable, sp, "-SkipDeploy"],
+                           cwd=PROJ, check=False,
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+            print("  更新清单已生成：pages/update.json（部署请跑 发版pages.py）")
+    except Exception as e:
+        print("  ⚠ 更新清单生成失败：%s" % e)
+
 
 if __name__ == "__main__":
     main()
