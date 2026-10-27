@@ -106,15 +106,52 @@ public class FormulaView extends View {
         catch (Exception e) { root = null; relayout(); requestLayout(); invalidate(); }
     }
 
+    /** 不缩字号时的自然宽度。onMeasure 拿它和可用宽度比，决定要不要缩。 */
+    private float plainW = Float.MAX_VALUE;
+    /** 实际用的缩放比，onDraw 用它给画笔设定字号。 */
+    private float fitFactor = 1f;
+
     private void relayout() {
-        if (root == null) { laid = null; return; }
+        if (root == null) { laid = null; plainW = Float.MAX_VALUE; return; }
         laid = FormulaLayout.layout(root, metrics);
         FormulaLayout.place(laid, 0, 0, metrics);
+        plainW = laid.w;
     }
 
+    /**
+     * 测量时按可用宽度自动缩字号（缩字逻辑在 FormulaLayout.fit 里，
+     * 纯逻辑、电脑上也能断言）。
+     *
+     * 原来的实现完全不看父容器给的上限，公式有多宽就报多宽 ——
+     * 放在固定列宽的格子里就会溢出。这在本地看不出来（Windows 的
+     * sans-serif 比较窄），但换到别的字体系统上（CI 的 Ubuntu）
+     * "(x+1)(x-1)" 会宽出 10%，直接画出格子外面。
+     */
     @Override
     protected void onMeasure(int wSpec, int hSpec) {
-        if (laid == null && root != null) relayout();
+        int avail = MeasureSpec.getSize(wSpec);
+        int mode = MeasureSpec.getMode(wSpec);
+
+        if (root != null && mode != MeasureSpec.UNSPECIFIED) {
+            float limit = avail - getPaddingLeft() - getPaddingRight();
+            if (limit > 0) {
+                float plain = laid == null ? Float.MAX_VALUE : plainW;
+                if (plain > limit) {
+                    FormulaLayout.Fit fit = FormulaLayout.fit(root, metrics, limit);
+                    laid = fit.box;
+                    fitFactor = fit.factor;
+                } else {
+                    if (laid == null) relayout();
+                    fitFactor = 1f;
+                }
+            } else {
+                if (laid == null) relayout();
+                fitFactor = 1f;
+            }
+        } else if (laid == null && root != null) {
+            relayout();
+        }
+
         int w, h;
         if (laid == null) {
             w = (int) dp(20); h = (int) dp(26);
@@ -131,6 +168,11 @@ public class FormulaView extends View {
         if (laid == null) return;
         paint.setColor(color);
         bar.setColor(color);
+        // 缩过字号就整体缩小画笔；FormulaLayout 已经按这个比例算好了盒子
+        if (Math.abs(fitFactor - 1f) > 0.001f) {
+            paint.setTextSize(px() * fitFactor);
+            bar.setStrokeWidth(Math.max(dp(1f), px() * fitFactor * 0.055f));
+        }
 
         float availH = getHeight() - getPaddingTop() - getPaddingBottom();
         float topY = getPaddingTop() + (availH - (laid.asc + laid.desc)) / 2f;

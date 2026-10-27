@@ -157,14 +157,28 @@ public class KeypadAudit {
             String nm = i < ExprInput.TEMPLATE_NAMES.length
                     ? ExprInput.TEMPLATE_NAMES[i] : "";
 
-            // 公式行：用同一套 FormulaLayout 排版（和 App 里 FormulaView 同源）
+            // 公式行：用同一套 FormulaLayout 排版（和 App 里 FormulaView 同源）。
+            // 必须走 fit()，因为 App 里也走它 —— 直接 layout() 量出来的
+            // 天然宽度只在"格子够宽"时才放得下，而那取决于字体。
             try {
                 Expr.Node n = Expr.parse(expr);
-                FormulaLayout.Box box = FormulaLayout.layout(n, new FM());
+                FormulaLayout.Fit fit = FormulaLayout.fit(n, new FM(), tW - 6);
+                FormulaLayout.Box box = fit.box;
                 FormulaLayout.place(box, 0, 0, new FM());
                 int bw = (int) box.w;
                 ok("模板「" + expr + "」公式不溢出", bw <= tW - 6,
-                   bw + "px / " + (tW - 6) + "px");
+                   bw + "px / " + (tW - 6) + "px（字号 ×"
+                   + String.format("%.2f", fit.factor) + "）");
+
+                // 再加一条更狠的：把字体宽度整体放大 20%，
+                // 模拟"这台设备的字体比开发机更宽"。真实 CI 就是用
+                // 更宽的字体把 (x+1)(x-1) 顶出去的。
+                FormulaLayout.Fit wide =
+                        FormulaLayout.fit(n, new WideFM(), tW - 6);
+                ok("模板「" + expr + "」在宽字体下也不溢出",
+                   wide.box.w <= tW - 6,
+                   (int) wide.box.w + "px / " + (tW - 6) + "px");
+
                 float base = cy + 22 + (box.asc - box.desc) / 2f;
                 g.setColor(new Color(0xE8, 0xEA, 0xF0));
                 Draw.drawBox(g, box, cx + (tW - bw) / 2f, base, BASE_FONT, new FM());
@@ -209,6 +223,13 @@ public class KeypadAudit {
      * 断言会假通过，等于白测。这里先探测，没有中文就明确跳过并说明，
      * 而不是拿一个假通过糊过去。
      */
+    /** 比真实字体宽 20% 的度量，用来模拟"别的设备的字体更宽"。 */
+    static class WideFM extends FM {
+        @Override public float width(String text, float scale) {
+            return super.width(text, scale) * 1.2f;
+        }
+    }
+
     static boolean hasCjk() {
         try {
             java.awt.Canvas c = new java.awt.Canvas();
@@ -223,6 +244,7 @@ public class KeypadAudit {
 
     /** Metrics：直接用 AWT 字体度量，和手机上 Paint.measureText 行为一致。 */
     static class FM implements FormulaLayout.Metrics {
+        // WideFM 需要继承，所以这里不能是 final
         private final Graphics2D g = new BufferedImage(1, 1,
                 BufferedImage.TYPE_INT_RGB).createGraphics();
 

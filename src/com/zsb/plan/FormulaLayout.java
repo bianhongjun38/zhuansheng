@@ -57,6 +57,75 @@ public class FormulaLayout {
     /** 上标缩放比。0.62 是印刷上常见的上下标比例。 */
     public static final float SCRIPT = 0.62f;
 
+    // ── 按可用宽度自动缩字 ────────────────────────────────
+    /**
+     * 把一个 Metrics 整体按 f 倍缩小字号。
+     *
+     * 为什么要它：字体度量是实现相关的。同一串 "(x+1)(x-1)"
+     * 在 Windows 的 sans-serif 下量出 74px，在 Ubuntu 的
+     * 字体下量出 83px —— 放同一个固定列宽的格子里，后者就溢出。
+     * 靠"格子按本地字宽算够大"是赌字体；正确做法是排版时
+     * 按实际可用宽度缩，缩到放得下为止。
+     */
+    public static class Scaled implements Metrics {
+        public final Metrics base;
+        public final float f;
+        public Scaled(Metrics base, float f) {
+            this.base = base;
+            this.f = f;
+        }
+        public float width(String text, float scale) {
+            return base.width(text, scale * f);
+        }
+        public float ascent(float scale) { return base.ascent(scale * f); }
+        public float descent(float scale) { return base.descent(scale * f); }
+        public float unit() { return base.unit(); }
+    }
+
+    /** 缩字结果：排版树 + 实际用的缩放比。 */
+    public static class Fit {
+        public Box box;
+        public float factor = 1f;
+        public boolean overflow;   // 缩到下限仍放不下
+    }
+
+    /** 缩字候选。从原文号往下试，第一个放得下的就用。 */
+    private static final float[] FIT_STEPS =
+            {1f, 0.94f, 0.88f, 0.82f, 0.76f, 0.70f, 0.64f, 0.58f, 0.52f};
+
+    /**
+     * 在 maxW 宽度内排下 n。
+     *
+     * 不缩字号时调用方应直接用 layout()；这里只在必要时才缩。
+     * 缩到 52% 还放不下就认了 —— 再小字就看不清，宁可溢出
+     * 也不能把公式糊成一团。此时 overflow=true 让调用方能断言到。
+     */
+    public static Fit fit(Expr.Node n, Metrics m, float maxW) {
+        Fit r = new Fit();
+        if (n == null) { r.box = text("0", 1f, m); return r; }
+        if (maxW <= 0) { r.box = layout(n, m); return r; }
+
+        Box best = null;
+        float bestF = FIT_STEPS[FIT_STEPS.length - 1];
+        for (float f : FIT_STEPS) {
+            Metrics mm = (f == 1f) ? m : new Scaled(m, f);
+            Box b = layout(n, mm);
+            if (best == null) best = b;
+            if (b.w <= maxW) {
+                r.box = b;
+                r.factor = f;
+                r.overflow = false;
+                return r;
+            }
+            best = b;
+            bestF = f;
+        }
+        r.box = best;
+        r.factor = bestF;
+        r.overflow = true;
+        return r;
+    }
+
     // ── 顶层 ──────────────────────────────────────────────
     public static Box layout(Expr.Node n, Metrics m) {
         return measure(n, 1f, m);
