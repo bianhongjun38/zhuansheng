@@ -1,0 +1,1029 @@
+package com.zsb.plan;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.InputType;
+import android.text.TextUtils;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.view.Window;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * 主界面。全部用代码构建布局，不依赖 XML——
+ * 这样构建链只有 aapt2 + javac + d8，不上 Gradle 也能出包。
+ */
+public class MainActivity extends Activity {
+
+    // ── 配色 ──────────────────────────────────────────────
+    static final int C_BG      = 0xFF14161C;
+    static final int C_BG2     = 0xFF1C1F27;
+    static final int C_BG3     = 0xFF262A34;
+    static final int C_LINE    = 0xFF2C313C;
+    static final int C_FG      = 0xFFE8EAF0;
+    static final int C_FG2     = 0xFFA8AEBC;
+    static final int C_FG3     = 0xFF6B7282;
+    static final int C_PURPLE  = 0xFF7C6CF0;
+    static final int C_TEAL    = 0xFF2FA8A0;
+    static final int C_ORANGE  = 0xFFE0873F;
+    static final int C_PINK    = 0xFFE89A9D;
+    static final int C_GREEN   = 0xFF4BBF8A;
+
+    private Plan plan;
+    private Store store;
+
+    private LinearLayout content;
+    private TextView tvDays, tvLeftLabel;
+    private LinearLayout navBar;
+    private final TextView[] navBtn = new TextView[5];
+    private int tab = 0;
+    private int idx = 0;
+
+    // 计时
+    private final Handler tickHandler = new Handler(Looper.getMainLooper());
+    private Runnable tickRun;
+    private String timingKey;      // "yyyy-MM-dd|taskId"
+    private long timingStart;
+
+    private static final String[] TAB_NAMES = {"今日", "检索", "错题库", "全表", "数据"};
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        plan = Plan.parse(readAsset("plan.json"));
+        store = new Store(this);
+        idx = store.currentIndex(plan);
+
+        Window w = getWindow();
+        w.setStatusBarColor(C_BG);
+        w.setNavigationBarColor(C_BG);
+
+        setContentView(buildRoot());
+        render();
+    }
+
+    // ── 根布局 ────────────────────────────────────────────
+    private View buildRoot() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(C_BG);
+
+        // 顶栏
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.VERTICAL);
+        head.setBackgroundColor(C_BG);
+        head.setPadding(dp(14), dp(10), dp(14), dp(8));
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        TextView t1 = new TextView(this);
+        t1.setText("剩余 ");
+        t1.setTextColor(C_FG2);
+        t1.setTextSize(13);
+        row.addView(t1);
+
+        tvDays = new TextView(this);
+        tvDays.setTextColor(C_FG);
+        tvDays.setTextSize(22);
+        tvDays.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(tvDays);
+
+        TextView t2 = new TextView(this);
+        t2.setText(" 天");
+        t2.setTextColor(C_FG2);
+        t2.setTextSize(13);
+        row.addView(t2);
+
+        tvLeftLabel = new TextView(this);
+        tvLeftLabel.setTextColor(C_FG3);
+        tvLeftLabel.setTextSize(11);
+        tvLeftLabel.setPadding(dp(8), dp(3), 0, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tvLeftLabel.setLayoutParams(lp);
+        row.addView(tvLeftLabel);
+
+        head.addView(row);
+        root.addView(head);
+
+        // 导航
+        navBar = new LinearLayout(this);
+        navBar.setOrientation(LinearLayout.HORIZONTAL);
+        navBar.setBackgroundColor(C_BG);
+        navBar.setPadding(dp(4), 0, dp(4), dp(2));
+        for (int i = 0; i < TAB_NAMES.length; i++) {
+            final int k = i;
+            TextView tv = new TextView(this);
+            tv.setText(TAB_NAMES[i]);
+            tv.setTextSize(14);
+            tv.setGravity(Gravity.CENTER);
+            tv.setPadding(0, dp(11), 0, dp(11));
+            tv.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            tv.setOnClickListener(v -> { tab = k; render(); });
+            navBtn[i] = tv;
+            navBar.addView(tv);
+        }
+        root.addView(navBar);
+
+        View line = new View(this);
+        line.setBackgroundColor(C_LINE);
+        root.addView(line, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+
+        // 内容
+        ScrollView sc = new ScrollView(this);
+        sc.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        sc.setFillViewport(true);
+        sc.setClipToPadding(false);
+        content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        content.setBackgroundColor(C_BG);
+        content.setPadding(dp(12), dp(12), dp(12), dp(28));
+        sc.addView(content);
+        root.addView(sc);
+
+        return root;
+    }
+
+    // ── 渲染分发 ──────────────────────────────────────────
+    private void render() {
+        tvDays.setText(String.valueOf(store.daysLeft(plan)));
+        tvLeftLabel.setText("已确认 " + store.completed.size() + " / " + plan.days.size() + " 天");
+
+        for (int i = 0; i < navBtn.length; i++) {
+            navBtn[i].setTextColor(i == tab ? C_FG : C_FG3);
+            navBtn[i].setTypeface(i == tab ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+        }
+
+        content.removeAllViews();
+        switch (tab) {
+            case 0: renderToday(); break;
+            case 1: renderReview(); break;
+            case 2: renderHard(); break;
+            case 3: renderPlanList(); break;
+            default: renderStats(); break;
+        }
+    }
+
+    // ══ 今日 ══════════════════════════════════════════════
+    private void renderToday() {
+        if (plan.days.isEmpty()) { content.addView(hint("计划数据为空")); return; }
+        idx = Math.max(0, Math.min(idx, plan.days.size() - 1));
+        final Plan.Day d = plan.days.get(idx);
+
+        content.addView(dayHeader(d));
+
+        // 任务
+        if (!d.tasks.isEmpty()) {
+            LinearLayout card = card("今日任务", null);
+            for (Plan.Task t : d.tasks) card.addView(taskRow(d.date, t));
+            content.addView(card);
+        }
+
+        // 检索
+        if (!d.reviews.isEmpty()) {
+            LinearLayout card = card("到期检索 · " + d.reviews.size() + " 项", "合上书默写，再翻页核对");
+            for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
+            content.addView(card);
+        }
+
+        // 词汇
+        if (d.vocab != null) {
+            LinearLayout card = card("词汇", null);
+            TextView tv = new TextView(this);
+            tv.setText(d.vocab);
+            tv.setTextColor(C_FG2);
+            tv.setTextSize(13);
+            card.addView(tv);
+            card.addView(checkRow(d.date, "V-" + d.date, "本日词汇已过一遍"));
+            content.addView(card);
+        }
+
+        // 推进闸门
+        content.addView(commitBlock(d));
+    }
+
+    private View dayHeader(Plan.Day d) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, 0, 0, dp(10));
+
+        TextView title = new TextView(this);
+        title.setText(d.date + "  周" + d.weekday);
+        title.setTextColor(C_FG);
+        title.setTextSize(19);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        box.addView(title);
+
+        TextView sub = new TextView(this);
+        String s = "第 " + (idx + 1) + " / " + plan.days.size() + " 学习日";
+        if (!TextUtils.isEmpty(d.phase)) s += "   ·   " + d.phase;
+        if (d.daysToExam > 0) s += "   ·   距考 " + d.daysToExam + " 天";
+        sub.setText(s);
+        sub.setTextColor(C_FG3);
+        sub.setTextSize(12);
+        sub.setPadding(0, dp(4), 0, 0);
+        box.addView(sub);
+
+        // 前后翻页
+        LinearLayout nav = new LinearLayout(this);
+        nav.setOrientation(LinearLayout.HORIZONTAL);
+        nav.setPadding(0, dp(9), 0, 0);
+
+        nav.addView(smallBtn("‹ 上一天", () -> {
+            if (idx > 0) { idx--; stopTimer(); render(); }
+        }, idx > 0));
+
+        nav.addView(smallBtn("下一天 ›", () -> {
+            if (idx < plan.days.size() - 1) { idx++; stopTimer(); render(); }
+        }, idx < plan.days.size() - 1));
+
+        if (idx != store.currentIndex(plan)) {
+            nav.addView(smallBtn("回到今天", () -> {
+                idx = store.currentIndex(plan); stopTimer(); render();
+            }, true));
+        }
+        box.addView(nav);
+        return box;
+    }
+
+    private View taskRow(final String date, final Plan.Task t) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(10), 0, dp(10));
+        row.setGravity(Gravity.TOP);
+
+        final String tid = Plan.taskId(t);
+        final boolean done = store.isDone(date, tid);
+
+        // 勾选框
+        final TextView chk = new TextView(this);
+        chk.setText(done ? "✓" : "");
+        chk.setTextSize(13);
+        chk.setGravity(Gravity.CENTER);
+        chk.setTextColor(Color.WHITE);
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(6));
+        g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+        g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+        chk.setBackground(g);
+        LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(24), dp(24));
+        clp.topMargin = dp(1);
+        chk.setLayoutParams(clp);
+        chk.setOnClickListener(v -> {
+            boolean nv = store.toggleDone(date, tid);
+            chk.setText(nv ? "✓" : "");
+            GradientDrawable g2 = new GradientDrawable();
+            g2.setCornerRadius(dp(6));
+            g2.setStroke(dp(2), nv ? C_PURPLE : C_FG3);
+            g2.setColor(nv ? C_PURPLE : Color.TRANSPARENT);
+            chk.setBackground(g2);
+            renderHeaderOnly();
+            // 勾选状态变化可能影响推进按钮，重画整页
+            render();
+        });
+        row.addView(chk);
+
+        // 文字区
+        LinearLayout col = new LinearLayout(this);
+        col.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams colp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        colp.leftMargin = dp(11);
+        col.setLayoutParams(colp);
+
+        Plan.Subject sj = plan.subject(t.subject);
+        Plan.Chapter ch = plan.chapter(t.chapterId);
+
+        TextView name = new TextView(this);
+        String line1;
+        if ("learn".equals(t.kind) && ch != null) {
+            line1 = sj.name + " · " + ch.name;
+        } else {
+            line1 = TextUtils.isEmpty(t.note) ? sj.name : t.note;
+        }
+        name.setText(line1);
+        name.setTextColor(done ? C_FG3 : C_FG);
+        name.setTextSize(14.5f);
+        if (!done) name.setTypeface(Typeface.DEFAULT_BOLD);
+        col.addView(name);
+
+        // 页码 + 时长
+        List<String> meta = new ArrayList<>();
+        if (t.startPage > 0 && t.endPage >= t.startPage) {
+            meta.add("印刷 p" + t.startPage + "-" + t.endPage);
+        }
+        if (t.pdfStart != null && t.pdfEnd != null && t.pdfEnd >= t.pdfStart) {
+            meta.add("PDF p" + t.pdfStart + "-" + t.pdfEnd);
+        }
+        if (t.min > 0) meta.add(t.min + " 分钟");
+        long el = store.timingOf(date, tid);
+        if (el > 1000) meta.add("已计时 " + fmtDur(el));
+
+        TextView m = new TextView(this);
+        m.setText(TextUtils.join("   ", meta));
+        m.setTextColor(C_FG3);
+        m.setTextSize(11.5f);
+        m.setPadding(0, dp(3), 0, 0);
+        col.addView(m);
+        if (!TextUtils.isEmpty(t.note) && "learn".equals(t.kind)) {
+            TextView note = new TextView(this);
+            note.setText(t.note);
+            note.setTextColor(0xFF5C6373);
+            note.setTextSize(11);
+            note.setPadding(0, dp(2), 0, 0);
+            col.addView(note);
+        }
+
+        row.addView(col);
+
+        // 计时按钮
+        final TextView timer = new TextView(this);
+        final String tkey = Store.key(date, tid);
+        boolean running = tkey.equals(timingKey);
+        timer.setText(running ? "■" : "▶");
+        timer.setTextSize(13);
+        timer.setTextColor(running ? C_PINK : C_FG3);
+        timer.setGravity(Gravity.CENTER);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setCornerRadius(dp(8));
+        bg.setColor(C_BG3);
+        timer.setBackground(bg);
+        LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(34), dp(30));
+        tlp.leftMargin = dp(6);
+        timer.setLayoutParams(tlp);
+        timer.setOnClickListener(v -> {
+            if (tkey.equals(timingKey)) stopTimer();
+            else startTimer(tkey, m);
+            render();
+        });
+        row.addView(timer);
+
+        return row;
+    }
+
+    private View reviewRow(final String date, final Plan.Review r) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, dp(9), 0, dp(9));
+
+        final String rid = "R-" + r.id;
+        final boolean done = store.isDone(date, rid);
+
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+
+        final TextView chk = new TextView(this);
+        chk.setText(done ? "✓" : "");
+        chk.setTextSize(13);
+        chk.setGravity(Gravity.CENTER);
+        chk.setTextColor(Color.WHITE);
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(6));
+        g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+        g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+        chk.setBackground(g);
+        chk.setLayoutParams(new LinearLayout.LayoutParams(dp(24), dp(24)));
+        chk.setOnClickListener(v -> store.toggleDone(date, rid));
+        row.addView(chk);
+
+        Plan.Subject sj = plan.subject(r.subject);
+        Plan.Chapter ch = plan.chapter(r.chapterId);
+
+        TextView tv = new TextView(this);
+        tv.setText(r.kind + "  " + sj.name + (ch != null ? " · " + ch.name : "")
+                + (r.min > 0 ? "  (" + r.min + " 分钟)" : ""));
+        tv.setTextColor(done ? C_FG3 : C_FG);
+        tv.setTextSize(13.5f);
+        tv.setPadding(dp(11), 0, 0, 0);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        tv.setLayoutParams(lp);
+        row.addView(tv);
+
+        box.addView(row);
+
+        // 默写框
+        final EditText et = new EditText(this);
+        et.setHint("默写公式 / 定义（写不出就空着）");
+        et.setHintTextColor(0xFF4E5565);
+        et.setTextColor(C_FG2);
+        et.setTextSize(14);
+        et.setBackgroundColor(C_BG3);
+        et.setPadding(dp(10), dp(8), dp(10), dp(8));
+        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        et.setMinLines(1);
+        et.setText(store.noteOf(date, rid));
+        et.setTag(Store.key(date, rid));
+        // 边输入边存：靠失焦保存会丢——用户可能直接点「推进」或切页签，
+        // 那些动作会 render() 重建视图，还没失焦的文本就没了。
+        et.addTextChangedListener(new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
+            public void onTextChanged(CharSequence s, int a, int b, int c) {}
+            public void afterTextChanged(android.text.Editable s) {
+                store.setNote(date, rid, s.toString());
+            }
+        });
+        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        elp.topMargin = dp(7);
+        elp.leftMargin = dp(35);
+        et.setLayoutParams(elp);
+        box.addView(et);
+
+        // 三档自评
+        LinearLayout grades = new LinearLayout(this);
+        grades.setOrientation(LinearLayout.HORIZONTAL);
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        glp.topMargin = dp(6);
+        glp.leftMargin = dp(35);
+        grades.setLayoutParams(glp);
+
+        grades.addView(gradeBtn("写不出", () -> {
+            store.bumpHard(r.chapterId.isEmpty() ? r.id : r.chapterId);
+            store.setDone(date, rid, false);
+            toast("已进错题库，明天再来");
+            render();
+        }));
+        grades.addView(gradeBtn("写一半", () -> {
+            store.setDone(date, rid, true);
+            store.setNote(date, rid, et.getText().toString());
+            toast("记下了");
+            render();
+        }));
+        grades.addView(gradeBtn("写出来了", () -> {
+            store.setDone(date, rid, true);
+            store.setNote(date, rid, et.getText().toString());
+            toast("过关");
+            render();
+        }));
+        box.addView(grades);
+
+        View sep = new View(this);
+        sep.setBackgroundColor(C_LINE);
+        LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+        slp.topMargin = dp(9);
+        sep.setLayoutParams(slp);
+        box.addView(sep);
+
+        return box;
+    }
+
+    private View commitBlock(final Plan.Day d) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(0, dp(6), 0, 0);
+
+        List<String> ids = Plan.dayTaskIds(d);
+        int doneN = 0;
+        for (String id : ids) if (store.isDone(d.date, id)) doneN++;
+        final boolean all = !ids.isEmpty() && doneN == ids.size();
+        final boolean passed = store.completed.contains(d.date);
+
+        TextView label = new TextView(this);
+        label.setText("完成度 " + doneN + " / " + ids.size()
+                + (all ? "   全部完成" : "   还有 " + (ids.size() - doneN) + " 项"));
+        label.setTextColor(all ? C_GREEN : C_FG3);
+        label.setTextSize(12.5f);
+        label.setGravity(Gravity.CENTER);
+        label.setPadding(0, dp(6), 0, dp(8));
+        box.addView(label);
+
+        Button btn = new Button(this);
+        if (passed) {
+            btn.setText("已确认完成 · 点此撤销");
+            btn.setTextColor(C_FG2);
+            btn.setBackgroundColor(C_BG3);
+            btn.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setMessage("把 " + d.date + " 退回未完成？剩余天数会增加 1。")
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("撤销", (x, y) -> {
+                        store.uncommitDay(d.date);
+                        idx = store.currentIndex(plan);
+                        render();
+                        toast("已撤销");
+                    }).show());
+        } else {
+            btn.setText(all ? "今日完成 · 推进到下一天" : "把上面全部勾完才能推进");
+            btn.setTextColor(all ? Color.WHITE : C_FG3);
+            btn.setBackgroundColor(all ? C_PURPLE : C_BG3);
+            btn.setEnabled(all);
+            btn.setOnClickListener(v -> new AlertDialog.Builder(this)
+                    .setMessage("确认 " + d.date + " 已完成？\n\n这会推进计划进度，剩余天数减少 1。")
+                    .setNegativeButton("再想想", null)
+                    .setPositiveButton("确认完成", (x, y) -> {
+                        store.commitDay(d.date);
+                        idx = store.currentIndex(plan);
+                        render();
+                        toast("已推进 · 剩余 " + store.daysLeft(plan) + " 天");
+                    }).show());
+        }
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+        lp.topMargin = dp(2);
+        btn.setLayoutParams(lp);
+        btn.setTextSize(14);
+        box.addView(btn);
+
+        return box;
+    }
+
+    // ══ 检索 ══════════════════════════════════════════════
+    private void renderReview() {
+        String today = Store.todayIso();
+        List<Plan.Day> due = new ArrayList<>();
+        for (Plan.Day d : plan.days) {
+            if (d.reviews.isEmpty()) continue;
+            if (d.date.compareTo(today) <= 0 && !store.completed.contains(d.date)) due.add(d);
+        }
+        if (due.isEmpty()) {
+            // 没有到期的，显示下一个有检索的日子
+            for (Plan.Day d : plan.days) {
+                if (!d.reviews.isEmpty() && d.date.compareTo(today) > 0) { due.add(d); break; }
+            }
+            if (due.isEmpty()) { content.addView(hint("没有待做的检索")); return; }
+            content.addView(hint("今天没有到期的检索。下面是最近的一次："));
+        }
+        for (Plan.Day d : due) {
+            LinearLayout card = card(d.date + "  周" + d.weekday, "到期 " + d.reviews.size() + " 项");
+            for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
+            content.addView(card);
+        }
+    }
+
+    // ══ 错题库 ════════════════════════════════════════════
+    private void renderHardMap() { renderHard(); }
+
+    private void renderHard() {
+        if (store.hard.isEmpty()) {
+            content.addView(hint("错题库是空的。\n\n检索时选「写不出」，那一节就会进来。"));
+            return;
+        }
+        LinearLayout card = card("错题库 · " + store.hard.size() + " 项",
+                "等级越高越该回头看。清掉后就从列表移除。");
+        for (final String id : new ArrayList<>(store.hard.keySet())) {
+            Plan.Chapter ch = plan.chapter(id);
+            Integer lv = store.hard.get(id);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(9), 0, dp(9));
+
+            TextView tv = new TextView(this);
+            String nm = ch != null ? plan.subject(ch.subject).name + " · " + ch.name : id;
+            tv.setText(nm + "    等级 " + (lv == null ? 1 : lv) + " / 3");
+            tv.setTextColor(C_FG);
+            tv.setTextSize(13.5f);
+            tv.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(tv);
+
+            row.addView(smallBtn("降级", () -> {
+                Integer c = store.hard.get(id);
+                if (c == null || c <= 1) { store.clearHard(id); toast("移出错题库"); }
+                else { store.hard.put(id, c - 1); store.save(); toast("降一级"); }
+                render();
+            }, true));
+
+            card.addView(row);
+        }
+        content.addView(card);
+    }
+
+    // ══ 全表 ══════════════════════════════════════════════
+    private void renderPlanList() {
+        LinearLayout card = card("全部 " + plan.days.size() + " 个学习日", "点任意一天查看并补做");
+        final int cur = store.currentIndex(plan);
+        for (int i = 0; i < plan.days.size(); i++) {
+            final Plan.Day d = plan.days.get(i);
+            final int pos = i;
+            boolean done = store.completed.contains(d.date);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(0, dp(11), 0, dp(11));
+
+            View bar = new View(this);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setCornerRadius(dp(2));
+            bg.setColor(done ? C_GREEN : (i == cur ? C_PURPLE : C_BG3));
+            bar.setBackground(bg);
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(3), dp(30));
+            blp.rightMargin = dp(11);
+            bar.setLayoutParams(blp);
+            row.addView(bar);
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setLayoutParams(new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            TextView a = new TextView(this);
+            a.setText(d.date + "  周" + d.weekday);
+            a.setTextColor(i == cur ? C_FG : C_FG2);
+            a.setTextSize(13.5f);
+            if (i == cur) a.setTypeface(Typeface.DEFAULT_BOLD);
+            col.addView(a);
+
+            TextView bx = new TextView(this);
+            String st = "第 " + (i + 1) + " 天";
+            if (!TextUtils.isEmpty(d.phase)) st += " · " + d.phase;
+            st += " · " + d.tasks.size() + " 任务";
+            if (!d.reviews.isEmpty()) st += " · " + d.reviews.size() + " 检索";
+            if (done) st += "   ✓ 已确认";
+            else if (i == cur) st += "   ← 当前";
+            bx.setText(st);
+            bx.setTextColor(done ? C_GREEN : C_FG3);
+            bx.setTextSize(11.5f);
+            bx.setPadding(0, dp(2), 0, 0);
+            col.addView(bx);
+
+            row.addView(col);
+
+            row.setOnClickListener(v -> { idx = pos; tab = 0; stopTimer(); render(); });
+            card.addView(row);
+
+            if (i < plan.days.size() - 1) {
+                View sep = new View(this);
+                sep.setBackgroundColor(C_LINE);
+                card.addView(sep, new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+            }
+        }
+        content.addView(card);
+    }
+
+    // ══ 数据 ══════════════════════════════════════════════
+    private void renderStats() {
+        int total = plan.days.size();
+        int conf = store.completed.size();
+        int taskDone = store.done.size();
+
+        LinearLayout c1 = card("总览", null);
+        c1.addView(statRow("学习日总数", total + " 天"));
+        c1.addView(statRow("已确认完成", conf + " 天"));
+        c1.addView(statRow("剩余", store.daysLeft(plan) + " 天"));
+        c1.addView(statRow("已勾选条目", taskDone + " 项"));
+        c1.addView(statRow("错题库", store.hard.size() + " 项"));
+        c1.addView(statRow("考试日", plan.meta.examDate));
+        content.addView(c1);
+
+        LinearLayout c2 = card("数据管理", "全部数据只存在这台手机上，不上传任何服务器");
+        c2.addView(wideBtn("导出备份", () -> {
+            final String json = store.exportJson();
+            new AlertDialog.Builder(this)
+                    .setTitle("导出备份")
+                    .setMessage("复制下面的内容，存到微信收藏 / 备忘录 / 电脑都行。\n换手机时用「从备份导入」粘回来。")
+                    .setPositiveButton("复制", (x, y) -> {
+                        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(ClipData.newPlainText("zsb-backup", json));
+                        toast("已复制到剪贴板");
+                    })
+                    .setNeutralButton("分享", (x, y) -> {
+                        Intent i = new Intent(Intent.ACTION_SEND);
+                        i.setType("text/plain");
+                        i.putExtra(Intent.EXTRA_SUBJECT, "专升本进度备份 " + Store.todayIso());
+                        i.putExtra(Intent.EXTRA_TEXT, json);
+                        startActivity(Intent.createChooser(i, "分享备份"));
+                    })
+                    .setNegativeButton("关闭", null)
+                    .show();
+        }));
+
+        c2.addView(wideBtn("从备份导入", () -> {
+            final EditText et = new EditText(this);
+            et.setHint("把备份内容粘到这里");
+            et.setHintTextColor(C_FG3);
+            et.setTextColor(C_FG);
+            et.setTextSize(13);
+            et.setMinLines(4);
+            et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            new AlertDialog.Builder(this)
+                    .setTitle("从备份导入")
+                    .setMessage("导入会覆盖当前全部进度。")
+                    .setView(et)
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("导入", (x, y) -> {
+                        try {
+                            int n = store.importJson(et.getText().toString());
+                            idx = store.currentIndex(plan);
+                            render();
+                            toast("已导入 " + n + " 条勾选");
+                        } catch (Exception e) {
+                            toast("导入失败：内容不是有效备份");
+                        }
+                    }).show();
+        }));
+
+        c2.addView(wideBtn("清空全部进度", () -> new AlertDialog.Builder(this)
+                .setMessage("清空全部勾选、默写和计时？无法撤销。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("清空", (x, y) -> {
+                    store.resetAll();
+                    idx = store.currentIndex(plan);
+                    render();
+                    toast("已清空");
+                }).show()));
+        content.addView(c2);
+
+        LinearLayout c3 = card("这套计划的依据", null);
+        TextView tv = new TextView(this);
+        tv.setText("· 检索阶梯 R1 +4天 / R2 +18天 / R3 +53天 / R4 +133天，"
+                + "按 Cepeda 2008 的最优间隔比例（考试延迟的 8.5%–17%）换算。\n"
+                + "· 第二轮第三轮都是做题而不是重读，依据 Dunlosky 2013 对 10 种学习法的评级。\n"
+                + "· 天数是推进制，不按日历走——没学完就不跳到下一天，进度由你控制。\n"
+                + "· 每页耗时是估算值，跑一周后要用真实数据重算整张表。");
+        tv.setTextColor(C_FG3);
+        tv.setTextSize(12.5f);
+        tv.setLineSpacing(dp(3), 1f);
+        c3.addView(tv);
+        content.addView(c3);
+    }
+
+    // ── 小组件 ────────────────────────────────────────────
+    private LinearLayout card(String title, String sub) {
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setBackground(roundRect(C_BG2, dp(14), C_LINE));
+        box.setPadding(dp(14), dp(13), dp(14), dp(13));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.bottomMargin = dp(11);
+        box.setLayoutParams(lp);
+
+        if (title != null) {
+            TextView t = new TextView(this);
+            t.setText(title);
+            t.setTextColor(C_FG);
+            t.setTextSize(15.5f);
+            t.setTypeface(Typeface.DEFAULT_BOLD);
+            box.addView(t);
+        }
+        if (sub != null) {
+            TextView s = new TextView(this);
+            s.setText(sub);
+            s.setTextColor(C_FG3);
+            s.setTextSize(12);
+            s.setPadding(0, dp(3), 0, dp(9));
+            box.addView(s);
+        }
+        return box;
+    }
+
+    private GradientDrawable roundRect(int fill, float radius, int stroke) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(fill);
+        g.setCornerRadius(radius);
+        if (stroke != 0) g.setStroke(dp(1), stroke);
+        return g;
+    }
+
+    private TextView hint(String s) {
+        TextView tv = new TextView(this);
+        tv.setText(s);
+        tv.setTextColor(C_FG3);
+        tv.setTextSize(13);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dp(10), dp(40), dp(10), dp(40));
+        return tv;
+    }
+
+    private View checkRow(String date, String id, String label) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, dp(9), 0, 0);
+
+        final boolean done = store.isDone(date, id);
+        final TextView chk = new TextView(this);
+        chk.setText(done ? "✓" : "");
+        chk.setTextSize(13);
+        chk.setGravity(Gravity.CENTER);
+        chk.setTextColor(Color.WHITE);
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(6));
+        g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+        g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+        chk.setBackground(g);
+        chk.setLayoutParams(new LinearLayout.LayoutParams(dp(24), dp(24)));
+        chk.setOnClickListener(v -> { store.toggleDone(date, id); render(); });
+        row.addView(chk);
+
+        TextView tv = new TextView(this);
+        tv.setText(label);
+        tv.setTextColor(C_FG2);
+        tv.setTextSize(13.5f);
+        tv.setPadding(dp(11), 0, 0, 0);
+        row.addView(tv);
+        return row;
+    }
+
+    private TextView smallBtn(String text, Runnable onClick, boolean enabled) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(12.5f);
+        tv.setTextColor(enabled ? C_FG2 : 0xFF3C4250);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(dp(12), dp(9), dp(12), dp(9));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(9));
+        g.setColor(C_BG3);
+        tv.setBackground(g);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(7);
+        tv.setLayoutParams(lp);
+        if (enabled) tv.setOnClickListener(v -> onClick.run());
+        return tv;
+    }
+
+    private TextView gradeBtn(String text, Runnable onClick) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(12);
+        tv.setTextColor(C_FG2);
+        tv.setGravity(Gravity.CENTER);
+        tv.setPadding(0, dp(7), 0, dp(7));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(8));
+        g.setColor(C_BG3);
+        tv.setBackground(g);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        lp.rightMargin = dp(5);
+        tv.setLayoutParams(lp);
+        tv.setOnClickListener(v -> onClick.run());
+        return tv;
+    }
+
+    private Button wideBtn(String text, Runnable onClick) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(13.5f);
+        b.setTextColor(C_FG);
+        b.setBackgroundColor(C_BG3);
+        b.setAllCaps(false);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+        lp.topMargin = dp(7);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(v -> onClick.run());
+        return b;
+    }
+
+    private View statRow(String k, String v) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, dp(7), 0, dp(7));
+
+        TextView a = new TextView(this);
+        a.setText(k);
+        a.setTextColor(C_FG3);
+        a.setTextSize(13);
+        a.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        row.addView(a);
+
+        TextView b = new TextView(this);
+        b.setText(v);
+        b.setTextColor(C_FG);
+        b.setTextSize(13.5f);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        row.addView(b);
+        return row;
+    }
+
+    // ── 计时 ──────────────────────────────────────────────
+    /** 计时中那个任务的文字标签，每秒刷新它显示已计时长 */
+    private TextView timingLabel;
+
+    private void startTimer(String key, TextView label) {
+        stopTimer();
+        timingKey = key;
+        timingStart = System.currentTimeMillis();
+        timingLabel = label;
+        tickRun = new Runnable() {
+            @Override public void run() {
+                if (timingKey == null) return;
+                // 每秒只刷新那一行文字，不重画整页（重画会丢焦点、闪屏）
+                if (timingLabel != null) {
+                    long el = System.currentTimeMillis() - timingStart
+                            + store.timingOf(dateOfKey(timingKey), idOfKey(timingKey));
+                    timingLabel.setText("已计时 " + fmtDur(el));
+                }
+                tickHandler.postDelayed(this, 1000);
+            }
+        };
+        tickHandler.postDelayed(tickRun, 1000);
+    }
+
+    private static String dateOfKey(String k) {
+        int i = k.indexOf('|');
+        return i < 0 ? "" : k.substring(0, i);
+    }
+
+    private static String idOfKey(String k) {
+        int i = k.indexOf('|');
+        return i < 0 ? "" : k.substring(i + 1);
+    }
+
+    private void stopTimer() {
+        if (timingKey != null) {
+            long el = System.currentTimeMillis() - timingStart;
+            if (el > 1000) {
+                store.addTiming(dateOfKey(timingKey), idOfKey(timingKey), el);
+            }
+        }
+        timingKey = null;
+        timingStart = 0;
+        timingLabel = null;
+        if (tickRun != null) tickHandler.removeCallbacks(tickRun);
+        tickRun = null;
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        // 切后台先把计时结掉，避免手机锁屏后时间白跑。
+        // 这里不调 render()——Activity 已经不可见了，重建视图纯属浪费，
+        // 而且会把输入框里的未提交文本冲掉。回到前台时 onResume 会重画。
+        stopTimer();
+        store.flush();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从后台回来：刷新一次，把后台期间不该累计的计时清掉并重画
+        if (plan != null && store != null) render();
+    }
+
+    private void renderHeaderOnly() {
+        tvDays.setText(String.valueOf(store.daysLeft(plan)));
+        tvLeftLabel.setText("已确认 " + store.completed.size() + " / " + plan.days.size() + " 天");
+    }
+
+    // ── 工具 ──────────────────────────────────────────────
+    private String readAsset(String name) {
+        try {
+            BufferedReader r = new BufferedReader(new InputStreamReader(
+                    getAssets().open(name), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+            r.close();
+            return sb.toString();
+        } catch (Exception e) {
+            throw new RuntimeException("读不到 assets/" + name + "：" + e.getMessage(), e);
+        }
+    }
+
+    private int dp(float v) {
+        return Math.round(TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+    }
+
+    private String fmtDur(long ms) {
+        if (ms < 1000) return "";
+        long s = Math.round(ms / 1000.0);
+        long m = s / 60;
+        if (m < 1) return s + " 秒";
+        if (m < 60) return m + " 分";
+        return (m / 60) + " 小时 " + (m % 60) + " 分";
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+}

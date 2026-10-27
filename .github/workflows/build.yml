@@ -1,0 +1,86 @@
+name: Build APK
+
+# 触发：
+#   push 到 main    → 自动构建 + 上传产物（Actions 页可下载，留 90 天）
+#   手动运行         → 同上
+#   打 tag v1.2.0   → 额外发 Release（手机直接在 Release 页点下载）
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 装 Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-34 build-tools;34.0.0'
+
+      - name: 还原签名密钥
+        # 密钥存仓库 Secrets（KEYSTORE_BASE64），永不进代码库
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          mkdir -p keystore
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::缺少 KEYSTORE_BASE64 secret，无法签名"
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/release.keystore
+          ls -l keystore/release.keystore
+
+      - name: 构建 APK
+        env:
+          JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
+        run: python build_apk.py --bump
+
+      - name: 跑全部测试与检查
+        env:
+          JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
+        run: python verify.py
+
+      - name: 读版本号
+        id: ver
+        run: |
+          CODE=$(python -c "import json;print(json.load(open('version.json'))['versionCode'])")
+          NAME=$(python -c "import json;print(json.load(open('version.json'))['versionName'])")
+          echo "code=$CODE" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "版本: $NAME (code $CODE)"
+
+      - name: 上传产物（Actions 页可下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhuansheng-v${{ steps.ver.outputs.name }}-c${{ steps.ver.outputs.code }}
+          path: build/*.apk
+          retention-days: 90
+
+      - name: 发 Release（仅打 tag 时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/*.apk
+          name: v${{ steps.ver.outputs.name }}
+          body: |
+            专升本 App v${{ steps.ver.outputs.name }}（versionCode ${{ steps.ver.outputs.code }}）
+
+            **手机安装**：点下方 APK 下载 → 打开安装。
+            已装旧版可直接覆盖升级，学习进度保留（签名一致、版本号递增）。
+          draft: false
+          prerelease: false

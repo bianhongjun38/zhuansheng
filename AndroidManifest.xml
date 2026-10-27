@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  版本号说明：
+  这里故意不写 versionCode / versionName 两个属性。
+  aapt2 link 的版本参数只在 manifest 缺这两个属性时才会注入；
+  一旦在这里写死，命令行传的值就被忽略（实测：传 2，APK 里仍是 1）。
+  版本号统一由 build_apk.py 读 version.json 决定，
+  构建脚本见同目录 build_apk.py。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.zsb.plan">
+
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
+
+    <!-- 不需要任何权限：数据全在本机，不联网、不读通讯录、不定位 -->
+
+    <application
+        android:label="专升本"
+        android:icon="@drawable/ic_launcher"
+        android:roundIcon="@drawable/ic_launcher"
+        android:theme="@style/AppTheme"
+        android:allowBackup="true"
+        android:hardwareAccelerated="true"
+        android:supportsRtl="false">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="专升本"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

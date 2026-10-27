@@ -1,0 +1,35 @@
+# ── 签名密钥：绝对不能进公开仓库 ────────────────────────
+# 泄露 = 任何人都能签一个「同样的 App」覆盖安装到你手机上。
+# 本地备份在 E:\小黑盒运营\cq-zhuanshengbens\_签名备份\
+keystore/
+*.keystore
+*.jks
+*.p12
+*.pfx
+
+# ── 构建产物（用 GitHub Actions 生成，不提交）────────────
+build/
+*.apk
+!release/*.apk
+
+# ── 临时与缓存 ─────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.cache/
+tmp/
+temp/
+*.log
+
+# ── 编辑器 / 系统 ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+desktop.ini
+
+# ── 本地私密与工具链 ────────────────────────────────────
+version.local.json
+*.token
+*.secret
