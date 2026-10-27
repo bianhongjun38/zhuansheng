@@ -62,7 +62,23 @@ jobs:
       - name: 跑全部测试与检查
         env:
           JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
-        run: python verify.py
+        # 把 verify 的输出同时落到文件。失败时用 ::error:: 打出来，
+        # 这样在 Actions 的 annotation 里能直接看到是哪一项挂了 ——
+        # 日志下载接口需要鉴权，annotation 是公开可读的。
+        run: |
+          set +e
+          python verify.py 2>&1 | tee verify.log
+          rc=${PIPESTATUS[0]}
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::verify.py 退出码 $rc"
+            grep -n "✗" verify.log | head -20 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            tail -40 verify.log | while IFS= read -r line; do
+              echo "::error::tail| $line"
+            done
+            exit 1
+          fi
 
       - name: 读版本号
         id: ver
