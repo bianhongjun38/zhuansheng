@@ -65,6 +65,12 @@ public class FormulaView extends View {
         if (Math.abs(scale - 1f) < 0.001f) return paint;
         scaled.setTextSize(px() * scale);
         scaled.setTypeface(paint.getTypeface());
+        // 颜色必须跟着走。
+        // 只设字号和字体时，Paint 的默认颜色是黑的 —— 黑底上指数、
+        // 下标、上下标里的数字全都看不见（实机上 eˣ 只剩一个 e）。
+        scaled.setColor(paint.getColor());
+        scaled.setAlpha(paint.getAlpha());
+        scaled.setAntiAlias(paint.isAntiAlias());
         return scaled;
     }
 

@@ -344,14 +344,19 @@ public class MathView {
                 cell.addView(nt);
             }
 
-            // 同一行必须等高。
+            // 同一行必须等高，但不能用"固定 62dp"来实现。
             //
-            // 原来用 WRAP_CONTENT：分式格子（x²−3x 上面一个 1/x、sin x/x 这种）
-            // 内容高两行，单行的格子只占一行 —— 一行之内高矮不齐，
-            // 视觉上就是"一大一小"。固定成统一高度后整排齐平。
-            cell.setMinimumHeight(dp(TEMPLATE_CELL_H));
+            // 走过的两条弯路：
+            //   ① 一开始用 WRAP_CONTENT —— 分式格子（1/x、sin x/x、1/(1+x²)）
+            //      内容两行，单行格子只占一行，一行之内高矮不齐 = "一大一小"；
+            //   ② 改成固定 62dp —— 等高是等高了，但分式格子"公式两行 + 说明
+            //      一行"塞不进 62dp，底下的"双曲线""sinc"被裁掉半截（实机截图）。
+            //
+            // 正确做法：先按内容量出这一行最高需要多少，再把这一行所有格子
+            // 都设成那个高度。等高和"不裁字"同时成立。
+            cell.setMinimumHeight(dp(TEMPLATE_CELL_H_MIN));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    0, dp(TEMPLATE_CELL_H), 1f);
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             lp.leftMargin = dp(2);
             lp.rightMargin = dp(2);
             cell.setLayoutParams(lp);
@@ -364,11 +369,41 @@ public class MathView {
             });
             row.addView(cell);
         }
+        equalizeRows(wrap);
         return wrap;
     }
 
-    /** 模板格子统一高度：够放下"分式 + 一行说明"，单行式子也不显得空。 */
-    private static final int TEMPLATE_CELL_H = 62;
+    /** 单行公式也至少这么高，免得格子看起来是根空条。 */
+    private static final int TEMPLATE_CELL_H_MIN = 52;
+
+    /**
+     * 把每一行的格子高度拉齐到该行最高那个。
+     *
+     * 只在布局完成后才知道真实高度，所以用 post —— view 已经在树里，
+     * 这里改 LayoutParams 会触发一次重新布局，用户看不到跳变（首帧即最终态）。
+     */
+    private void equalizeRows(LinearLayout wrap) {
+        wrap.post(() -> {
+            for (int r = 0; r < wrap.getChildCount(); r++) {
+                View child = wrap.getChildAt(r);
+                if (!(child instanceof LinearLayout)) continue;
+                LinearLayout row = (LinearLayout) child;
+                int max = 0;
+                for (int i = 0; i < row.getChildCount(); i++) {
+                    max = Math.max(max, row.getChildAt(i).getHeight());
+                }
+                if (max <= 0) continue;
+                for (int i = 0; i < row.getChildCount(); i++) {
+                    View c = row.getChildAt(i);
+                    ViewGroup.LayoutParams p = c.getLayoutParams();
+                    if (p != null && p.height != max) {
+                        p.height = max;
+                        c.setLayoutParams(p);
+                    }
+                }
+            }
+        });
+    }
 
     /**
      * 「怎么写 → 画出来什么样」对照表。
@@ -561,10 +596,13 @@ public class MathView {
         et.setTextSize(15);
         et.setBackgroundColor(C_BG3);
         et.setPadding(dp(10), dp(8), dp(10), dp(8));
-        et.setSingleLine(true);
-        // TYPE_TEXT_FLAG_NO_SUGGESTIONS：手机输入法会把 sin 自动纠正成
-        // "son"/"sin."，一边打字一边被改，比不能打还气人。
-        // 关掉联想和自动纠错，输入框里进去什么就是什么。
+        et.setMinHeight(dp(42));
+        // setSingleLine(true) 会把 EditText 的高度按"单行无内边距"算死，
+        // 但这里上下各有 8dp 内边距 —— 结果输入框比内容矮，文字顶出
+        // 自己的框，压到下面那行提示（实机截图里"右括号多了 1 个"
+        // 被上一个框盖住半截）。
+        // 用 maxLines=1 + 显式最小高度，既保证只输一行，又保证框够高。
+        et.setMaxLines(1);
         et.setInputType(InputType.TYPE_CLASS_TEXT
                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         // 数学表达式不该被当作密码/邮箱去猜，给个纯 ASCII 的键盘
@@ -958,7 +996,10 @@ public class MathView {
         et.setTextSize(16);
         et.setBackgroundColor(C_BG3);
         et.setPadding(dp(10), dp(8), dp(10), dp(8));
-        et.setSingleLine(true);
+        // 同 buildInput 里的修法：setSingleLine 会把高度算死，
+        // 带内边距时文字会顶出框外。
+        et.setMaxLines(1);
+        et.setMinHeight(dp(44));
         et.setInputType(InputType.TYPE_CLASS_TEXT);
         c1.addView(et);
 

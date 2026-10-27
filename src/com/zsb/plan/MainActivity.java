@@ -228,6 +228,16 @@ public class MainActivity extends Activity {
 
         content.addView(dayHeader(d));
 
+        // ── 每日置顶必背卡 ────────────────────────────────
+        //
+        // 用户原话："让你默写这个东西，不用默写毕竟手机上怎么默写，
+        // 把答案写出来直接提醒用户答案是这个记住就行了，做成每日置顶，
+        // 显眼每次打开看一遍更好"。
+        //
+        // 所以这里不是"练习"，是"答案卡"：一打开就先看到今天该背的
+        // 结论，默写框已删除（原来 reviewRow 里的 EditText 去掉了）。
+        addRecallTop();
+
         // 任务
         if (!d.tasks.isEmpty()) {
             LinearLayout card = card("今日任务", null);
@@ -250,9 +260,9 @@ public class MainActivity extends Activity {
             }
             int left = d.reviews.size() - done;
             String sub = left == 0
-                    ? "全部做完了，可以确认这一天"
-                    : "还剩 " + left + " 项没做 · 合上书默写，再翻页核对";
-            LinearLayout card = card("到期检索 · " + d.reviews.size() + " 项", sub);
+                    ? "今天要回忆的都看过了"
+                    : "还剩 " + left + " 项没看 · 点开直接看答案，不用默写";
+            LinearLayout card = card("今日回忆 · " + d.reviews.size() + " 章", sub);
             for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
             content.addView(card);
         }
@@ -407,9 +417,9 @@ public class MainActivity extends Activity {
     }
 
     // ── 任务 → 教材页 ─────────────────────────────────────
-    // 内置了 6 本书：三本教材 + 三本练习册。
-    // learn 指向教材，pract 指向练习册，页码由 plan.json 的 pdfStart 给出
+    // 每科一本教材，页码由 plan.json 的 pdfStart 给出
     // （生成时已按各书的印刷页→PDF 页偏移换算好）。
+    // 练习册与数学科已整块移除，这里不再有 pract 分支。
     static class BookRef {
         String id, title, shortName;
         int page;
@@ -428,9 +438,7 @@ public class MainActivity extends Activity {
 
         String subj = t.subject == null ? "" : t.subject;
         String bookId, title, shortName;
-        if ("math".equals(subj)) {
-            bookId = "math_book"; title = "大学数学基础教材"; shortName = "数学教材";
-        } else if ("comp".equals(subj)) {
+        if ("comp".equals(subj)) {
             bookId = "comp_book"; title = "计算机基础教材"; shortName = "计算机教材";
         } else if ("eng".equals(subj)) {
             bookId = "eng_book"; title = "大学英语基础教材"; shortName = "英语教材";
@@ -438,17 +446,12 @@ public class MainActivity extends Activity {
             return null;
         }
 
+        // 练习册整块去掉了：用户说排版乱、不要了。
+        // 原来这里按 kind=="pract" 换成 *_pract 书并 +2 页偏移，
+        // 连带 plan.json 里 77 条 pract 任务一起清了。
         int page = 0;
-        if ("pract".equals(t.kind)) {
-            // 练习册：任务里的 startPage 是练习册印刷页，偏移 +2（实测校验过）
-            bookId = bookId.replace("_book", "_pract");
-            title = shortName.replace("教材", "") + "同步练习册";
-            shortName = shortName.replace("教材", "") + "练习册";
-            if (t.startPage > 0) page = t.startPage + 2;
-        } else {
-            if (t.pdfStart != null) page = t.pdfStart;
-            else if (t.startPage > 0) page = t.startPage + 1;
-        }
+        if (t.pdfStart != null) page = t.pdfStart;
+        else if (t.startPage > 0) page = t.startPage + 1;
 
         if (page <= 0) return null;
         BookRef r = new BookRef();
@@ -563,13 +566,10 @@ public class MainActivity extends Activity {
             TextView quiz = new TextView(this);
             int n = t.bankLimit > 0 ? t.bankLimit : 10;
 
-            // 数学不走题库：用户明确说数学题库不要了，改成工具。
-            // 题库测的是"记没记住"，而数学考的是"会不会推"。
-            boolean isMath = "math".equals(t.bankSubject);
+            // 数学分支已删：数学任务整块移出今日任务，
+            // 函数图像/求导公式改在「工具」页里直达（不会丢入口）。
             String label;
-            if (isMath) {
-                label = "📈 函数图像与求导";
-            } else if (t.bankYear > 0) {
+            if (t.bankYear > 0) {
                 label = "✎ 做 " + t.bankYear + " 年真题";
             } else {
                 label = "✎ 做题（" + n + " 道）";
@@ -580,9 +580,7 @@ public class MainActivity extends Activity {
             quiz.setTypeface(Typeface.DEFAULT_BOLD);
             quiz.setPadding(0, dp(6), 0, dp(1));
             quiz.setOnClickListener(v -> {
-                if (isMath) {
-                    mathView.open(0);
-                } else if (t.bankYear > 0) {
+                if (t.bankYear > 0) {
                     quizView.openYear(t.bankSubject, t.bankYear,
                             t.bankYear + " 年真题");
                 } else {
@@ -591,27 +589,6 @@ public class MainActivity extends Activity {
                 }
             });
             col.addView(quiz);
-
-            // 数学再给一个直达公式表的入口：查公式比做题更常用
-            if (isMath) {
-                TextView tbl = new TextView(this);
-                tbl.setText("📋 求导公式对照表");
-                tbl.setTextColor(C_TEAL);
-                tbl.setTextSize(12.5f);
-                tbl.setTypeface(Typeface.DEFAULT_BOLD);
-                tbl.setPadding(0, dp(4), 0, dp(1));
-                tbl.setOnClickListener(v -> mathView.open(1));
-                col.addView(tbl);
-
-                TextView la = new TextView(this);
-                la.setText("🔄 线性变换（矩阵拉扯平面）");
-                la.setTextColor(C_PURPLE);
-                la.setTextSize(12.5f);
-                la.setTypeface(Typeface.DEFAULT_BOLD);
-                la.setPadding(0, dp(4), 0, dp(1));
-                la.setOnClickListener(v -> linalgView.open());
-                col.addView(la);
-            }
         }
 
         row.addView(col);
@@ -639,6 +616,105 @@ public class MainActivity extends Activity {
         row.addView(timer);
 
         return row;
+    }
+
+    /**
+     * 今日置顶必背卡。
+     *
+     * 取今天所有到期复习章节的答案，一章一组，直接摊在最上面。
+     * 用户要求"每次打开看一遍"，所以不折叠、不需要点开。
+     */
+    private void addRecallTop() {
+        if (idx < 0 || idx >= plan.days.size()) return;
+        Plan.Day d = plan.days.get(idx);
+
+        // 候选章：① 今天到期要复习的（优先，这是记忆曲线的正事）
+        //         ② 今天新学的（保证每天都有卡，不然头几天打开是空的）
+        // 都按出现顺序去重；没有答案的章直接跳过（宁缺勿编）。
+        java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+        for (Plan.Review r : d.reviews) {
+            if (plan.recall.containsKey(r.chapterId)) seen.add(r.chapterId);
+        }
+        int fromReview = seen.size();
+        if (seen.isEmpty()) {
+            for (Plan.Task t : d.tasks) {
+                if (plan.recall.containsKey(t.chapterId)) seen.add(t.chapterId);
+            }
+        }
+        // ③ 兜底：越靠后越是整天刷真题/错题，没有"新学的章"。
+        // 但"每日置顶"不能因为今天是综合练习就空着——那就退回到
+        // 最近学过的那几章，让用户每天都有东西扫一眼。
+        if (seen.isEmpty()) {
+            for (int i = idx; i >= 0 && seen.isEmpty(); i--) {
+                for (Plan.Task t : plan.days.get(i).tasks) {
+                    if (plan.recall.containsKey(t.chapterId)) seen.add(t.chapterId);
+                }
+            }
+        }
+        if (seen.isEmpty()) return;
+
+        String sub;
+        if (fromReview > 0) {
+            sub = "今天到期的 " + fromReview + " 章 · 答案直接摊开，不用默写";
+        } else if (hasLearnedOn(d)) {
+            sub = "今天新学的 " + seen.size() + " 章 · 先背住这些结论";
+        } else {
+            sub = "最近学过的 " + seen.size() + " 章 · 综合练习日再看一遍";
+        }
+
+        LinearLayout card = card("今日必背 · " + seen.size() + " 章", sub);
+
+        int rank = 0;
+        for (String cid : seen) {
+            Plan.Chapter ch = plan.chapter(cid);
+            String name = ch != null ? ch.name : cid;
+
+            TextView h = new TextView(this);
+            h.setText((++rank) + ".  " + name);
+            h.setTextColor(C_AMBER);
+            h.setTextSize(14.5f);
+            h.setTypeface(Typeface.DEFAULT_BOLD);
+            h.setPadding(0, dp(rank == 1 ? 2 : 12), 0, dp(2));
+            card.addView(h);
+
+            addRecallPoints(card, cid);
+        }
+        content.addView(card);
+    }
+
+    /** 今天有没有可以直接出卡的「新学」章节。 */
+    private boolean hasLearnedOn(Plan.Day d) {
+        for (Plan.Task t : d.tasks) {
+            if (plan.recall.containsKey(t.chapterId)) return true;
+        }
+        return false;
+    }
+
+    /** 把一章的答案点逐条摊开。没有卡就静默跳过。 */
+    private void addRecallPoints(LinearLayout parent, String chapterId) {
+        Plan.Recall rc = plan.recall.get(chapterId);
+        if (rc == null) return;
+
+        for (String p : rc.points) {
+            TextView tv = new TextView(this);
+            tv.setText("· " + p);
+            tv.setTextColor(C_FG2);
+            tv.setTextSize(13.5f);
+            tv.setLineSpacing(dp(3), 1f);
+            tv.setPadding(dp(2), dp(2), 0, dp(2));
+            parent.addView(tv);
+        }
+
+        if (!rc.exam.isEmpty()) {
+            TextView k = new TextView(this);
+            k.setText("考点： " + rc.exam);
+            k.setTextColor(C_TEAL);
+            k.setTextSize(13f);
+            k.setTypeface(Typeface.DEFAULT_BOLD);
+            k.setLineSpacing(dp(3), 1f);
+            k.setPadding(dp(2), dp(4), 0, dp(3));
+            parent.addView(k);
+        }
     }
 
     private View reviewRow(final String date, final Plan.Review r) {
@@ -683,33 +759,10 @@ public class MainActivity extends Activity {
 
         box.addView(row);
 
-        // 默写框
-        final EditText et = new EditText(this);
-        et.setHint("默写公式 / 定义（写不出就空着）");
-        et.setHintTextColor(0xFF4E5565);
-        et.setTextColor(C_FG2);
-        et.setTextSize(14);
-        et.setBackgroundColor(C_BG3);
-        et.setPadding(dp(10), dp(8), dp(10), dp(8));
-        et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
-        et.setMinLines(1);
-        et.setText(store.noteOf(date, rid));
-        et.setTag(Store.key(date, rid));
-        // 边输入边存：靠失焦保存会丢——用户可能直接点「推进」或切页签，
-        // 那些动作会 render() 重建视图，还没失焦的文本就没了。
-        et.addTextChangedListener(new android.text.TextWatcher() {
-            public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            public void onTextChanged(CharSequence s, int a, int b, int c) {}
-            public void afterTextChanged(android.text.Editable s) {
-                store.setNote(date, rid, s.toString());
-            }
-        });
-        LinearLayout.LayoutParams elp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        elp.topMargin = dp(7);
-        elp.leftMargin = dp(35);
-        et.setLayoutParams(elp);
-        box.addView(et);
+        // 默写框已删除。
+        // 手机上打字慢、还看不全公式，默写只会变成"卡住不动"。
+        // 改成直接把答案摊开（见下面的 recallPoints），看一眼记一遍。
+        addRecallPoints(box, r.chapterId);
 
         // 三档自评
         LinearLayout grades = new LinearLayout(this);
@@ -720,21 +773,21 @@ public class MainActivity extends Activity {
         glp.leftMargin = dp(35);
         grades.setLayoutParams(glp);
 
-        grades.addView(gradeBtn("写不出", () -> {
+        // 三档自评保留，但不再带默写内容 —— 没有输入框了，
+        // 原来那两句 store.setNote(..., et.getText()) 已删。
+        grades.addView(gradeBtn("记不住", () -> {
             store.bumpHard(r.chapterId.isEmpty() ? r.id : r.chapterId);
             store.setDone(date, rid, false);
-            toast("已进错题库，明天再来");
+            toast("已进错题库，明天再看一遍");
             render();
         }));
-        grades.addView(gradeBtn("写一半", () -> {
+        grades.addView(gradeBtn("有点印象", () -> {
             store.setDone(date, rid, true);
-            store.setNote(date, rid, et.getText().toString());
-            toast("记下了");
+            toast("再多扫两遍就记住了");
             render();
         }));
-        grades.addView(gradeBtn("写出来了", () -> {
+        grades.addView(gradeBtn("记住了", () -> {
             store.setDone(date, rid, true);
-            store.setNote(date, rid, et.getText().toString());
             toast("过关");
             render();
         }));

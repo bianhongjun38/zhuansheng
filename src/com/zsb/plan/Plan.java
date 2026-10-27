@@ -29,8 +29,9 @@ public class Plan {
         public String id = "";
         public String name = "";
         public String color = "#888888";
-        public int bookPages;
-        public Integer pdfOffset;   // 可能为 null（英语没有偏移）
+        // bookPages 和 pdfOffset 已删：只解析、产品代码从没读过，
+        // 是死参数。页偏移在生成 plan.json 时就已经算进 pdfStart，
+        // 运行时再算一遍属于两处真相。
     }
 
     public static class Chapter {
@@ -42,19 +43,17 @@ public class Plan {
         public int endPage;
         public int estMin;
         public Integer pdfStart;
-        public Integer pdfEnd;
     }
 
     public static class Task {
         public String subject = "";
         public String chapterId = "";
-        public String kind = "learn";     // learn | other | pract
+        public String kind = "learn";     // learn | other（pract 练习册已移除）
         public String note = "";
         public int startPage;
         public int endPage;
         public int min;
         public Integer pdfStart;
-        public Integer pdfEnd;
         /**
          * 最终存储 id。在 parse 阶段一次性分配，之后全部复用。
          * 保证：① 同一份 plan.json 无论解析多少次都一致 ② 同一天内绝不重复
@@ -71,6 +70,12 @@ public class Plan {
         public String bankSubject = "";
         public int bankLimit;
         public int bankYear;
+    }
+
+    /** 一章的必背卡：几条能直接背下来的结论 + 一个考点。 */
+    public static class Recall {
+        public List<String> points = new ArrayList<>();
+        public String exam = "";
     }
 
     public static class Review {
@@ -100,6 +105,15 @@ public class Plan {
         public List<Review> reviews = new ArrayList<>();
     }
 
+    /**
+     * 每章的「今日必背」卡。
+     *
+     * 用户原话："不用默写毕竟手机上怎么默写，把答案写出来直接提醒用户
+     * 答案是这个记住就行了"。所以检索从"默写"改成了"直接给答案背诵"。
+     * 键是 chapterId，值是答案点（每行一条）+ 一个考点。
+     */
+    public Map<String, Recall> recall = new LinkedHashMap<>();
+
     public Meta meta = new Meta();
     public Map<String, Subject> subjects = new LinkedHashMap<>();
     public Map<String, Chapter> chapters = new LinkedHashMap<>();
@@ -119,6 +133,27 @@ public class Plan {
                 p.meta.vocabTotal = m.optInt("vocabTotal", 0);
             }
 
+            // recall：章 id → 必背卡。缺失不算错，界面会跳过。
+            JSONObject rc = root.optJSONObject("recall");
+            if (rc != null) {
+                java.util.Iterator<String> it = rc.keys();
+                while (it.hasNext()) {
+                    String cid = it.next();
+                    JSONObject o = rc.optJSONObject(cid);
+                    if (o == null) continue;
+                    Recall r = new Recall();
+                    JSONArray pts = o.optJSONArray("points");
+                    if (pts != null) {
+                        for (int i = 0; i < pts.length(); i++) {
+                            String s = pts.optString(i, "").trim();
+                            if (!s.isEmpty()) r.points.add(s);
+                        }
+                    }
+                    r.exam = o.optString("exam", "").trim();
+                    p.recall.put(cid, r);
+                }
+            }
+
             JSONArray subs = root.optJSONArray("subjects");
             if (subs != null) {
                 for (int i = 0; i < subs.length(); i++) {
@@ -127,8 +162,7 @@ public class Plan {
                     s.id = o.optString("id");
                     s.name = o.optString("name");
                     s.color = o.optString("color", "#888888");
-                    s.bookPages = o.optInt("bookPages");
-                    s.pdfOffset = o.isNull("pdfOffset") ? null : o.optInt("pdfOffset");
+
                     if (!s.id.isEmpty()) p.subjects.put(s.id, s);
                 }
             }
@@ -146,7 +180,7 @@ public class Plan {
                     c.endPage = o.optInt("endPage");
                     c.estMin = o.optInt("estMin");
                     c.pdfStart = o.isNull("pdfStart") ? null : o.optInt("pdfStart");
-                    c.pdfEnd = o.isNull("pdfEnd") ? null : o.optInt("pdfEnd");
+
                     if (!c.id.isEmpty()) p.chapters.put(c.id, c);
                 }
             }
@@ -189,7 +223,6 @@ public class Plan {
                             k.endPage = t.optInt("endPage");
                             k.min = t.optInt("min");
                             k.pdfStart = t.isNull("pdfStart") ? null : t.optInt("pdfStart");
-                            k.pdfEnd = t.isNull("pdfEnd") ? null : t.optInt("pdfEnd");
                             // 题库落点（可为 null：不是做题类任务）
                             JSONObject bk = t.optJSONObject("bank");
                             if (bk != null) {
@@ -238,13 +271,15 @@ public class Plan {
         return chapters.get(id);
     }
 
+    /**
+     * 查科目。查不到返回 null。
+     *
+     * 原来查不到会临时造一个 name=id 的假科目 —— 数学科从 plan.json
+     * 删掉之后，这个假科目让"math 已移除"的断言永远通过不了，
+     * 界面上也会冒出空名字。数据里没有就是没有，别编。
+     */
     public Subject subject(String id) {
-        Subject s = subjects.get(id);
-        if (s != null) return s;
-        Subject x = new Subject();
-        x.id = id;
-        x.name = id;
-        return x;
+        return subjects.get(id);
     }
 
     /**

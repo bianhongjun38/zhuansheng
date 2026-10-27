@@ -325,7 +325,10 @@ public class EngView {
         if (cur.sub != null && !cur.sub.isEmpty()) {
             TextView s = new TextView(act);
             s.setText(cur.sub);
-            s.setTextSize(12.5f);
+            // 词性题：英文是主体，中文释义只做小字提示。
+            // 原来 prompt 里 "apple  苹果" 整串用 22pt，中文和英文一样大，
+            // 视觉上中文成了主角 —— 用户直接指出来了。
+            s.setTextSize(cur.mode == EngTrain.M_POS ? 13f : 12.5f);
             s.setTextColor(C_FG3);
             s.setPadding(0, dp(6), 0, 0);
             card.addView(s);
@@ -343,7 +346,13 @@ public class EngView {
         for (int i = 0; i < cur.options.length; i++) {
             final int k = i;
             TextView b = new TextView(act);
-            b.setText(((char) ('A' + i)) + "． " + cur.options[i]);
+            String opt = cur.options[i];
+            // 词性题：光给 "art." 等于在考缩写，补上中文才是在考词性
+            if (cur.mode == EngTrain.M_POS) {
+                String nm = EngTrain.posName(opt);
+                if (!nm.isEmpty()) opt = opt + "　" + nm;
+            }
+            b.setText(((char) ('A' + i)) + "． " + opt);
             b.setTextSize(15);
             b.setTextColor(C_FG);
             b.setPadding(dp(14), dp(13), dp(14), dp(13));
@@ -474,7 +483,13 @@ public class EngView {
         c.addView(head);
 
         TextView ans = new TextView(act);
-        ans.setText("答案：" + cur.answerText
+        String ansText = cur.answerText;
+        // 词性题的答案也补中文名，和选项口径一致
+        if (cur.mode == EngTrain.M_POS) {
+            String nm = EngTrain.posName(ansText);
+            if (!nm.isEmpty()) ansText = ansText + "（" + nm + "）";
+        }
+        ans.setText("答案：" + ansText
                 + (cur.word != null && !cur.word.ph.isEmpty() ? "　/" + cur.word.ph + "/" : ""));
         ans.setTextSize(14);
         ans.setTextColor(C_FG);

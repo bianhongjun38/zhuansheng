@@ -363,6 +363,43 @@ public class EngTrainTest {
             ok("真实词库能出「" + EngTrain.modeName(m) + "」",
                     modeCount[m] >= 60, "只出了 " + modeCount[m] + " 道");
         }
+
+        // ── 词性题的表现形式 ────────────────────────────
+        //
+        // 用户原话："不要把中文当成主体了，英文才是，中文做这么大干嘛，
+        // 而且下面的选项也应该弄个中文释义，不然 art 是什么都不知道"。
+        //
+        // 所以守两条：题干只能是英文词本身（中文必须落在 sub 里），
+        // 而且每个词性缩写都要能翻译成中文，不能让用户对着 art. 猜。
+        int posShown = 0, posWithCn = 0, posDirty = 0;
+        String dirtySample = "";
+        for (EngTrain.W w : all) {
+            if (w.pos.isEmpty()) continue;
+            EngTrain.Item it = EngTrain.make(EngTrain.M_POS, w, all, all, rnd);
+            if (it == null) continue;
+            posShown++;
+            // ① 题干必须是单词本身，不能夹中文
+            if (!it.prompt.equals(w.w)) {
+                posDirty++;
+                if (dirtySample.isEmpty()) dirtySample = it.prompt;
+            }
+            // ② 中文释义要出现在 sub 里（有中文的话）
+            if (!w.cn.isEmpty() && it.sub != null && it.sub.contains(w.cn)) posWithCn++;
+        }
+        ok("词性题出得来", posShown > 100, "只出了 " + posShown);
+        ok("词性题题干只有英文（中文不抢主体）", posDirty == 0,
+                posDirty + " 道混了中文，例如「" + dirtySample + "」");
+        ok("词性题中文释义落在副信息里", posWithCn == posShown,
+                posWithCn + "/" + posShown);
+        ok("posName 能翻译常见词性",
+                EngTrain.posName("art.").equals("冠词")
+                        && EngTrain.posName("n.").equals("名词")
+                        && EngTrain.posName("adj.").equals("形容词")
+                        && EngTrain.posName("adv.").equals("副词")
+                        && EngTrain.posName("v.").equals("动词"),
+                "有词性没翻出来");
+        ok("posName 对未知词性返回空串（不乱猜）",
+                EngTrain.posName("zzz.").isEmpty(), "返回了内容");
     }
 
     /** 直接读 JSON，避免依赖 Android。没 json 库时用极简解析。 */

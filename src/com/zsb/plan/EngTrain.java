@@ -164,6 +164,32 @@ public class EngTrain {
         return it;
     }
 
+    /**
+     * 词性缩写 → 中文名。
+     *
+     * 用户原话："下面的选项也应该弄个中文释义，不然 art 是什么都不知道"。
+     * 光给 "art." 等于在考缩写；给 "art.（冠词）" 才是考词性本身。
+     */
+    public static String posName(String p) {
+        if (p == null) return "";
+        String k = p.trim().replace(".", "");
+        if (k.equals("n")) return "名词";
+        if (k.equals("v")) return "动词";
+        if (k.equals("vt")) return "及物动词";
+        if (k.equals("vi")) return "不及物动词";
+        if (k.equals("adj")) return "形容词";
+        if (k.equals("adv")) return "副词";
+        if (k.equals("prep")) return "介词";
+        if (k.equals("conj")) return "连词";
+        if (k.equals("pron")) return "代词";
+        if (k.equals("num")) return "数词";
+        if (k.equals("art")) return "冠词";
+        if (k.equals("int")) return "感叹词";
+        if (k.equals("aux")) return "助动词";
+        if (k.equals("abbr")) return "缩写";
+        return "";
+    }
+
     // 词性判断
     static Item posQ(W t, List<W> pool, List<W> all, Random rnd) {
         if (t.pos.isEmpty()) return null;
@@ -178,8 +204,11 @@ public class EngTrain {
         Item it = new Item();
         it.mode = M_POS;
         it.word = t;
-        it.prompt = t.w + (t.cn.isEmpty() ? "" : "  " + t.cn);
-        it.sub = "";
+        // 英文词才是题目主体，中文只是提示。
+        // 原来把 "apple  苹果" 整串塞进 prompt，用的是 22pt 大字，
+        // 结果中文跟英文一样大，一眼看过去中文抢了主角。
+        it.prompt = t.w;
+        it.sub = t.cn;
         it.options = new String[4];
         it.answer = rnd.nextInt(4);
         it.options[it.answer] = t.pos;

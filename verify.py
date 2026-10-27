@@ -140,7 +140,11 @@ def main():
                    os.path.join(TEST, "ExprOutlineAudit.java"),
                    os.path.join(TEST, "OutlineLayoutAudit.java"),
                    os.path.join(TEST, "MathViewAudit.java"),
-                   os.path.join(TEST, "FitAudit.java")])
+                   os.path.join(TEST, "FitAudit.java"),
+                   os.path.join(TEST, "RecallAudit.java"),
+                   os.path.join(TEST, "TemplateAudit.java"),
+                   os.path.join(TEST, "FormulaColorAudit.java"),
+                   os.path.join(TEST, "PosViewAudit.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
@@ -169,6 +173,10 @@ def main():
         ("com.zsb.plan.ExprOutlineAudit", "写法→形状对照表（形状描述经采样验证，含 PNG）", audit_dir),
         ("com.zsb.plan.OutlineLayoutAudit", "对照表手机排版（行高/折行/裁剪，含 PNG）", audit_dir),
         ("com.zsb.plan.FitAudit", "模板格子公式缩字（宽/高/字号下限）", audit_dir),
+        ("com.zsb.plan.RecallAudit", "今日必背置顶卡（每天有卡/折行/不含默写）", audit_dir),
+        ("com.zsb.plan.TemplateAudit", "模板格子高度（不裁字/等高，含 PNG）", audit_dir),
+        ("com.zsb.plan.FormulaColorAudit", "公式颜色（上下标不能是黑的）", audit_dir),
+        ("com.zsb.plan.PosViewAudit", "词性题排版（英文主体/选项带中文，含 PNG）", audit_dir),
     )
     for cls, label, extra_arg in test_table:
         print("\n▶ " + label)

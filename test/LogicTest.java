@@ -47,26 +47,28 @@ public class LogicTest {
         ok("解析不抛异常", true, "");
         ok("meta.examDate 正确", "2027-03-20".equals(p.meta.examDate), p.meta.examDate);
         ok("meta.startDate 正确", "2026-10-26".equals(p.meta.startDate), p.meta.startDate);
-        ok("科目 3 个", p.subjects.size() == 3, "实际 " + p.subjects.size());
-        ok("章节 72 个", p.chapters.size() == 72, "实际 " + p.chapters.size());
+        // 数学科已移除，只剩计算机 + 英语
+        ok("科目 2 个（计算机 + 英语）", p.subjects.size() == 2, "实际 " + p.subjects.size());
+        ok("章节 51 个（原 72，去掉数学 21 章）", p.chapters.size() == 51, "实际 " + p.chapters.size());
         ok("天数 146 天", p.days.size() == 146, "实际 " + p.days.size());
 
         // 反序列化后字段抽查
+        //
+        // 数学科与练习册已整块从 plan.json 移除（用户：排版乱、不要了），
+        // 所以这里改成断言"确实删干净了"——比抽查旧字段更能防回归。
         Plan.Day d0 = p.days.get(0);
         ok("第1天日期", "2026-10-26".equals(d0.date), d0.date);
         ok("第1天有任务", d0.tasks.size() >= 1, d0.tasks.size() + " 个");
-        Plan.Subject math = p.subject("math");
-        ok("math 科目名", "高等数学".equals(math.name), math.name);
-        ok("math pdfOffset=5", math.pdfOffset != null && math.pdfOffset == 5, String.valueOf(math.pdfOffset));
+        ok("math 科目已移除", p.subject("math") == null,
+                String.valueOf(p.subject("math")));
+        ok("没有 math 章节", p.chapter("M3-1") == null,
+                String.valueOf(p.chapter("M3-1")));
+        Plan.Subject comp = p.subject("comp");
+        ok("comp 科目名", comp != null && "计算机基础".equals(comp.name),
+                comp == null ? "null" : comp.name);
         Plan.Subject eng = p.subject("eng");
-        ok("eng pdfOffset 为 null", eng.pdfOffset == null, String.valueOf(eng.pdfOffset));
-        Plan.Chapter m31 = p.chapter("M3-1");
-        ok("M3-1 存在且名=不定积分", m31 != null && "不定积分".equals(m31.name),
-                m31 == null ? "null" : m31.name);
-        ok("M3-1 页码 86-101", m31.startPage == 86 && m31.endPage == 101,
-                m31.startPage + "-" + m31.endPage);
-
-        // ── 2. 任务 id 稳定性 ───────────────────────────
+        ok("eng 科目名", eng != null && "大学英语".equals(eng.name),
+                eng == null ? "null" : eng.name);
         System.out.println("\n【2】任务 id 生成与唯一性");
         int nLearn = 0, nOther = 0;
         int sameDayDup = 0;
@@ -125,8 +127,10 @@ public class LogicTest {
                 ok("第 " + d.date + " 天 id 重复", false, "");
             }
         }
-        ok("没有空任务的日子", daysWithZero == 0, "空 " + daysWithZero + " 天");
-        ok("总勾选条目数 > 500", totalIds > 500, "共 " + totalIds + " 条");
+        // 删掉数学与练习册后有 4 天没有任务，但都还有英语单词，不算真空白。
+        // 考试当天（最后一天）本来就该没有任务。
+        ok("没有任务的日子不超过 6 天", daysWithZero <= 6, "空 " + daysWithZero + " 天");
+        ok("总勾选条目数 > 400", totalIds > 400, "共 " + totalIds + " 条");
         System.out.println("      全部天数累计 " + totalIds + " 个勾选点");
 
         // ── 4. 推进指针与剩余天数 ────────────────────────
@@ -181,8 +185,8 @@ public class LogicTest {
                 if (r.id.isEmpty()) ok("检索缺 id", false, d.date);
             }
         }
-        ok("有检索的日子 > 100", dayWithReviews > 100, dayWithReviews + " 天");
-        ok("检索总条数 = 206", totalReviews == 206, totalReviews + " 条");
+        ok("有检索的日子 > 80", dayWithReviews > 80, dayWithReviews + " 天");
+        ok("检索总条数 = 146", totalReviews == 146, totalReviews + " 条");
         ok("检索梯级含 R1-R4", reviewKinds.containsAll(
                 java.util.Arrays.asList("R1", "R2", "R3", "R4")),
                 reviewKinds.toString());
