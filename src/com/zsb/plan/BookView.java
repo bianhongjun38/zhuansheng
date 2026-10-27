@@ -1,6 +1,8 @@
 package com.zsb.plan;
 
 import android.app.Activity;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import android.app.Dialog;
 import android.graphics.Bitmap;
 import android.graphics.Color;
@@ -442,16 +444,72 @@ public class BookView {
         if (!cache.exists()) cache.mkdirs();
         File f = new File(cache, curBookId + ".pdf");
         if (!f.exists() || f.length() == 0) {
-            InputStream in = act.getAssets().open("books/" + curBookId + ".pdf");
-            OutputStream o = new FileOutputStream(f);
-            byte[] b = new byte[64 * 1024];
-            int n;
-            while ((n = in.read(b)) > 0) o.write(b, 0, n);
-            o.close();
-            in.close();
+            // 三本教材 PDF 共 11.7 MB，占安装包 60%。为了不顶到
+            // Cloudflare 两条 25 MiB 单文件上限（Pages 和 Workers
+            // Static Assets 都是 25 MiB，实测文档确认），改成按需下载：
+            // 装包时只带代码，第一次点「原图」再从 dl 域名拉这一本。
+            if (!fetchBook(f)) {
+                throw new java.io.FileNotFoundException(
+                        "教材尚未下载，请连网后重试");
+            }
         }
         pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
         renderer = new PdfRenderer(pfd);
+    }
+
+    /**
+     * 下载一本教材到缓存。成功返回 true。
+     *
+     * 顺序：先看安装包里有没有（老版本兼容 + 离线可用），
+     * 没有再走 dl.xxjcloudns.kdns.fr 拉。
+     * 下载写 .part 再 rename —— 中途断网不会留下半份文件，
+     * 否则下次 PdfRenderer 打开会直接崩。
+     */
+    private boolean fetchBook(File dst) {
+        // ① 安装包里带的话直接用（有人覆盖安装旧包时仍能离线看）
+        try {
+            InputStream in = act.getAssets().open("books/" + curBookId + ".pdf");
+            copyTo(in, dst);
+            return true;
+        } catch (Exception notInApk) {
+            // 正常情况：新版本安装包里已经没有 PDF 了
+        }
+
+        // ② 从更新通道下载
+        File tmp = new File(dst.getAbsolutePath() + ".part");
+        HttpURLConnection c = null;
+        try {
+            URL u = new URL(Update.BOOK_BASE + curBookId + ".pdf");
+            c = (HttpURLConnection) u.openConnection();
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(60000);
+            c.setInstanceFollowRedirects(true);
+            int code = c.getResponseCode();
+            if (code != 200) return false;
+            copyTo(c.getInputStream(), tmp);
+            if (!tmp.renameTo(dst)) {
+                tmp.delete();
+                return false;
+            }
+            return true;
+        } catch (Exception e) {
+            tmp.delete();
+            return false;
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
+    private static void copyTo(InputStream in, File dst) throws Exception {
+        OutputStream o = new FileOutputStream(dst);
+        try {
+            byte[] b = new byte[64 * 1024];
+            int n;
+            while ((n = in.read(b)) > 0) o.write(b, 0, n);
+        } finally {
+            try { o.close(); } catch (Exception ignored) { }
+            try { in.close(); } catch (Exception ignored) { }
+        }
     }
 
     private void close() {

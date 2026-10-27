@@ -47,12 +47,39 @@ public class Update {
      *   github.com                           HTTP 000 / 超时 12s   ← 被阻断
      *   api.github.com                       HTTP 200 / 321ms     ← 通，二级兜底
      *
-     * 为什么不用 Worker：这个账号下**所有** Worker 都返回 1101
-     * （连 3 行 `new Response('pong')` 也一样，10 月就在跑的老 Worker 同样 500），
-     * 是账号级 Workers 运行时故障。Pages 是纯静态托管，不跑 Workers 运行时，不受影响。
+     * ── 2026-10-28 更正（之前的「账号级 1101 故障」是误判）─────────
+     *
+     * 实测结果：
+     *   *.workers.dev                        → DNS 污染，每次解析出不同 IP
+     *                                          （202.160.129.6 / 103.73.161.52
+     *                                            / 74.86.142.55），TCP 443 全部超时
+     *   cloudflare.com / pages.dev / 自定义域名 → 全部正常
+     *   github.com                           → 仍被阻断
+     *
+     * 也就是说 Worker 运行时一直是好的，坏的是 workers.dev 这个后缀的路由。
+     * 所以现在把 Worker 绑到自有域名 dl.xxjcloudns.kdns.fr 上，
+     * APK 本体作为 Worker 静态资源直出（不再 302 去 github.com，那条路下不动）。
+     * 这样也顺手绕开了 Pages 单文件 25 MiB 的上限 —— APK 已经 20.13 MB 了。
+     *
+     * 实测：dl 域名下 21,109,913 B 的包 8.5 秒下完，2.37 MB/s，文件头 PK。
      */
     private static final String PRIMARY_JSON =
+            "https://dl.xxjcloudns.kdns.fr/update.json";
+
+    /** 旧主通道（Cloudflare Pages），保留做第二兜底。 */
+    private static final String PAGES_PRIMARY_JSON =
             "https://app.xxjcloudns.kdns.fr/update.json";
+
+    /**
+     * 教材 PDF 的下载基地址。
+     *
+     * 三本教材共 11.7 MB，占安装包 60%，而 Cloudflare Pages 和
+     * Workers Static Assets 的**单文件上限都是 25 MiB**（2026-10-28 查文档确认），
+     * APK 20.13 MB 看着还够，但再塞两本练习册就顶死了。
+     * 所以 PDF 从安装包里拿掉，改成第一次看原图时按需拉这一本。
+     * 路径与 Worker 静态资源一致：/<bookId>.pdf
+     */
+    public static final String BOOK_BASE = "https://dl.xxjcloudns.kdns.fr/books/";
 
     private static final String PAGES_JSON =
             "https://zsb-update.pages.dev/update.json";
@@ -131,9 +158,10 @@ public class Update {
         // 探测顺序保持"自有域名优先"——只是不再提前返回，
         // 三份都要拿到手才能比出最高的那个。
         Latest[] all = {
-                fetchManifest(PRIMARY_JSON),
-                fetchManifest(PAGES_JSON),
-                fetchFromGithub(),
+                fetchManifest(PRIMARY_JSON),        // dl.xxjcloudns.kdns.fr（Worker 直出）
+                fetchManifest(PAGES_PRIMARY_JSON),  // app.xxjcloudns.kdns.fr（Pages）
+                fetchManifest(PAGES_JSON),          // zsb-update.pages.dev
+                fetchFromGithub(),                  // api.github.com
         };
 
         Latest best = null;

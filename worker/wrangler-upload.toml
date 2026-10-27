@@ -1,0 +1,36 @@
+name = "zsb-update"
+main = "zsb-static.js"
+compatibility_date = "2026-10-27"
+
+# ── 更新分发 Worker（静态直出，不再中转 GitHub）─────────────────────
+#
+# 为什么要重写（2026-10-28 实测）：
+#
+#   1. 旧版把 APK 302 到 github.com/releases/download/...
+#      而 github.com 主站在国内被阻断（实测 HTTP 000 / 超时 12s）。
+#      也就是说：Worker 活着也没用，一跳过去就断了。
+#
+#   2. *.workers.dev 在国内被 DNS 污染：
+#        zsb-update.woctmdeding.workers.dev
+#          → 202.160.129.6 / 103.73.161.52 / 74.86.142.55（每次解析都变）
+#          → TCP 443 全部超时
+#      而同一账号下 cloudflare.com / pages.dev / 自定义域名 全部正常。
+#      => 不是账号故障（旧注释里的「账号级 1101」是误判），
+#         是 workers.dev 这个后缀的路由问题。解法：走自定义域名。
+#
+#   3. Cloudflare Pages 单文件上限 25 MiB，APK 已 20.13 MiB，
+#      再长几个版本就顶死，而且项目容量也会先撞墙。
+#
+# 新方案：APK 本体作为 Worker 静态资源随 deployment 一起上传，
+# 由绑定在自有域名上的 Worker 直接从边缘出网。
+#   域名：app.xxjcloudns.kdns.fr（同账号，已验证国内可达）
+#
+# 部署：npx wrangler deploy --config wrangler-upload.toml
+# 发版：python 发版worker.py
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+# 保留 workers.dev 子域做兜底（国内连不上，海外/挂代理可用）
+workers_dev = true

@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.5.1",
-  "versionInt": 10501,
-  "versionCode": 26,
-  "notes": "v1.5.1：修复版本号不变导致更新永远收不到的问题；词汇塔（396 同义组 / 1654 词 / 12 角色动画）；账号登录与云端同步",
+  "versionName": "1.5.4",
+  "versionInt": 10504,
+  "versionCode": 28,
+  "notes": "v1.5.4（versionCode 28）",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.5.1.apk",
-    "size": 21101721,
-    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.5.1.apk"
+    "name": "zhuansheng-v1.5.4.apk",
+    "size": 3816168,
+    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.5.4.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.1"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.4"
   }
 }

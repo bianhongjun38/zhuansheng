@@ -349,6 +349,15 @@ public class GBattleView extends LinearLayout {
 
     private void beginQuiz(GCard c) {
         pending = c;
+        // 把手牌里的英文词告诉出题器：中译英的答案/干扰项不能从手牌里取，
+        // 否则题面问「明智的」，屏幕上的牌面正好印着 wise —— 答案直接写在脸上。
+        java.util.List<String> handEn = new java.util.ArrayList<>();
+        if (battle != null) {
+            for (GCard h : battle.hand) {
+                if (h != null && h.isWord()) handEn.add(h.en);
+            }
+        }
+        quiz.setHandWords(handEn);
         pendingQ = quiz.make(c, quiz.randomMode());
         if (pendingQ == null) { pending = null; return; }
         renderOptions();

@@ -53,6 +53,31 @@ public class GQuiz {
     /** 判重键：按第一个义项比较，避免「讨论;辩论」和「讨论」被当成两个不同选项。 */
     private static String key(String cn) { return firstSense(cn); }
 
+    /**
+     * 当前手牌里的英文词 —— 这些词不能出现在「中译英」的选项里。
+     *
+     * 为什么必须屏蔽：题面是中文释义，正确答案是这个词本身。
+     * 而手牌在答题时仍然显示在屏幕上半部分，上面就印着英文单词。
+     * 于是「题目问『明智的』，牌面上正好有一张 wise」—— 答案直接写在脸上了。
+     * 出题器看不到 UI，所以由界面把当前手牌塞进来。
+     */
+    private java.util.Set<String> banned = java.util.Collections.emptySet();
+
+    /** 由 GBattleView 在出题前调用，传当前手牌的全部英文词（小写）。 */
+    public void setHandWords(java.util.Collection<String> words) {
+        java.util.Set<String> s = new java.util.HashSet<>();
+        if (words != null) {
+            for (String w : words) {
+                if (w != null && !w.trim().isEmpty()) s.add(w.trim().toLowerCase());
+            }
+        }
+        banned = s;
+    }
+
+    private boolean isBanned(String en) {
+        return en != null && banned.contains(en.trim().toLowerCase());
+    }
+
 
     /**
      * 出题。mode: 0=英译中  1=中译英  2=同义辨析
@@ -101,8 +126,17 @@ public class GQuiz {
         return q;
     }
 
-    /** 中译英：给中文选英文。只取中文义唯一的词，避免「两个都对」。 */
+    /**
+     * 中译英：给中文选英文。只取中文义唯一的词，避免「两个都对」。
+     *
+     * 关键约束：正确答案 c.en 如果正好是玩家手上的一张牌，这题等于送分 ——
+     * 因为手牌一直显示在屏幕上，英文单词就印在牌面上。
+     * 这种情况不能「换掉答案」（答案只能是这张牌本身的词），
+     * 所以整题退化成英译中，那个方向手牌里印的英文恰好是题面，不构成泄漏。
+     */
     private Q cnToEn(GCard c) {
+        if (isBanned(c.en)) return enToCn(c);
+
         Q q = new Q();
         q.card = c;
         q.prompt = firstSense(c.cn);
@@ -115,6 +149,7 @@ public class GQuiz {
             if (o.id.equals(c.id)) continue;
             if (key(o.cn).equals(key(c.cn))) continue;   // 同义不能当干扰项
             if (!o.pos.equals(c.pos)) continue; // 词性不同白送分
+            if (isBanned(o.en)) continue;      // 手牌上的词不能当干扰项
             pool.add(o);
         }
         Collections.shuffle(pool, rnd);
@@ -130,14 +165,28 @@ public class GQuiz {
         return q;
     }
 
-    /** 同义辨析：四个词义都相近，必须找出「和题干同义」的那个。 */
+    /**
+     * 同义辨析：四个词义都相近，必须找出「和题干同义」的那个。
+     *
+     * 这里也受手牌泄漏影响：题干是 c.en（明写在牌上，没关系，那本来就是题），
+     * 但正确答案 partner.en 如果也在手牌里，玩家扫一眼牌面就能挑出来。
+     * 遇到这种情况换个搭档；换不到就退回英译中。
+     */
     private Q synonymPick(GCard c) {
         List<String> syn = G.synonymsOf(c.id);
         if (syn.isEmpty()) return enToCn(c);
+        if (isBanned(c.en)) return enToCn(c);
 
         Q q = new Q();
         q.card = c;
-        GCard partner = G.byId(syn.get(rnd.nextInt(syn.size())));
+        // 找一个不在手牌里的同义词当正确答案；全都碰上手牌就放弃这种题型
+        GCard partner = null;
+        java.util.List<String> cand = new java.util.ArrayList<>(syn);
+        Collections.shuffle(cand, rnd);
+        for (String sid : cand) {
+            GCard g = G.byId(sid);
+            if (g != null && !isBanned(g.en)) { partner = g; break; }
+        }
         if (partner == null) return enToCn(c);
 
         q.prompt = c.en;
@@ -151,6 +200,7 @@ public class GQuiz {
             if (o.id.equals(c.id) || o.id.equals(partner.id)) continue;
             if (G.synonym(c.id, o.id)) continue;
             if (!o.pos.equals(c.pos)) continue;
+            if (isBanned(o.en)) continue;      // 手牌上的词不能当干扰项
             pool.add(o);
         }
         Collections.shuffle(pool, rnd);
