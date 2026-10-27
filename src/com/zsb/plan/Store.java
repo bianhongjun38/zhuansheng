@@ -1,25 +1,35 @@
 package com.zsb.plan;
 
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.database.Cursor;
+import android.database.sqlite.SQLiteDatabase;
+import android.database.sqlite.SQLiteOpenHelper;
 import android.os.Handler;
 import android.os.Looper;
 
 /**
- * Android 侧的持久化壳子。
+ * 持久化层 —— 数据库版。
  *
- * 业务规则全部在 StateLogic 里（纯 Java，可在电脑上测）。
- * 这里只做三件事：
- *   ① 从 SharedPreferences 读字符串 → 交给 StateLogic
- *   ② 把 StateLogic 序列化的字符串写回去
- *   ③ 输入密集时合并写盘（防抖），避免每个字符都整体序列化
+ * 为什么从 SharedPreferences 换成 SQLite：
+ *  · 原来把整个进度序列化成一个 JSON 字符串，每次勾一个框都要重写全量
+ *  · 一天勾一二十个任务、每个任务还有计时和默写，很快就是几十 KB 反复整写
+ *  · 单条记录更新改成一行 UPDATE，代价与总进度无关
+ *
+ * 业务规则仍然全在 StateLogic（纯 Java，可在电脑上测）。
+ * 这里只负责「读库 → 填进 StateLogic」和「StateLogic 变了 → 写回库」。
+ *
+ * 兼容老数据：首次打开时如果发现旧的 zsb_state 里还有进度，
+ * 自动迁移过来，之后不再读它（但不清空，留作后悔药）。
  */
 public class Store extends StateLogic {
 
-    private static final String PREF = "zsb_state";
-    private static final String K_STATE = "state_json";
+    private static final String DB = "zsb.db";
+    private static final int DB_VER = 1;
 
-    private final SharedPreferences sp;
+    private final Db db;
+    private final SharedPreferences legacy;
 
     private final Handler saveHandler = new Handler(Looper.getMainLooper());
     private final Runnable saveTask = new Runnable() {
@@ -31,59 +41,186 @@ public class Store extends StateLogic {
     private boolean savePending;
 
     public Store(Context ctx) {
-        this(ctx.getSharedPreferences(PREF, Context.MODE_PRIVATE));
+        this.legacy = ctx.getSharedPreferences("zsb_state", Context.MODE_PRIVATE);
+        this.db = new Db(ctx.getApplicationContext());
+        loadAll();
+        migrateLegacy();
     }
 
-    Store(SharedPreferences sp) {
-        this.sp = sp;
-        deserialize(sp.getString(K_STATE, null));
+    // ── 建表 ──────────────────────────────────────────────
+    static class Db extends SQLiteOpenHelper {
+
+        Db(Context c) {
+            super(c, DB, null, DB_VER);
+        }
+
+        @Override
+        public void onCreate(SQLiteDatabase d) {
+            // 勾选：一天一个任务一行
+            d.execSQL("CREATE TABLE IF NOT EXISTS done ("
+                    + "d TEXT NOT NULL, i TEXT NOT NULL, v INTEGER NOT NULL DEFAULT 1,"
+                    + " PRIMARY KEY (d, i))");
+
+            // 推进：哪天已确认
+            d.execSQL("CREATE TABLE IF NOT EXISTS committed ("
+                    + "d TEXT NOT NULL PRIMARY KEY)");
+
+            // 计时：累积毫秒
+            d.execSQL("CREATE TABLE IF NOT EXISTS timing ("
+                    + "d TEXT NOT NULL, i TEXT NOT NULL, ms INTEGER NOT NULL DEFAULT 0,"
+                    + " PRIMARY KEY (d, i))");
+
+            // 默写/笔记
+            d.execSQL("CREATE TABLE IF NOT EXISTS notes ("
+                    + "t TEXT, d TEXT NOT NULL, i TEXT NOT NULL,"
+                    + " PRIMARY KEY (d, i))");
+
+            // 错题星级 0..3
+            d.execSQL("CREATE TABLE IF NOT EXISTS hard ("
+                    + "i TEXT NOT NULL PRIMARY KEY, lv INTEGER NOT NULL DEFAULT 0)");
+
+            // 关键值（schema 版本、最后同步时间等）
+            d.execSQL("CREATE TABLE IF NOT EXISTS kv ("
+                    + "k TEXT NOT NULL PRIMARY KEY, v TEXT)");
+
+            d.execSQL("CREATE INDEX IF NOT EXISTS idx_done_d ON done(d)");
+            d.execSQL("CREATE INDEX IF NOT EXISTS idx_timing_d ON timing(d)");
+        }
+
+        @Override
+        public void onUpgrade(SQLiteDatabase d, int o, int n) {
+            // 只有加表才需要迁移；现在是第 1 版，没有历史包袱
+        }
     }
 
-    // ── 写盘 ──────────────────────────────────────────────
-    /** 关键动作（勾选/推进/计时）立即落盘，不能等。 */
+    // ── 载入 ──────────────────────────────────────────────
+    private void loadAll() {
+        SQLiteDatabase r = db.getReadableDatabase();
+
+        Cursor c = r.rawQuery("SELECT d, i FROM done WHERE v=1", null);
+        while (c.moveToNext()) done.add(key(c.getString(0), c.getString(1)));
+        c.close();
+
+        c = r.rawQuery("SELECT d FROM committed", null);
+        while (c.moveToNext()) completed.add(c.getString(0));
+        c.close();
+
+        c = r.rawQuery("SELECT d, i, ms FROM timing", null);
+        while (c.moveToNext()) timing.put(key(c.getString(0), c.getString(1)), c.getLong(2));
+        c.close();
+
+        c = r.rawQuery("SELECT d, i, t FROM notes", null);
+        while (c.moveToNext()) {
+            String t = c.getString(2);
+            notes.put(key(c.getString(0), c.getString(1)), t == null ? "" : t);
+        }
+        c.close();
+
+        c = r.rawQuery("SELECT i, lv FROM hard WHERE lv>0", null);
+        while (c.moveToNext()) hard.put(c.getString(0), c.getInt(1));
+        c.close();
+
+        r.close();
+    }
+
+    /** 老版本把整份 JSON 存在 SharedPreferences；有就迁进来。 */
+    private void migrateLegacy() {
+        try {
+            if (db.getReadableDatabase().rawQuery(
+                    "SELECT v FROM kv WHERE k='migrated'", null).getCount() > 0) {
+                return;   // 已经迁过
+            }
+            String old = legacy.getString("state_json", null);
+            if (old == null || old.length() < 10) return;
+            deserialize(old);        // 填进内存
+            writeNow();              // 立刻落库
+            db.getWritableDatabase().execSQL(
+                    "INSERT OR REPLACE INTO kv(k,v) VALUES('migrated',?)",
+                    new Object[]{nowIso()});
+        } catch (Exception ignored) {
+            // 迁移失败就当新用户，不让 App 起不来
+        }
+    }
+
+    // ── 写库（关键动作立即写）──────────────────────────────
     @Override
     public void setDone(String date, String id, boolean v) {
         super.setDone(date, id, v);
-        save();
+        SQLiteDatabase w = db.getWritableDatabase();
+        if (v) {
+            ContentValues cv = new ContentValues();
+            cv.put("d", date);
+            cv.put("i", id);
+            cv.put("v", 1);
+            w.insertWithOnConflict("done", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        } else {
+            w.delete("done", "d=? AND i=?", new String[]{date, id});
+        }
     }
 
     @Override
     public void commitDay(String date) {
         super.commitDay(date);
-        save();
+        ContentValues cv = new ContentValues();
+        cv.put("d", date);
+        db.getWritableDatabase().insertWithOnConflict(
+                "committed", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     @Override
     public void uncommitDay(String date) {
         super.uncommitDay(date);
-        save();
+        db.getWritableDatabase().delete("committed", "d=?", new String[]{date});
     }
 
     @Override
     public void addTiming(String date, String id, long ms) {
         super.addTiming(date, id, ms);
-        save();
+        ContentValues cv = new ContentValues();
+        cv.put("d", date);
+        cv.put("i", id);
+        cv.put("ms", timingOf(date, id));
+        db.getWritableDatabase().insertWithOnConflict(
+                "timing", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
     }
 
     @Override
     public void bumpHard(String id) {
         super.bumpHard(id);
-        save();
+        saveHard(id);
     }
 
     @Override
     public void clearHard(String id) {
         super.clearHard(id);
-        save();
+        saveHard(id);
+    }
+
+    private void saveHard(String id) {
+        SQLiteDatabase w = db.getWritableDatabase();
+        int lv = hardLevel(id);
+        if (lv <= 0) {
+            w.delete("hard", "i=?", new String[]{id});
+        } else {
+            ContentValues cv = new ContentValues();
+            cv.put("i", id);
+            cv.put("lv", lv);
+            w.insertWithOnConflict("hard", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+        }
     }
 
     @Override
     public void resetAll() {
         super.resetAll();
-        save();
+        SQLiteDatabase w = db.getWritableDatabase();
+        w.delete("done", null, null);
+        w.delete("committed", null, null);
+        w.delete("timing", null, null);
+        w.delete("notes", null, null);
+        w.delete("hard", null, null);
     }
 
-    /** 默写框每敲一个字符都会走这里 —— 改成 700ms 合并一次写盘。 */
+    /** 默写框每敲一个字都走这里 —— 700ms 合并一次写盘。 */
     @Override
     public void setNote(String date, String id, String text) {
         super.setNote(date, id, text);
@@ -105,18 +242,68 @@ public class Store extends StateLogic {
         writeNow();
     }
 
-    /** 立即写盘（若已有挂起的写则合并，不重复写）。 */
     public void save() {
         if (savePending) return;
         writeNow();
     }
 
+    /** 把内存里的全部状态整体刷进库（导入/迁移后用）。 */
     private void writeNow() {
-        String s = serialize();
-        if (s != null) sp.edit().putString(K_STATE, s).apply();
+        SQLiteDatabase w = db.getWritableDatabase();
+        w.beginTransaction();
+        try {
+            w.delete("done", null, null);
+            w.delete("committed", null, null);
+            w.delete("timing", null, null);
+            w.delete("notes", null, null);
+            w.delete("hard", null, null);
+
+            for (String k : done) {
+                int p = k.indexOf('|');
+                if (p <= 0) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("d", k.substring(0, p));
+                cv.put("i", k.substring(p + 1));
+                cv.put("v", 1);
+                w.insertWithOnConflict("done", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            for (String d : completed) {
+                ContentValues cv = new ContentValues();
+                cv.put("d", d);
+                w.insertWithOnConflict("committed", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            for (java.util.Map.Entry<String, Long> e : timing.entrySet()) {
+                int p = e.getKey().indexOf('|');
+                if (p <= 0) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("d", e.getKey().substring(0, p));
+                cv.put("i", e.getKey().substring(p + 1));
+                cv.put("ms", e.getValue());
+                w.insertWithOnConflict("timing", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            for (java.util.Map.Entry<String, String> e : notes.entrySet()) {
+                int p = e.getKey().indexOf('|');
+                if (p <= 0) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("d", e.getKey().substring(0, p));
+                cv.put("i", e.getKey().substring(p + 1));
+                cv.put("t", e.getValue());
+                w.insertWithOnConflict("notes", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            for (java.util.Map.Entry<String, Integer> e : hard.entrySet()) {
+                if (e.getValue() == null || e.getValue() <= 0) continue;
+                ContentValues cv = new ContentValues();
+                cv.put("i", e.getKey());
+                cv.put("lv", e.getValue());
+                w.insertWithOnConflict("hard", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+            }
+            w.setTransactionSuccessful();
+        } finally {
+            w.endTransaction();
+        }
     }
 
-    /** 导出后立刻需要一份最新快照时用。 */
+    /** 导出 / 生成进度码前需要一份最新快照。 */
     public String exportSnapshot() {
         flush();
         return exportJson();

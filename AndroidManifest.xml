@@ -6,13 +6,19 @@
   一旦在这里写死，命令行传的值就被忽略（实测：传 2，APK 里仍是 1）。
   版本号统一由 build_apk.py 读 version.json 决定，
   构建脚本见同目录 build_apk.py。
+
+  注意：XML 注释里禁止出现连续两个减号，否则 aapt2 报 not well-formed。
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.zsb.plan">
 
     <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34" />
 
-    <!-- 不需要任何权限：数据全在本机，不联网、不读通讯录、不定位 -->
+    <!-- 只在检查更新和下载新版 APK 时联网，不采集任何数据 -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 允许拉起系统安装器覆盖安装 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:label="专升本"
@@ -35,5 +41,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 把下载好的更新包交给系统安装器（7.0+ 禁止 file:// 跨应用） -->
+        <provider
+            android:name=".ApkProvider"
+            android:authorities="com.zsb.plan.updates"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+
     </application>
 </manifest>

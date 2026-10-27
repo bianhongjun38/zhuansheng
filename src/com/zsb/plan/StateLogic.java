@@ -58,6 +58,69 @@ public class StateLogic {
         return Math.max(0, plan.days.size() - 1);
     }
 
+    /**
+     * 按真实日历定位「今天是第几天」。
+     *
+     * 之前只有 currentIndex()（第一个未确认的天），与日历脱钩：
+     * 三天不打开 App，第四天仍显示第一天，剩余天数也不动。
+     * 这里改成以 plan.days 里的真实日期定位今天；
+     * 若那天已确认（进度超前），往后找最近一个未确认的。
+     */
+    public int todayIndex(Plan plan) {
+        if (plan == null || plan.days.isEmpty()) return 0;
+
+        String today = todayIso();
+        int pos = -1;
+
+        // ① 计划里正好有今天
+        for (int i = 0; i < plan.days.size(); i++) {
+            if (today.equals(plan.days.get(i).date)) { pos = i; break; }
+        }
+
+        // ② 今天不在计划内（开学前 / 计划结束 / 中间断档）→ 用日期比较定位
+        if (pos < 0) {
+            pos = 0;
+            for (int i = 0; i < plan.days.size(); i++) {
+                if (plan.days.get(i).date.compareTo(today) <= 0) pos = i;
+                else break;
+            }
+        }
+
+        // ③ 该天已确认 → 往后找最近未确认的
+        for (int i = Math.max(0, pos); i < plan.days.size(); i++) {
+            if (!completed.contains(plan.days.get(i).date)) return i;
+        }
+        return Math.max(0, plan.days.size() - 1);
+    }
+
+    /** 超前为正、落后为负：已确认的前置天数 - 应该完成的天数。 */
+    public int aheadBehind(Plan plan, int todayIdx) {
+        int doneBefore = 0;
+        for (int i = 0; i < todayIdx && i < plan.days.size(); i++) {
+            if (completed.contains(plan.days.get(i).date)) doneBefore++;
+        }
+        return doneBefore - todayIdx;
+    }
+
+    /** 距考试还有几天（按真实日历）。 */
+    public int realDaysToExam(Plan plan) {
+        if (plan == null || plan.meta == null) return 0;
+        String ex = plan.meta.examDate;
+        if (ex == null || ex.length() < 10) return 0;
+        try {
+            java.text.SimpleDateFormat f =
+                    new java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.CHINA);
+            f.setLenient(false);
+            java.util.Date d0 = f.parse(todayIso());
+            java.util.Date d1 = f.parse(ex.substring(0, 10));
+            if (d0 == null || d1 == null) return 0;
+            long days = (d1.getTime() - d0.getTime()) / (24L * 3600L * 1000L);
+            return (int) Math.max(0, days);
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     public int daysLeft(Plan plan) {
         int n = 0;
         for (Plan.Day d : plan.days) if (!completed.contains(d.date)) n++;

@@ -54,6 +54,8 @@ public class MainActivity extends Activity {
 
     private Plan plan;
     private Store store;
+    private BookView book;
+    private Update updater;
 
     private LinearLayout content;
     private TextView tvDays, tvLeftLabel;
@@ -75,7 +77,8 @@ public class MainActivity extends Activity {
         super.onCreate(b);
         plan = Plan.parse(readAsset("plan.json"));
         store = new Store(this);
-        idx = store.currentIndex(plan);
+        book = new BookView(this);
+        idx = store.todayIndex(plan);
 
         Window w = getWindow();
         w.setStatusBarColor(C_BG);
@@ -83,6 +86,10 @@ public class MainActivity extends Activity {
 
         setContentView(buildRoot());
         render();
+
+        // 启动后静默查一次更新（有新版才弹窗，没网也不打扰）
+        updater = new Update(this);
+        updater.check(true);
     }
 
     // ── 根布局 ────────────────────────────────────────────
@@ -235,9 +242,11 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(0, 0, 0, dp(10));
 
+        boolean isToday = Store.todayIso().equals(d.date);
+
         TextView title = new TextView(this);
-        title.setText(d.date + "  周" + d.weekday);
-        title.setTextColor(C_FG);
+        title.setText(d.date + "  周" + d.weekday + (isToday ? "   · 今天" : ""));
+        title.setTextColor(isToday ? C_TEAL : C_FG);
         title.setTextSize(19);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(title);
@@ -245,7 +254,8 @@ public class MainActivity extends Activity {
         TextView sub = new TextView(this);
         String s = "第 " + (idx + 1) + " / " + plan.days.size() + " 学习日";
         if (!TextUtils.isEmpty(d.phase)) s += "   ·   " + d.phase;
-        if (d.daysToExam > 0) s += "   ·   距考 " + d.daysToExam + " 天";
+        int examLeft = store.realDaysToExam(plan);
+        if (examLeft > 0) s += "   ·   距考 " + examLeft + " 天";
         sub.setText(s);
         sub.setTextColor(C_FG3);
         sub.setTextSize(12);
@@ -265,13 +275,58 @@ public class MainActivity extends Activity {
             if (idx < plan.days.size() - 1) { idx++; stopTimer(); render(); }
         }, idx < plan.days.size() - 1));
 
-        if (idx != store.currentIndex(plan)) {
+        if (idx != store.todayIndex(plan)) {
             nav.addView(smallBtn("回到今天", () -> {
-                idx = store.currentIndex(plan); stopTimer(); render();
+                idx = store.todayIndex(plan); stopTimer(); render();
             }, true));
         }
         box.addView(nav);
         return box;
+    }
+
+    // ── 任务 → 教材页 ─────────────────────────────────────
+    // 内置了 6 本书：三本教材 + 三本练习册。
+    // learn 指向教材，pract 指向练习册，页码由 plan.json 的 pdfStart 给出
+    // （生成时已按各书的印刷页→PDF 页偏移换算好）。
+    static class BookRef {
+        String id, title, shortName;
+        int page;
+    }
+
+    private BookRef bookRefOf(Plan.Task t) {
+        if (t == null) return null;
+
+        String subj = t.subject == null ? "" : t.subject;
+        String bookId, title, shortName;
+        if ("math".equals(subj)) {
+            bookId = "math_book"; title = "大学数学基础教材"; shortName = "数学教材";
+        } else if ("comp".equals(subj)) {
+            bookId = "comp_book"; title = "计算机基础教材"; shortName = "计算机教材";
+        } else if ("eng".equals(subj)) {
+            bookId = "eng_book"; title = "大学英语基础教材"; shortName = "英语教材";
+        } else {
+            return null;
+        }
+
+        int page = 0;
+        if ("pract".equals(t.kind)) {
+            // 练习册：任务里的 startPage 是练习册印刷页，偏移 +2（实测校验过）
+            bookId = bookId.replace("_book", "_pract");
+            title = shortName.replace("教材", "") + "同步练习册";
+            shortName = shortName.replace("教材", "") + "练习册";
+            if (t.startPage > 0) page = t.startPage + 2;
+        } else {
+            if (t.pdfStart != null) page = t.pdfStart;
+            else if (t.startPage > 0) page = t.startPage + 1;
+        }
+
+        if (page <= 0) return null;
+        BookRef r = new BookRef();
+        r.id = bookId;
+        r.title = title;
+        r.shortName = shortName;
+        r.page = page;
+        return r;
     }
 
     private View taskRow(final String date, final Plan.Task t) {
@@ -338,10 +393,7 @@ public class MainActivity extends Activity {
         // 页码 + 时长
         List<String> meta = new ArrayList<>();
         if (t.startPage > 0 && t.endPage >= t.startPage) {
-            meta.add("印刷 p" + t.startPage + "-" + t.endPage);
-        }
-        if (t.pdfStart != null && t.pdfEnd != null && t.pdfEnd >= t.pdfStart) {
-            meta.add("PDF p" + t.pdfStart + "-" + t.pdfEnd);
+            meta.add("p" + t.startPage + "-" + t.endPage);
         }
         if (t.min > 0) meta.add(t.min + " 分钟");
         long el = store.timingOf(date, tid);
@@ -360,6 +412,19 @@ public class MainActivity extends Activity {
             note.setTextSize(11);
             note.setPadding(0, dp(2), 0, 0);
             col.addView(note);
+        }
+
+        // 打开教材 —— 点这行文字直接跳对应页，不用去翻 PDF
+        final BookRef ref = bookRefOf(t);
+        if (ref != null) {
+            TextView open = new TextView(this);
+            open.setText("📖 打开" + ref.shortName + " p" + ref.page);
+            open.setTextColor(C_TEAL);
+            open.setTextSize(12.5f);
+            open.setTypeface(Typeface.DEFAULT_BOLD);
+            open.setPadding(0, dp(7), 0, dp(1));
+            open.setOnClickListener(v -> book.open(ref.id, ref.title, ref.page));
+            col.addView(open);
         }
 
         row.addView(col);
@@ -529,7 +594,7 @@ public class MainActivity extends Activity {
                     .setNegativeButton("取消", null)
                     .setPositiveButton("撤销", (x, y) -> {
                         store.uncommitDay(d.date);
-                        idx = store.currentIndex(plan);
+                        idx = store.todayIndex(plan);
                         render();
                         toast("已撤销");
                     }).show());
@@ -543,7 +608,7 @@ public class MainActivity extends Activity {
                     .setNegativeButton("再想想", null)
                     .setPositiveButton("确认完成", (x, y) -> {
                         store.commitDay(d.date);
-                        idx = store.currentIndex(plan);
+                        idx = store.todayIndex(plan);
                         render();
                         toast("已推进 · 剩余 " + store.daysLeft(plan) + " 天");
                     }).show());
@@ -623,7 +688,7 @@ public class MainActivity extends Activity {
     // ══ 全表 ══════════════════════════════════════════════
     private void renderPlanList() {
         LinearLayout card = card("全部 " + plan.days.size() + " 个学习日", "点任意一天查看并补做");
-        final int cur = store.currentIndex(plan);
+        final int cur = store.todayIndex(plan);
         for (int i = 0; i < plan.days.size(); i++) {
             final Plan.Day d = plan.days.get(i);
             final int pos = i;
@@ -700,58 +765,66 @@ public class MainActivity extends Activity {
         content.addView(c1);
 
         LinearLayout c2 = card("数据管理", "全部数据只存在这台手机上，不上传任何服务器");
-        c2.addView(wideBtn("导出备份", () -> {
+        c2.addView(wideBtn("生成进度码", () -> {
+            final String code = ProgressCode.encode(store.exportSnapshot());
             final String json = store.exportJson();
+            if (code == null) { toast("生成失败"); return; }
             new AlertDialog.Builder(this)
-                    .setTitle("导出备份")
-                    .setMessage("复制下面的内容，存到微信收藏 / 备忘录 / 电脑都行。\n换手机时用「从备份导入」粘回来。")
-                    .setPositiveButton("复制", (x, y) -> {
+                    .setTitle("进度码")
+                    .setMessage("这是一串可以带走的进度。换手机或重装后，"
+                            + "在新手机上点「导入进度码」粘进去，进度全部回来。\n\n"
+                            + "长度 " + code.length() + " 字符，含校验位，抄错会直接报错。")
+                    .setPositiveButton("复制进度码", (x, y) -> {
+                        ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                        cm.setPrimaryClip(ClipData.newPlainText("zsb-progress", code));
+                        toast("进度码已复制");
+                    })
+                    .setNeutralButton("复制完整备份", (x, y) -> {
                         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
                         cm.setPrimaryClip(ClipData.newPlainText("zsb-backup", json));
-                        toast("已复制到剪贴板");
-                    })
-                    .setNeutralButton("分享", (x, y) -> {
-                        Intent i = new Intent(Intent.ACTION_SEND);
-                        i.setType("text/plain");
-                        i.putExtra(Intent.EXTRA_SUBJECT, "专升本进度备份 " + Store.todayIso());
-                        i.putExtra(Intent.EXTRA_TEXT, json);
-                        startActivity(Intent.createChooser(i, "分享备份"));
+                        toast("完整 JSON 已复制（" + json.length() + " 字符）");
                     })
                     .setNegativeButton("关闭", null)
                     .show();
         }));
 
-        c2.addView(wideBtn("从备份导入", () -> {
+        c2.addView(wideBtn("导入进度码", () -> {
             final EditText et = new EditText(this);
-            et.setHint("把备份内容粘到这里");
+            et.setHint("粘贴进度码（ZSB1-…）或完整备份 JSON");
             et.setHintTextColor(C_FG3);
             et.setTextColor(C_FG);
             et.setTextSize(13);
             et.setMinLines(4);
             et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             new AlertDialog.Builder(this)
-                    .setTitle("从备份导入")
-                    .setMessage("导入会覆盖当前全部进度。")
+                    .setTitle("导入进度")
+                    .setMessage("会覆盖当前全部进度。空白和换行不影响，小写也行。")
                     .setView(et)
                     .setNegativeButton("取消", null)
                     .setPositiveButton("导入", (x, y) -> {
+                        String in = et.getText().toString().trim();
+                        if (in.isEmpty()) { toast("没有内容"); return; }
+                        // 先当进度码解，不是码就按原始 JSON 处理
+                        String json = ProgressCode.decode(in);
+                        if (json == null) json = in;
                         try {
-                            int n = store.importJson(et.getText().toString());
-                            idx = store.currentIndex(plan);
+                            int n = store.importJson(json);
+                            idx = store.todayIndex(plan);
                             render();
                             toast("已导入 " + n + " 条勾选");
                         } catch (Exception e) {
-                            toast("导入失败：内容不是有效备份");
+                            toast("导入失败：内容无效（进度码可能抄错）");
                         }
                     }).show();
         }));
 
+        c2.addView(wideBtn("检查更新", () -> updater.check(false)));
         c2.addView(wideBtn("清空全部进度", () -> new AlertDialog.Builder(this)
                 .setMessage("清空全部勾选、默写和计时？无法撤销。")
                 .setNegativeButton("取消", null)
                 .setPositiveButton("清空", (x, y) -> {
                     store.resetAll();
-                    idx = store.currentIndex(plan);
+                    idx = store.todayIndex(plan);
                     render();
                     toast("已清空");
                 }).show()));
@@ -762,7 +835,8 @@ public class MainActivity extends Activity {
         tv.setText("· 检索阶梯 R1 +4天 / R2 +18天 / R3 +53天 / R4 +133天，"
                 + "按 Cepeda 2008 的最优间隔比例（考试延迟的 8.5%–17%）换算。\n"
                 + "· 第二轮第三轮都是做题而不是重读，依据 Dunlosky 2013 对 10 种学习法的评级。\n"
-                + "· 天数是推进制，不按日历走——没学完就不跳到下一天，进度由你控制。\n"
+                + "· 日期跟真实日历走：今天是哪天就显示哪天的任务。没学完的会一直留着，"
+                + "勾选完成后这部分天数才从「剩余」里减掉。\n"
                 + "· 每页耗时是估算值，跑一周后要用真实数据重算整张表。");
         tv.setTextColor(C_FG3);
         tv.setTextSize(12.5f);

@@ -100,14 +100,17 @@ def main():
     rc, out = run([JAVAC, "-encoding", "UTF-8", "-cp", JSON_JAR, "-d", OUT,
                    os.path.join(SRC, "Plan.java"),
                    os.path.join(SRC, "StateLogic.java"),
+                   os.path.join(SRC, "ProgressCode.java"),
                    os.path.join(TEST, "LogicTest.java"),
-                   os.path.join(TEST, "StoreTest.java")])
+                   os.path.join(TEST, "StoreTest.java"),
+                   os.path.join(TEST, "CodeTest.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
-    # ── 2. 跑两套测试 ───────────────────────────────────
+    # ── 2. 跑三套测试 ───────────────────────────────────
     for cls, label in (("com.zsb.plan.LogicTest", "计划解析与推进逻辑"),
-                       ("com.zsb.plan.StoreTest", "状态存储与导入导出")):
+                       ("com.zsb.plan.StoreTest", "状态存储与导入导出"),
+                       ("com.zsb.plan.CodeTest", "进度码编解码")):
         print("\n▶ " + label)
         rc, out = run([JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
                        "-cp", JSON_JAR + os.pathsep + OUT, cls, ASSETS_PLAN])
@@ -145,9 +148,22 @@ def main():
           "sdkVersion:'23'" in out and "targetSdkVersion:'34'" in out)
 
     rc, out = run([os.path.join(BT, B.EXE_AAPT), "dump", "permissions", ascii_apk])
-    has_perm = "uses-permission" in out
-    check("零权限（不联网/不读存储）", not has_perm,
-          "" if not has_perm else out.strip()[:200])
+    # 权限白名单：只为「检查更新 + 下载新版 APK + 拉起安装器」服务。
+    # 一旦出现白名单外的权限（读通讯录、读存储、定位等），说明被误改了。
+    allowed = {
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.REQUEST_INSTALL_PACKAGES",
+    }
+    used = set()
+    for ln in out.splitlines():
+        if "uses-permission" in ln and "name=" in ln:
+            name = ln.split("name=", 1)[1].strip().strip("'\"")
+            if name:
+                used.add(name)
+    extra = used - allowed
+    check("权限仅限更新用（联网/安装包）", not extra,
+          "" if not extra else "白名单外权限: %s" % sorted(extra))
 
     rc, out = run([os.path.join(BT, B.EXE_APKSIGNER), "verify", "--verbose", ascii_apk])
     check("签名校验通过（v1+v2+v3）",
