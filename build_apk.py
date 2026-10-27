@@ -157,6 +157,20 @@ def read_version(bump):
             print("⚠ version.json 读不了（%s），从 1 开始" % e)
     if bump:
         code += 1
+        # 关键：--bump 必须同时递增 versionName 的 patch 段。
+        # 只动 versionCode 是**静默失效**的：Update.parseVer() 只比较
+        # versionName（"1.5.0" → 10500），两次构建都得到 10500，
+        # remoteCode <= localCode 成立 → App 永远显示「已是最新版本」，
+        # 而 APK 内容其实已经变了。2026-10-27 就是这么卡住的：
+        # versionCode 23→25，versionName 一直是 1.5.0。
+        try:
+            seg = [int(x) for x in name.split(".")]
+            while len(seg) < 3:
+                seg.append(0)
+            seg[2] += 1
+            name = ".".join(str(x) for x in seg)
+        except Exception:
+            name = "1.0.1"
     return code, name
 
 

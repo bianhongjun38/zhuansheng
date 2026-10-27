@@ -128,6 +128,33 @@ def main():
         print("    App 将走 GitHub 通道下载（约 551 KB/s）。")
         print("    想彻底解决：Cloudflare 控制台启用 R2，把 APK 放 R2 公共桶。")
 
+    # ── 硬校验：versionName 必须严格大于线上那一份 ──
+    # App 的 Update.parseVer() 只比较 versionName。如果这次发的版本名
+    # 和线上一样（或更小），手机端会直接判定「已是最新版本」，
+    # 安装包换了、内容变了，用户却永远收不到更新。
+    # 这不是理论风险：2026-10-27 的 1.5.0 就是因为 versionName 没变，
+    # 连发三次都没人收到。宁可在这里失败，也不要静默发一个用户收不到的包。
+    import urllib.request
+    try:
+        _op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        _live = json.loads(_op.open(
+            urllib.request.Request(BASE + "/update.json",
+                                   headers={"User-Agent": "zsb-release"}),
+            timeout=15).read())
+        _lv, _li = _live.get("versionName", "0.0.0"), int(_live.get("versionInt", 0))
+        if ver_int(vname) <= _li:
+            print("\n❌ 版本号没有前进：本次 %s (%d) <= 线上 %s (%d)"
+                  % (vname, ver_int(vname), _lv, _li))
+            print("   手机端只比较 versionName，同名会判定「已是最新版本」，")
+            print("   用户永远收不到这次更新。请先把 versionName 升上去。")
+            raise SystemExit(1)
+        print("  版本前进：%s (%d) > 线上 %s (%d)"
+              % (vname, ver_int(vname), _lv, _li))
+    except SystemExit:
+        raise
+    except Exception as e:
+        print("  ⚠ 读不到线上 update.json（%s），跳过版本前进校验" % e)
+
     notes = args.Notes or ("v%s（versionCode %d）" % (vname, vcode))
     man = build_manifest(apk_name, size, vcode, notes, host, vname)
     with open(os.path.join(PAGES, "update.json"), "w", encoding="utf-8") as f:
