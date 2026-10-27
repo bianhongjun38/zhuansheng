@@ -60,7 +60,10 @@ public class MainActivity extends Activity {
     private WordView wordView;
     private MathView mathView;
     private EngView engView;
+    private BoardView boardView;
     private LinalgView linalgView;
+    private GModeView gameView;
+    private GStore gameStore;
     private Update updater;
 
     private LinearLayout content;
@@ -87,7 +90,7 @@ public class MainActivity extends Activity {
      * 而且检索本身不该单独成页：它属于当天的动作，逾期会累积到当天，
      * 所以「今日」就是它唯一正确的位置。删掉不丢功能。
      */
-    private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "数据"};
+    private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "词汇塔", "数据"};
 
     @Override
     protected void onCreate(Bundle b) {
@@ -99,7 +102,11 @@ public class MainActivity extends Activity {
         wordView = new WordView(this);
         mathView = new MathView(this);
         engView = new EngView(this, store);
+        boardView = new BoardView(this);
         linalgView = new LinalgView(this);
+        gameStore = new GStore(this);
+        gameView = new GModeView(this, gameStore);
+        gameView.setOnExit(() -> { tab = 0; render(); });
         idx = store.todayIndex(plan);
 
         Window w = getWindow();
@@ -212,10 +219,16 @@ public class MainActivity extends Activity {
         }
 
         content.removeAllViews();
+        // 游戏页要贴满屏幕，其它页保留统一的左右留白。
+        // 在这里集中设置，避免各 render 方法各设一套、切 tab 后互相残留。
+        if (tab == 3) content.setPadding(0, 0, 0, 0);
+        else content.setPadding(dp(12), dp(10), dp(12), dp(10));
+
         switch (tab) {
             case 0: renderToday(); break;
             case 1: renderHard(); break;
             case 2: renderPlanList(); break;
+            case 3: renderGame(); break;
             default: renderStats(); break;
         }
     }
@@ -986,6 +999,17 @@ public class MainActivity extends Activity {
         content.addView(card);
     }
 
+    // ══ 词汇塔 ══════════════════════════════════════════
+    private void renderGame() {
+        ViewGroup parent = (ViewGroup) gameView.getParent();
+        if (parent != null) parent.removeView(gameView);
+        gameView.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+        content.addView(gameView);
+        gameView.show();
+    }
+
     // ══ 数据 ══════════════════════════════════════════════
     private void renderStats() {
         int total = plan.days.size();
@@ -1011,6 +1035,47 @@ public class MainActivity extends Activity {
         tools.addView(wideBtn("🔄 线性变换（2×2 矩阵怎么拉扯平面、特征方向）",
                 () -> linalgView.open()));
         content.addView(tools);
+
+        // 账号卡：登录后进度才上云。
+        // 放在「数据管理」前面，因为它决定了下面那些手动导出还要不要用。
+        LinearLayout cAcc = card("账号", "登录后进度自动存到云端，换手机不会丢");
+        final TextView btnAcc = wideBtn("", null);
+        final Runnable refreshAcc = () -> {
+            Account acc = Account.load(this);
+            btnAcc.setText(acc.loggedIn() ? "已登录：" + acc.username : "登录 / 注册");
+        };
+        refreshAcc.run();
+        btnAcc.setOnClickListener(v -> {
+            Account acc = Account.load(this);
+            if (acc.loggedIn()) {
+                new AlertDialog.Builder(this)
+                        .setTitle("账号")
+                        .setMessage("当前用户：" + acc.username
+                                + "\n\n退出登录不会清掉这台手机上的进度，"
+                                + "只是停止上传。重新登录同一个用户名就能接着同步。")
+                        .setNegativeButton("关闭", null)
+                        .setPositiveButton("退出登录", (x, y) -> {
+                            Account.clear(this);
+                            refreshAcc.run();
+                            toast("已退出登录");
+                        })
+                        .show();
+            } else {
+                LoginView lv = new LoginView(this);
+                lv.setOnLoggedIn(a -> {
+                    refreshAcc.run();
+                    toast("欢迎，" + a.username);
+                });
+                lv.show();
+            }
+        });
+        cAcc.addView(btnAcc);
+        cAcc.addView(wideBtn("排行榜", () -> {
+            Account acc = Account.load(this);
+            if (!acc.loggedIn()) { toast("先登录才能看排行榜"); return; }
+            boardView.show();
+        }));
+        content.addView(cAcc);
 
         LinearLayout c2 = card("数据管理", "全部数据只存在这台手机上，不上传任何服务器");
         c2.addView(wideBtn("生成进度码", () -> {

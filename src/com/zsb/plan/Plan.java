@@ -61,6 +61,22 @@ public class Plan {
         public String id = "";
 
         /**
+         * 稳定身份，写死在 plan.json 里，生成一次后永不变。
+         *
+         * 和 id 的区别很重要：id 是 assignId() 按内容算出来的哈希，
+         * 我把「进制转换 10 题」改成「进制转换10题」，哈希就变，
+         * 用户所有相关勾选全部失联 —— 这在单机时代是本地丢一点，
+         * 上了云就是所有人的进度对不上号。
+         *
+         * uid 由 build/gen_uid.py 一次性写进 JSON，之后任何文案改动
+         * 都不动它。云同步、排行榜一律以 uid 为准。
+         *
+         * 注意：跨天可以有相同 uid（同一章三轮螺旋回访是故意的），
+         * 存储键是 date|uid，所以不会串。
+         */
+        public String uid = "";
+
+        /**
          * 题库落点。不为 null 时说明这个任务有真题目可做。
          * 目前用到两个键：
          *   subject  学科 math|comp|eng
@@ -230,7 +246,9 @@ public class Plan {
                                 k.bankLimit = bk.optInt("limit", 10);
                                 k.bankYear = bk.optInt("year", 0);
                             }
-                            k.id = assignId(k, usedIds, d.date);
+                            k.uid = t.optString("uid", "");
+                            k.id = k.uid.isEmpty() ? assignId(k, usedIds, d.date) : k.uid;
+                            usedIds.add(k.id);
                             d.tasks.add(k);
                         }
                     }

@@ -144,7 +144,9 @@ def main():
                    os.path.join(TEST, "RecallAudit.java"),
                    os.path.join(TEST, "TemplateAudit.java"),
                    os.path.join(TEST, "FormulaColorAudit.java"),
-                   os.path.join(TEST, "PosViewAudit.java")])
+                   os.path.join(TEST, "PosViewAudit.java"),
+                   os.path.join(TEST, "UidAudit.java"),
+                   os.path.join(TEST, "BoardViewAudit.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
@@ -177,6 +179,8 @@ def main():
         ("com.zsb.plan.TemplateAudit", "模板格子高度（不裁字/等高，含 PNG）", audit_dir),
         ("com.zsb.plan.FormulaColorAudit", "公式颜色（上下标不能是黑的）", audit_dir),
         ("com.zsb.plan.PosViewAudit", "词性题排版（英文主体/选项带中文，含 PNG）", audit_dir),
+        ("com.zsb.plan.UidAudit", "任务 uid 稳定性（跨天重复/当天唯一）", ASSETS_PLAN),
+        ("com.zsb.plan.BoardViewAudit", "登录页与排行榜（列宽/省略号/对比度，含 PNG）", audit_dir),
     )
     for cls, label, extra_arg in test_table:
         print("\n▶ " + label)

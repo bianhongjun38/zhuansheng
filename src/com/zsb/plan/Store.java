@@ -29,7 +29,7 @@ import java.util.List;
 public class Store extends StateLogic {
 
     private static final String DB = "zsb.db";
-    private static final int DB_VER = 2;
+    private static final int DB_VER = 3;
 
     private final Db db;
     private final SharedPreferences legacy;
@@ -92,6 +92,15 @@ public class Store extends StateLogic {
             d.execSQL("CREATE TABLE IF NOT EXISTS kv ("
                     + "k TEXT NOT NULL PRIMARY KEY, v TEXT)");
 
+            // 英语闯关成绩。之前 right/wrong 只是 EngView 里的两个内存变量，
+            // 退出界面就归零，一行都没落过盘 —— 排行榜要用的数据以前根本不存在。
+            // client_rev 是幂等键（uid+startedAt+mode 的哈希），防止重复上报。
+            d.execSQL("CREATE TABLE IF NOT EXISTS eng_round ("
+                    + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    + "d TEXT NOT NULL, mode INTEGER NOT NULL,"
+                    + " r INTEGER NOT NULL, w INTEGER NOT NULL, ms INTEGER NOT NULL,"
+                    + " started INTEGER NOT NULL, rev TEXT UNIQUE, up INTEGER NOT NULL DEFAULT 0)");
+
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_done_d ON done(d)");
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_timing_d ON timing(d)");
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_s ON wrong(s)");
@@ -105,6 +114,14 @@ public class Store extends StateLogic {
                         + "i TEXT NOT NULL PRIMARY KEY, s TEXT, q TEXT,"
                         + " ts INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 1)");
                 d.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_s ON wrong(s)");
+            }
+            // v2 → v3：加英语闯关成绩表。只加表，不动已有进度。
+            if (o < 3) {
+                d.execSQL("CREATE TABLE IF NOT EXISTS eng_round ("
+                        + "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                        + "d TEXT NOT NULL, mode INTEGER NOT NULL,"
+                        + " r INTEGER NOT NULL, w INTEGER NOT NULL, ms INTEGER NOT NULL,"
+                        + " started INTEGER NOT NULL, rev TEXT UNIQUE, up INTEGER NOT NULL DEFAULT 0)");
             }
         }
     }
@@ -378,5 +395,101 @@ public class Store extends StateLogic {
     public String exportSnapshot() {
         flush();
         return exportJson();
+    }
+
+    // ── 英语闯关成绩 ──────────────────────────────────────
+
+    /** 一轮成绩。对应 eng_round 一行。 */
+    public static class EngRound {
+        public long id;
+        public String day = "";
+        public int mode;
+        public int right;
+        public int wrong;
+        public long ms;
+        public long started;
+        public String rev = "";
+        public boolean uploaded;
+        public int total() { return right + wrong; }
+        public int rate() { return total() == 0 ? 0 : right * 100 / total(); }
+    }
+
+    /**
+     * 记一轮成绩。
+     *
+     * 幂等：rev 有 UNIQUE 约束，同一个 rev 重复调用不会写第二条。
+     * rev 由调用方用 uid+started+mode 算，这样「上报成功了但没收到响应、
+     * 用户又重进了一次」不会在榜上算两次。
+     */
+    public void addEngRound(EngRound r) {
+        if (r == null) return;
+        ContentValues cv = new ContentValues();
+        cv.put("d", r.day);
+        cv.put("mode", r.mode);
+        cv.put("r", r.right);
+        cv.put("w", r.wrong);
+        cv.put("ms", r.ms);
+        cv.put("started", r.started);
+        cv.put("rev", r.rev);
+        cv.put("up", r.uploaded ? 1 : 0);
+        db.getWritableDatabase().insertWithOnConflict(
+                "eng_round", null, cv, SQLiteDatabase.CONFLICT_IGNORE);
+    }
+
+    /** 读成绩。sinceDay 非空时只取那天及以后（按字符串比较，ISO 日期正好可比）。 */
+    public List<EngRound> engRounds(String sinceDay) {
+        List<EngRound> out = new ArrayList<>();
+        Cursor c = sinceDay == null || sinceDay.isEmpty()
+                ? db.getReadableDatabase().rawQuery(
+                        "SELECT id,d,mode,r,w,ms,started,rev,up FROM eng_round ORDER BY started DESC", null)
+                : db.getReadableDatabase().rawQuery(
+                        "SELECT id,d,mode,r,w,ms,started,rev,up FROM eng_round WHERE d>=? ORDER BY started DESC",
+                        new String[]{sinceDay});
+        while (c.moveToNext()) {
+            EngRound r = new EngRound();
+            r.id = c.getLong(0);
+            r.day = c.getString(1);
+            r.mode = c.getInt(2);
+            r.right = c.getInt(3);
+            r.wrong = c.getInt(4);
+            r.ms = c.getLong(5);
+            r.started = c.getLong(6);
+            r.rev = c.getString(7) == null ? "" : c.getString(7);
+            r.uploaded = c.getInt(8) != 0;
+            out.add(r);
+        }
+        c.close();
+        return out;
+    }
+
+    /** 还没传上去的成绩。 */
+    public List<EngRound> pendingEngRounds() {
+        List<EngRound> out = new ArrayList<>();
+        for (EngRound r : engRounds(null)) if (!r.uploaded) out.add(r);
+        return out;
+    }
+
+    /** 标记成已上传。按 rev 定位，不依赖自增 id。 */
+    public void markEngUploaded(String rev) {
+        if (rev == null || rev.isEmpty()) return;
+        ContentValues cv = new ContentValues();
+        cv.put("up", 1);
+        db.getWritableDatabase().update("eng_round", cv, "rev=?", new String[]{rev});
+    }
+
+    /** 今日（或指定日）汇总，给「我的正确率」用。 */
+    public int[] engDaily(String day) {
+        // [轮数, 对题, 错题, 毫秒]
+        int[] out = new int[4];
+        Cursor c = db.getReadableDatabase().rawQuery(
+                "SELECT COUNT(*), SUM(r), SUM(w), SUM(ms) FROM eng_round WHERE d=?", new String[]{day});
+        if (c.moveToNext()) {
+            out[0] = c.getInt(0);
+            out[1] = c.getInt(1);
+            out[2] = c.getInt(2);
+            out[3] = (int) Math.min(Integer.MAX_VALUE, c.getLong(3));
+        }
+        c.close();
+        return out;
     }
 }

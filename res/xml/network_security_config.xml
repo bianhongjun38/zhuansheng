@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  只给 ZSB 后端这一个 IP 开明文 HTTP，其余域名一律仍走系统默认（禁明文）。
+
+  为什么不全开：
+  android:usesCleartextTraffic="true" 会让整个 App 的所有 HTTP 都放行，
+  包括以后接的任何第三方 SDK。这里用 domain-config 精确到单个 IP，
+  以后换服务器只改这一处，不会埋下"某天悄悄明文传数据"的坑。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">8.156.78.63</domain>
+    </domain-config>
+</network-security-config>

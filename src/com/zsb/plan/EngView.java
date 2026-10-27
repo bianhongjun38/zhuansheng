@@ -72,6 +72,15 @@ public class EngView {
     private int right = 0, wrong = 0;
     private final Random rnd = new Random();
 
+    /** 这一轮的开始时间（毫秒）。做题过程中不变，一轮结束拿去算用时。 */
+    private long roundStart = 0;
+    /**
+     * 本轮指纹，用于幂等写入。
+     * 组成：起始时间 + 题型 + 题量。同一轮无论写几次都是同一条，
+     * 避免「上报成功了但没收到响应、用户又点了一遍」在榜上算两次。
+     */
+    private String roundRev = "";
+
     public EngView(Activity a, Store s) {
         this.act = a;
         this.store = s;
@@ -103,6 +112,8 @@ public class EngView {
         idx = 0;
         right = 0;
         wrong = 0;
+        roundStart = System.currentTimeMillis();
+        roundRev = "";
         cur = null;
         answered = null;
         feedback = "";
@@ -125,6 +136,8 @@ public class EngView {
         idx = 0;
         right = 0;
         wrong = 0;
+        roundStart = System.currentTimeMillis();
+        roundRev = "";
         cur = null;
         answered = null;
         feedback = "";
@@ -556,6 +569,10 @@ public class EngView {
         c.setLayoutParams(new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
+        // 落盘。以前 right/wrong 是两个内存变量，退出就归零，
+        // 用户连「这周做了多少题」都看不到 —— 排行榜要的数据以前不存在。
+        saveRound();
+
         TextView t = new TextView(act);
         int total = right + wrong;
         t.setText("这一轮做完了");
@@ -603,9 +620,84 @@ public class EngView {
             idx = 0;
             right = 0;
             wrong = 0;
+            // 新一轮必须重置计时和指纹，否则第二轮会继承第一轮的用时
+            roundStart = System.currentTimeMillis();
+            roundRev = "";
             next();
         });
         cardBody.addView(again);
+    }
+
+    /**
+     * 一轮结束落盘。
+     *
+     * 之前 right / wrong 是纯内存变量，退出界面就归零，一行都没存过。
+     * 排行榜要的数据从这一刻起才有。
+     *
+     * 幂等：roundRev 由「起始时间+题量」算，同一轮写多次仍是同一条，
+     * Store 那边 rev 上有 UNIQUE 约束兜底。
+     * 题量为 0 的一轮不记 —— 那是打开看一眼就退出的，不该拉低正确率。
+     */
+    private void saveRound() {
+        if (store == null) return;
+        int total = right + wrong;
+        if (total <= 0) return;
+        if (roundRev.isEmpty()) {
+            roundRev = Long.toHexString(roundStart) + "-" + total + "-" + right;
+        }
+        try {
+            Store.EngRound r = new Store.EngRound();
+            r.day = StateLogic.todayIso();
+            r.mode = modes.length > 0 ? modes[0] : 0;   // 记录本轮起手题型
+            r.right = right;
+            r.wrong = wrong;
+            r.ms = Math.max(0, System.currentTimeMillis() - roundStart);
+            r.started = roundStart;
+            r.rev = roundRev;
+            store.addEngRound(r);
+        } catch (Exception ignored) {
+            // 存不上不能影响用户继续做题
+        }
+        uploadPending();
+    }
+
+    /**
+     * 把没传上去的成绩补传给服务器。
+     *
+     * 为什么要「补传」而不是「当场传完就算了」：
+     *   同学做题的地方经常没网（教室、地铁），当场传必失败。
+     *   所以成绩先进本地 eng_round 表（up=0），
+     *   每次出成绩单的时候顺手把积压的都试一遍 ——
+     *   幂等键是 rev，重复传不会在榜上算两次。
+     *
+     * 全程后台线程，失败静默：上传失败不该弹窗打断做题的人。
+     */
+    private void uploadPending() {
+        if (store == null) return;
+        final Account acc = Account.load(act);
+        if (!acc.loggedIn()) return;
+        final java.util.List<Store.EngRound> pend = store.pendingEngRounds();
+        if (pend.isEmpty()) return;
+
+        new Thread(() -> {
+            int sent = 0;
+            for (Store.EngRound r : pend) {
+                Api.R res = Api.postRound(acc.token, r.right, r.wrong, r.ms, r.started, r.rev);
+                // 只有服务器明确收下才算传过。
+                // ignored=true（用时太短/超上限）也算「服务器已处理」，
+                // 再传一次结果还是一样，不该无限重试。
+                if (res.ok || (res.body != null && res.body.optBoolean("ignored"))) {
+                    store.markEngUploaded(r.rev);
+                    sent++;
+                } else {
+                    break;   // 网络断了就别硬刷，下次再说
+                }
+            }
+            final int n = sent;
+            if (n > 0) act.runOnUiThread(() ->
+                    android.widget.Toast.makeText(act, "已上传 " + n + " 轮成绩",
+                            android.widget.Toast.LENGTH_SHORT).show());
+        }).start();
     }
 
     // ── 错题入库 ──────────────────────────────────────────

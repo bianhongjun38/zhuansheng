@@ -1,0 +1,466 @@
+{
+ "meta": {
+  "generated": "2026-10-27",
+  "version": 1
+ },
+ "adverbs": [
+  {
+   "id": "exceedingly",
+   "en": "exceedingly",
+   "cn": "极其",
+   "cat": "attack",
+   "desc": "本回合下一张牌伤害 ×2，但本回合不能再出牌",
+   "fx": "nextCardX2_single"
+  },
+  {
+   "id": "particularly",
+   "en": "particularly",
+   "cn": "特别",
+   "cat": "attack",
+   "desc": "本回合第一张牌伤害 ×2.5，之后所有牌伤害 −50%",
+   "fx": "firstX2_5_restHalf"
+  },
+  {
+   "id": "increasingly",
+   "en": "increasingly",
+   "cn": "越来越",
+   "cat": "attack",
+   "desc": "本回合每再出一张牌，伤害 +30%，但每出一张自损 5 血",
+   "fx": "ramp30_hp5"
+  },
+  {
+   "id": "virtually",
+   "en": "virtually",
+   "cn": "几乎",
+   "cat": "attack",
+   "desc": "复制本回合上一张牌的效果",
+   "fx": "copyLast"
+  },
+  {
+   "id": "practically",
+   "en": "practically",
+   "cn": "实际上",
+   "cat": "attack",
+   "desc": "本回合只能出一张牌，但那张伤害 ×3",
+   "fx": "singleX3"
+  },
+  {
+   "id": "basically",
+   "en": "basically",
+   "cn": "基本上",
+   "cat": "attack",
+   "desc": "本回合所有牌伤害固定为 12",
+   "fx": "allFixed12"
+  },
+  {
+   "id": "indeed",
+   "en": "indeed",
+   "cn": "确实",
+   "cat": "attack",
+   "desc": "本回合必定暴击（×2），但敌人充能 +1",
+   "fx": "guaranteedCrit_chargeUp1"
+  },
+  {
+   "id": "somehow",
+   "en": "somehow",
+   "cn": "不知怎么",
+   "cat": "attack",
+   "desc": "50% 概率本回合伤害 ×4，50% 概率 ×0",
+   "fx": "gamble4or0"
+  },
+  {
+   "id": "altogether",
+   "en": "altogether",
+   "cn": "总共",
+   "cat": "attack",
+   "desc": "弃掉全部手牌，每弃一张本回合伤害 +8",
+   "fx": "discardAll_plus8"
+  },
+  {
+   "id": "exclusively",
+   "en": "exclusively",
+   "cn": "专门",
+   "cat": "attack",
+   "desc": "本回合只能出一张牌，那张伤害 ×3（与 practically 同类，取其一）",
+   "fx": "singleX3"
+  },
+  {
+   "id": "quickly",
+   "en": "quickly",
+   "cn": "迅速地",
+   "cat": "tactic",
+   "desc": "敌人充能 −1，但本回合伤害 −30%",
+   "fx": "chargeDown1_dmgDown30"
+  },
+  {
+   "id": "slowly",
+   "en": "slowly",
+   "cn": "缓慢地",
+   "cat": "tactic",
+   "desc": "敌人本回合不充能，但本回合不能攻击",
+   "fx": "noCharge_noAttack"
+  },
+  {
+   "id": "suddenly",
+   "en": "suddenly",
+   "cn": "突然",
+   "cat": "tactic",
+   "desc": "直接造成 20 真实伤害（无视充能），弃 1 张牌",
+   "fx": "true20_discard1"
+  },
+  {
+   "id": "immediately",
+   "en": "immediately",
+   "cn": "立即",
+   "cat": "tactic",
+   "desc": "跳过敌人本次充能攻击，但敌人下次充能 +1",
+   "fx": "skipCharge_chargeUp1"
+  },
+  {
+   "id": "gradually",
+   "en": "gradually",
+   "cn": "逐渐",
+   "cat": "tactic",
+   "desc": "本场战斗每回合伤害 +2，可叠加",
+   "fx": "rampPerTurn2"
+  },
+  {
+   "id": "deliberately",
+   "en": "deliberately",
+   "cn": "故意地",
+   "cat": "tactic",
+   "desc": "跳过本回合，下回合伤害 ×2",
+   "fx": "skipTurn_nextX2"
+  },
+  {
+   "id": "naturally",
+   "en": "naturally",
+   "cn": "自然地",
+   "cat": "tactic",
+   "desc": "本回合出的牌不消耗（可重复使用），但伤害减半",
+   "fx": "noConsume_halfDmg"
+  },
+  {
+   "id": "normally",
+   "en": "normally",
+   "cn": "通常",
+   "cat": "tactic",
+   "desc": "重置手牌（重抽满），但敌人充能 +1",
+   "fx": "redrawHand_chargeUp1"
+  },
+  {
+   "id": "consequently",
+   "en": "consequently",
+   "cn": "因此",
+   "cat": "logic",
+   "desc": "抽 2 张牌，但本回合伤害 −50%",
+   "fx": "draw2_dmgHalf"
+  },
+  {
+   "id": "accordingly",
+   "en": "accordingly",
+   "cn": "相应地",
+   "cat": "logic",
+   "desc": "本回合每出一张牌，敌人充能 −1，但伤害 −40%",
+   "fx": "chargeDownPerCard_dmg40"
+  },
+  {
+   "id": "hence",
+   "en": "hence",
+   "cn": "因此",
+   "cat": "logic",
+   "desc": "敌人下次伤害 −50%，但本回合不能攻击",
+   "fx": "enemyNextHalf_noAttack"
+  },
+  {
+   "id": "moreover",
+   "en": "moreover",
+   "cn": "而且",
+   "cat": "logic",
+   "desc": "手牌 +3，但本回合这些牌不能用",
+   "fx": "handPlus3_unusable"
+  },
+  {
+   "id": "mercifully",
+   "en": "mercifully",
+   "cn": "仁慈地",
+   "cat": "probability",
+   "desc": "随机：回复 15 血 或 清空敌人充能",
+   "fx": "heal15orClearCharge"
+  },
+  {
+   "id": "fortunately",
+   "en": "fortunately",
+   "cn": "幸运地",
+   "cat": "probability",
+   "desc": "随机获得一张稀有牌",
+   "fx": "randomRareCard"
+  },
+  {
+   "id": "presently",
+   "en": "presently",
+   "cn": "目前",
+   "cat": "probability",
+   "desc": "下回合开始时敌人直接满充能（提前引爆）",
+   "fx": "enemyFullChargeNext"
+  }
+ ],
+ "items": [
+  {
+   "id": "nevertheless",
+   "en": "nevertheless",
+   "cn": "尽管如此",
+   "price": 90,
+   "desc": "本场战斗免疫一次伤害"
+  },
+  {
+   "id": "anyhow",
+   "en": "anyhow",
+   "cn": "无论如何",
+   "price": 90,
+   "desc": "本场战斗手牌上限 +2"
+  },
+  {
+   "id": "anyway",
+   "en": "anyway",
+   "cn": "反正",
+   "price": 80,
+   "desc": "立即抽 3 张牌"
+  },
+  {
+   "id": "further",
+   "en": "further",
+   "cn": "进一步",
+   "price": 100,
+   "desc": "本场战斗每次答对额外造成 5 伤害"
+  }
+ ],
+ "specials": [
+  {
+   "id": "crucial",
+   "cn": "至关重要的",
+   "effect": "同义连锁伤害 +25%",
+   "tier": "elite"
+  },
+  {
+   "id": "essential",
+   "cn": "必不可少的",
+   "effect": "每场战斗开始 +10 血",
+   "tier": "elite"
+  },
+  {
+   "id": "fundamental",
+   "cn": "根本的",
+   "effect": "放宽同类连锁限制（任意同类即可连）",
+   "tier": "elite"
+  },
+  {
+   "id": "ultimate",
+   "cn": "最终的",
+   "effect": "每层可用一次：本回合伤害 ×3",
+   "tier": "elite"
+  },
+  {
+   "id": "supreme",
+   "cn": "至高的",
+   "effect": "最大生命 +20",
+   "tier": "elite"
+  },
+  {
+   "id": "inevitable",
+   "cn": "不可避免的",
+   "effect": "敌人充能永远 +1（更快攻击，但更可预测）",
+   "tier": "elite"
+  },
+  {
+   "id": "indispensable",
+   "cn": "不可或缺的",
+   "effect": "留牌上限 2 → 3",
+   "tier": "elite"
+  },
+  {
+   "id": "permanent",
+   "cn": "永久的",
+   "effect": "篝火回复量 +50%",
+   "tier": "elite"
+  },
+  {
+   "id": "thorough",
+   "cn": "彻底的",
+   "effect": "副词消耗减半",
+   "tier": "elite"
+  },
+  {
+   "id": "critical",
+   "cn": "关键的",
+   "effect": "暴击率 +20%",
+   "tier": "elite"
+  },
+  {
+   "id": "radical",
+   "cn": "根本的",
+   "effect": "每回合多抽 1 张",
+   "tier": "elite"
+  },
+  {
+   "id": "elementary",
+   "cn": "基本的",
+   "effect": "每场战斗前 3 回合伤害 ×1.5",
+   "tier": "elite"
+  },
+  {
+   "id": "marvelous",
+   "cn": "非凡的",
+   "effect": "每场战斗可复活一次",
+   "tier": "elite",
+   "cost": "极高"
+  },
+  {
+   "id": "literal",
+   "cn": "字面的",
+   "effect": "无视一切修饰（副词/特殊词全部失效，纯原始数值）",
+   "tier": "elite"
+  },
+  {
+   "id": "premier",
+   "cn": "首要的",
+   "effect": "商店价格 −30%",
+   "tier": "elite"
+  }
+ ],
+ "enemies": [
+  {
+   "id": "mists",
+   "name": "迷雾怪",
+   "nameEn": "The Mists",
+   "hp": 60,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob1",
+   "sprite": "mists"
+  },
+  {
+   "id": "bramble",
+   "name": "荆棘怪",
+   "nameEn": "The Bramble",
+   "hp": 90,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob2",
+   "sprite": "bramble"
+  },
+  {
+   "id": "devourer",
+   "name": "词汇吞噬者",
+   "nameEn": "The Devourer",
+   "hp": 130,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob3",
+   "sprite": "devourer"
+  },
+  {
+   "id": "echo",
+   "name": "回声傀儡",
+   "nameEn": "The Echo",
+   "hp": 60,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob1",
+   "sprite": "echo"
+  },
+  {
+   "id": "knight",
+   "name": "锈蚀骑士",
+   "nameEn": "The Rusted Knight",
+   "hp": 90,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob2",
+   "sprite": "knight"
+  },
+  {
+   "id": "weaver",
+   "name": "语序织者",
+   "nameEn": "The Weaver",
+   "hp": 130,
+   "atk": 8,
+   "charge": 1,
+   "tier": "mob3",
+   "sprite": "weaver"
+  },
+  {
+   "id": "colossus",
+   "name": "词根巨像",
+   "nameEn": "The Colossus",
+   "hp": 130,
+   "atk": 9,
+   "charge": 2,
+   "tier": "elite",
+   "sprite": "colossus"
+  },
+  {
+   "id": "judge",
+   "name": "无声判官",
+   "nameEn": "The Silent Judge",
+   "hp": 130,
+   "atk": 9,
+   "charge": 2,
+   "tier": "elite",
+   "sprite": "judge"
+  },
+  {
+   "id": "primordia",
+   "name": "前语言",
+   "nameEn": "Primordia",
+   "hp": 150,
+   "atk": 10,
+   "charge": 2,
+   "tier": "boss",
+   "sprite": "primordia"
+  },
+  {
+   "id": "syntaxwall",
+   "name": "语法之壁",
+   "nameEn": "The Syntax Wall",
+   "hp": 150,
+   "atk": 10,
+   "charge": 2,
+   "tier": "boss",
+   "sprite": "syntaxwall"
+  }
+ ],
+ "balance": {
+  "playerHp": 80,
+  "handSize": 5,
+  "baseDamage": 12,
+  "chainMultiplier": 1.5,
+  "keepLimit": 2,
+  "energyPerTurn": 3,
+  "critMultiplier": 2.0,
+  "wrongChargeUp": 2,
+  "wrongDamageMultiplier": 2.0,
+  "economy": {
+   "battleMin": 15,
+   "battleMax": 25,
+   "elite": 50,
+   "chestMin": 20,
+   "chestMax": 60,
+   "cardPrice": 60,
+   "itemPrice": 90
+  }
+ },
+ "map": {
+  "routes": 4,
+  "nodesMin": 10,
+  "nodesMax": 12,
+  "weights": {
+   "battle": 50,
+   "shop": 12,
+   "campfire": 15,
+   "chest": 10,
+   "elite": 13
+  },
+  "rule": "至少一条路线没有精英，但商店更少"
+ }
+}
