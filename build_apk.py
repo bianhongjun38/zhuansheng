@@ -86,6 +86,12 @@ APKSIGNER_JAR = os.path.join(BT, "lib", "apksigner.jar") if BT else ""
 # 编译 lambda 必需（javac 要能找到 LambdaMetafactory.metafactory）
 LAMBDA_STUBS = os.path.join(BT, "core-lambda-stubs.jar") if BT else ""
 
+# verify.py 用到的三个工具（Windows 带扩展名，Linux 不带）
+EXE_AAPT = "aapt" + _EXE
+EXE_DEXDUMP = "dexdump" + _EXE
+# apksigner 在 Windows 上是 .bat 包装，Linux 上直接是 shell 脚本
+EXE_APKSIGNER = "apksigner.bat" if os.name == "nt" else "apksigner"
+
 PROJ = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(PROJ, "src")
 RES = os.path.join(PROJ, "res")
