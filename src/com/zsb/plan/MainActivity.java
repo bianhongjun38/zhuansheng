@@ -51,10 +51,13 @@ public class MainActivity extends Activity {
     static final int C_ORANGE  = 0xFFE0873F;
     static final int C_PINK    = 0xFFE89A9D;
     static final int C_GREEN   = 0xFF4BBF8A;
+    static final int C_AMBER   = 0xFFE0A94A;
 
     private Plan plan;
     private Store store;
     private BookView book;
+    private QuizView quizView;
+    private WordView wordView;
     private Update updater;
 
     private LinearLayout content;
@@ -78,6 +81,8 @@ public class MainActivity extends Activity {
         plan = Plan.parse(readAsset("plan.json"));
         store = new Store(this);
         book = new BookView(this);
+        quizView = new QuizView(this, store);
+        wordView = new WordView(this);
         idx = store.todayIndex(plan);
 
         Window w = getWindow();
@@ -221,16 +226,63 @@ public class MainActivity extends Activity {
             content.addView(card);
         }
 
-        // 词汇
-        if (d.vocab != null) {
-            LinearLayout card = card("词汇", null);
-            TextView tv = new TextView(this);
-            tv.setText(d.vocab);
-            tv.setTextColor(C_FG2);
-            tv.setTextSize(13);
-            card.addView(tv);
-            card.addView(checkRow(d.date, "V-" + d.date, "本日词汇已过一遍"));
-            content.addView(card);
+        // 词汇 —— 英语这一科在 App 里就是这块
+        // 用户原话："英语只需要单词就行了"
+        // 原来这里只把 json 片段当文字打印出来（{"from":20,"to":40}），
+        // 既不能背也不能点。现在做成真入口。
+        if (d.vocabFrom >= 0 && d.vocabTo > d.vocabFrom) {
+            final int vf = d.vocabFrom, vt = d.vocabTo;
+            int nNew = vt - vf;
+
+            LinearLayout vcard = card("英语 · 背单词", null);
+
+            TextView big = new TextView(this);
+            big.setText("今天 " + nNew + " 个新词");
+            big.setTextColor(C_FG);
+            big.setTextSize(17);
+            big.setTypeface(Typeface.DEFAULT_BOLD);
+            vcard.addView(big);
+
+            TextView sub = new TextView(this);
+            sub.setText("第 " + (vf + 1) + " – " + vt + " 个"
+                    + (d.vocabReviewJson != null ? " · 另有旧词要复习" : ""));
+            sub.setTextColor(C_FG3);
+            sub.setTextSize(12);
+            sub.setPadding(0, dp(3), 0, 0);
+            vcard.addView(sub);
+
+            // 主按钮：背今天的词
+            TextView go = new TextView(this);
+            go.setText("开始背这 " + nNew + " 个 →");
+            go.setTextColor(C_TEAL);
+            go.setTextSize(13.5f);
+            go.setTypeface(Typeface.DEFAULT_BOLD);
+            go.setPadding(0, dp(10), 0, dp(2));
+            go.setOnClickListener(v -> wordView.open(vf, vt, "今天的单词"));
+            vcard.addView(go);
+
+            // 复习按钮：只在有旧词时出现
+            final String rvJson = d.vocabReviewJson;
+            if (rvJson != null) {
+                TextView rev = new TextView(this);
+                rev.setText("复习旧词 →");
+                rev.setTextColor(C_AMBER);
+                rev.setTextSize(13.5f);
+                rev.setTypeface(Typeface.DEFAULT_BOLD);
+                rev.setPadding(0, dp(6), 0, dp(2));
+                rev.setOnClickListener(v -> {
+                    try {
+                        wordView.openReview(new org.json.JSONArray(rvJson), "复习旧词");
+                    } catch (Exception e) {
+                        android.widget.Toast.makeText(MainActivity.this,
+                                "复习数据读取失败", android.widget.Toast.LENGTH_SHORT).show();
+                    }
+                });
+                vcard.addView(rev);
+            }
+
+            vcard.addView(checkRow(d.date, "V-" + d.date, "今天的单词过完了"));
+            content.addView(vcard);
         }
 
         // 推进闸门
@@ -291,6 +343,14 @@ public class MainActivity extends Activity {
     static class BookRef {
         String id, title, shortName;
         int page;
+    }
+
+    /** 学科代码 → 中文名。题库按钮和页面标题都用它。 */
+    static String subjectName(String s) {
+        if ("math".equals(s)) return "数学";
+        if ("comp".equals(s)) return "计算机";
+        if ("eng".equals(s)) return "英语";
+        return s == null ? "" : s;
     }
 
     private BookRef bookRefOf(Plan.Task t) {
@@ -425,6 +485,31 @@ public class MainActivity extends Activity {
             open.setPadding(0, dp(7), 0, dp(1));
             open.setOnClickListener(v -> book.open(ref.id, ref.title, ref.page));
             col.addView(open);
+        }
+
+        // 做题 —— 任务本身带题库时才有这个按钮
+        // 用户原话："根本没有题目"：光写"练习册 p5-6"没法在手机上做
+        if (!TextUtils.isEmpty(t.bankSubject)) {
+            TextView quiz = new TextView(this);
+            int n = t.bankLimit > 0 ? t.bankLimit : 10;
+            String label = t.bankYear > 0
+                    ? ("✎ 做 " + t.bankYear + " 年真题")
+                    : ("✎ 做题（" + n + " 道）");
+            quiz.setText(label);
+            quiz.setTextColor(C_AMBER);
+            quiz.setTextSize(12.5f);
+            quiz.setTypeface(Typeface.DEFAULT_BOLD);
+            quiz.setPadding(0, dp(6), 0, dp(1));
+            quiz.setOnClickListener(v -> {
+                if (t.bankYear > 0) {
+                    quizView.openYear(t.bankSubject, t.bankYear,
+                            t.bankYear + " 年真题");
+                } else {
+                    quizView.openSubject(t.bankSubject, n, false,
+                            subjectName(t.bankSubject) + " 练习");
+                }
+            });
+            col.addView(quiz);
         }
 
         row.addView(col);

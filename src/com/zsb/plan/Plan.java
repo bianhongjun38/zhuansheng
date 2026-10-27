@@ -60,6 +60,17 @@ public class Plan {
          * 保证：① 同一份 plan.json 无论解析多少次都一致 ② 同一天内绝不重复
          */
         public String id = "";
+
+        /**
+         * 题库落点。不为 null 时说明这个任务有真题目可做。
+         * 目前用到两个键：
+         *   subject  学科 math|comp|eng
+         *   limit    最多抽几道
+         *   year     指定年份（真题任务）
+         */
+        public String bankSubject = "";
+        public int bankLimit;
+        public int bankYear;
     }
 
     public static class Review {
@@ -79,6 +90,12 @@ public class Plan {
         public String reviewHint = "";
         public int daysToExam;
         public String vocab;              // 原始 JSON 片段，可能为 null
+        // 结构化的词汇区间（v1.2 起）：
+        //   vocabFrom..vocabTo  = 当天新词
+        //   vocabReview         = 该复习的旧区间 [[from,to], ...]
+        public int vocabFrom = -1;
+        public int vocabTo = -1;
+        public String vocabReviewJson;    // 原始 JSON 数组字符串
         public List<Task> tasks = new ArrayList<>();
         public List<Review> reviews = new ArrayList<>();
     }
@@ -146,6 +163,16 @@ public class Plan {
                     d.reviewHint = o.optString("reviewHint", "");
                     d.daysToExam = o.optInt("daysToExam");
                     d.vocab = o.isNull("vocab") ? null : String.valueOf(o.opt("vocab"));
+                    // 结构化词汇区间
+                    JSONObject vo = o.optJSONObject("vocab");
+                    if (vo != null) {
+                        d.vocabFrom = vo.optInt("from", -1);
+                        d.vocabTo = vo.optInt("to", -1);
+                    }
+                    JSONArray vr = o.optJSONArray("vocabReview");
+                    if (vr != null && vr.length() > 0) {
+                        d.vocabReviewJson = vr.toString();
+                    }
 
                     JSONArray ts = o.optJSONArray("tasks");
                     if (ts != null) {
@@ -163,6 +190,13 @@ public class Plan {
                             k.min = t.optInt("min");
                             k.pdfStart = t.isNull("pdfStart") ? null : t.optInt("pdfStart");
                             k.pdfEnd = t.isNull("pdfEnd") ? null : t.optInt("pdfEnd");
+                            // 题库落点（可为 null：不是做题类任务）
+                            JSONObject bk = t.optJSONObject("bank");
+                            if (bk != null) {
+                                k.bankSubject = bk.optString("subject", k.subject);
+                                k.bankLimit = bk.optInt("limit", 10);
+                                k.bankYear = bk.optInt("year", 0);
+                            }
                             k.id = assignId(k, usedIds, d.date);
                             d.tasks.add(k);
                         }

@@ -189,7 +189,12 @@ public class StoreTest {
         ok("走完后剩余 = 0", walk.daysLeft(plan) == 0, walk.daysLeft(plan) + " 天");
         ok("走完后索引停在最后一天", walk.currentIndex(plan) == 145,
                 "idx=" + walk.currentIndex(plan));
-        ok("走完后勾选数 = 792", walk.doneCount() == 792, walk.doneCount() + " 条");
+        // 期望勾选数不能写死：计划条目会随内容调整（v1.2 去掉英语语法章节后
+        // 从 792 变 781）。按 dayTaskIds 实际算一遍才是真断言。
+        int expectDone = 0;
+        for (Plan.Day dd : plan.days) expectDone += Plan.dayTaskIds(dd).size();
+        ok("走完后勾选数 = " + expectDone, walk.doneCount() == expectDone,
+                walk.doneCount() + " 条");
         String full = walk.serialize();
         ok("全程状态可序列化", full != null && full.length() > 1000,
                 full == null ? "null" : full.length() + " 字符");

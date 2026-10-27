@@ -9,6 +9,9 @@ import android.database.sqlite.SQLiteOpenHelper;
 import android.os.Handler;
 import android.os.Looper;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 持久化层 —— 数据库版。
  *
@@ -26,7 +29,7 @@ import android.os.Looper;
 public class Store extends StateLogic {
 
     private static final String DB = "zsb.db";
-    private static final int DB_VER = 1;
+    private static final int DB_VER = 2;
 
     private final Db db;
     private final SharedPreferences legacy;
@@ -79,17 +82,30 @@ public class Store extends StateLogic {
             d.execSQL("CREATE TABLE IF NOT EXISTS hard ("
                     + "i TEXT NOT NULL PRIMARY KEY, lv INTEGER NOT NULL DEFAULT 0)");
 
+            // 错题本：做题做错的题（v2 新增）
+            // q 存题干前 80 字做摘要，避免依赖题库版本
+            d.execSQL("CREATE TABLE IF NOT EXISTS wrong ("
+                    + "i TEXT NOT NULL PRIMARY KEY, s TEXT, q TEXT,"
+                    + " ts INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 1)");
+
             // 关键值（schema 版本、最后同步时间等）
             d.execSQL("CREATE TABLE IF NOT EXISTS kv ("
                     + "k TEXT NOT NULL PRIMARY KEY, v TEXT)");
 
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_done_d ON done(d)");
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_timing_d ON timing(d)");
+            d.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_s ON wrong(s)");
         }
 
         @Override
         public void onUpgrade(SQLiteDatabase d, int o, int n) {
-            // 只有加表才需要迁移；现在是第 1 版，没有历史包袱
+            // v1 → v2：加错题本表。只加表，不动已有进度。
+            if (o < 2) {
+                d.execSQL("CREATE TABLE IF NOT EXISTS wrong ("
+                        + "i TEXT NOT NULL PRIMARY KEY, s TEXT, q TEXT,"
+                        + " ts INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 1)");
+                d.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_s ON wrong(s)");
+            }
         }
     }
 
@@ -207,6 +223,61 @@ public class Store extends StateLogic {
             cv.put("lv", lv);
             w.insertWithOnConflict("hard", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
         }
+    }
+
+    // ── 错题本 ────────────────────────────────────────────
+    /**
+     * 记录一道做错的题。同一题重复做错只累加次数，不重复占行。
+     * 只存题号 + 学科 + 题干摘要，不存答案 —— 题库更新后仍能对上。
+     */
+    public void addWrong(String qid, String subject, String stem, String extra) {
+        if (qid == null || qid.isEmpty()) return;
+        String s = stem == null ? "" : stem;
+        if (s.length() > 80) s = s.substring(0, 80);
+        SQLiteDatabase w = db.getWritableDatabase();
+        // 先查是否已存在，存在就 n+1
+        Cursor c = w.rawQuery("SELECT n FROM wrong WHERE i=?", new String[]{qid});
+        int n = 0;
+        while (c.moveToNext()) n = c.getInt(0);
+        c.close();
+        ContentValues cv = new ContentValues();
+        cv.put("i", qid);
+        cv.put("s", subject == null ? "" : subject);
+        cv.put("q", s);
+        cv.put("ts", System.currentTimeMillis());
+        cv.put("n", n + 1);
+        w.insertWithOnConflict("wrong", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /** 取某科错题 id 列表；subject 传 null 或空串则取全部。 */
+    public List<String> wrongIds(String subject) {
+        List<String> out = new ArrayList<>();
+        SQLiteDatabase r = db.getReadableDatabase();
+        Cursor c;
+        if (subject == null || subject.isEmpty()) {
+            c = r.rawQuery("SELECT i FROM wrong ORDER BY ts DESC", null);
+        } else {
+            c = r.rawQuery("SELECT i FROM wrong WHERE s=? ORDER BY ts DESC",
+                    new String[]{subject});
+        }
+        while (c.moveToNext()) out.add(c.getString(0));
+        c.close();
+        return out;
+    }
+
+    /** 错题本总数。 */
+    public int wrongCount() {
+        SQLiteDatabase r = db.getReadableDatabase();
+        Cursor c = r.rawQuery("SELECT COUNT(*) FROM wrong", null);
+        int n = 0;
+        while (c.moveToNext()) n = c.getInt(0);
+        c.close();
+        return n;
+    }
+
+    /** 答对后从错题本移除。 */
+    public void removeWrong(String qid) {
+        db.getWritableDatabase().delete("wrong", "i=?", new String[]{qid});
     }
 
     @Override
