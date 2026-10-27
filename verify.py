@@ -101,33 +101,82 @@ def main():
                    os.path.join(SRC, "Plan.java"),
                    os.path.join(SRC, "StateLogic.java"),
                    os.path.join(SRC, "ProgressCode.java"),
+                   # 以下四个是数学/英语引擎的全部纯逻辑。
+                   # 它们不 import android，所以能在电脑上被逐条断言，
+                   # 而不是「装到手机上点一点看看」。
+                   os.path.join(SRC, "Expr.java"),
+                   os.path.join(SRC, "PlotGeom.java"),
+                   os.path.join(SRC, "DerivTable.java"),
+                   os.path.join(SRC, "FormulaLayout.java"),
+                   os.path.join(SRC, "EngTrain.java"),
+                   os.path.join(SRC, "ExprInput.java"),
+                   os.path.join(SRC, "Linalg.java"),
                    os.path.join(TEST, "LogicTest.java"),
                    os.path.join(TEST, "StoreTest.java"),
                    os.path.join(TEST, "CodeTest.java"),
-                   os.path.join(TEST, "VerTest.java")])
+                   os.path.join(TEST, "VerTest.java"),
+                   os.path.join(TEST, "MathTest.java"),
+                   os.path.join(TEST, "EngTrainTest.java"),
+                   os.path.join(TEST, "FormulaAudit.java"),
+                   os.path.join(TEST, "PlotAudit.java"),
+                   os.path.join(TEST, "ExprInputTest.java"),
+                   os.path.join(TEST, "KeypadAudit.java"),
+                   os.path.join(TEST, "LinalgTest.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
-    # ── 2. 跑四套测试 ───────────────────────────────────
-    for cls, label in (("com.zsb.plan.LogicTest", "计划解析与推进逻辑"),
-                       ("com.zsb.plan.StoreTest", "状态存储与导入导出"),
-                       ("com.zsb.plan.CodeTest", "进度码编解码"),
-                       ("com.zsb.plan.VerTest", "版本比较")):
+    # ── 2. 跑七套测试 ───────────────────────────────────
+    # 第 3 个元素是该测试自己的命令行参数：
+    #   · 大部分测试要 plan.json 路径；
+    #   · FormulaAudit 要的是「PNG 输出目录」，不能塞 plan.json，
+    #     否则它会把 PNG 写成 assets/plan.json 之外的怪文件名。
+    audit_dir = os.path.join(PROJ, "build", "audit")
+    os.makedirs(audit_dir, exist_ok=True)
+    test_table = (
+        ("com.zsb.plan.LogicTest", "计划解析与推进逻辑", ASSETS_PLAN),
+        ("com.zsb.plan.StoreTest", "状态存储与导入导出", ASSETS_PLAN),
+        ("com.zsb.plan.CodeTest", "进度码编解码", ASSETS_PLAN),
+        ("com.zsb.plan.VerTest", "版本比较", None),
+        ("com.zsb.plan.MathTest", "数学引擎（表达式/求导/图像几何）", None),
+        ("com.zsb.plan.EngTrainTest", "英语引擎（挖空/干扰项/判分）", None),
+        ("com.zsb.plan.FormulaAudit", "公式排版（含 PNG 视觉证据）", audit_dir),
+        ("com.zsb.plan.PlotAudit", "函数图像（分段/渐近线，含 PNG）", audit_dir),
+        ("com.zsb.plan.ExprInputTest", "函数输入模板（插入/退格/光标）", None),
+        ("com.zsb.plan.KeypadAudit", "输入面板布局（含 PNG 视觉证据）", audit_dir),
+        ("com.zsb.plan.LinalgTest", "线性代数几何（特征向量/网格，含 PNG）", audit_dir),
+    )
+    for cls, label, extra_arg in test_table:
         print("\n▶ " + label)
-        rc, out = run([JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
-                       "-cp", JSON_JAR + os.pathsep + OUT, cls, ASSETS_PLAN])
+        cmd = [JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
+               "-Djava.awt.headless=true",
+               "-cp", JSON_JAR + os.pathsep + OUT, cls]
+        if extra_arg:
+            cmd.append(extra_arg)
+        rc, out = run(cmd)
         # 从输出里抓「通过 N 项，失败 M 项」
         n_pass = n_fail = None
         for line in out.splitlines():
             if "通过" in line and "失败" in line:
                 import re
+                # 两种词序都认：
+                #   旧测试 "通过 12 项，失败 0 项"
+                #   新测试 "数学引擎：173 项通过，0 项失败"
                 m = re.search(r"通过\s*(\d+)\s*项，失败\s*(\d+)\s*项", line)
+                if not m:
+                    m = re.search(r"(\d+)\s*项通过，\s*(\d+)\s*项失败", line)
                 if m:
                     n_pass, n_fail = int(m.group(1)), int(m.group(2))
         if n_pass is None:
             check(label, False, "没拿到测试统计，输出尾部：" + out[-300:])
         else:
             check(label, n_fail == 0, "%d 项通过 / %d 项失败" % (n_pass, n_fail))
+            # 双重保险：统计行说 0 失败但进程退出码非 0，同样算失败
+            if n_fail == 0 and rc != 0:
+                check(label + "（退出码）", False, "统计为 0 失败但退出码 %d" % rc)
+            # 打印失败明细，避免"通过 N 项"掩盖内部异常
+            for line in out.splitlines():
+                if line.strip().startswith("✗"):
+                    print("   " + line.strip())
 
     # ── 2b. 源码一致性：VerTest 里的解析函数必须与 Update 同源 ──
     # VerTest 复制了一份 parseVer 以便在桌面测试（Update 依赖 Activity 无法直接跑）。
@@ -243,8 +292,90 @@ def main():
               "只回了 %d 字符，路径可能含非 ASCII（%s）" % (len(out), dex_path))
     else:
         check("dexdump 能读出内容", True, "%d 字符" % len(out))
-        for cls in ("MainActivity", "Plan", "StateLogic", "Store"):
+        for cls in ("MainActivity", "Plan", "StateLogic", "Store",
+                    # 数学工具链
+                    "Expr", "PlotGeom", "DerivTable", "FormulaLayout",
+                    "FormulaView", "PlotView", "MathView", "ExprInput",
+                    "Linalg", "LinalgView",
+                    # 英语训练链
+                    "EngTrain", "EngView"):
             check("dex 含 " + cls, ("com/zsb/plan/" + cls + ";") in out)
+
+    # ── 3b. 数学题库必须已移除 ───────────────────────────
+    # 用户明确要求「把数学那部分不要了」。如果哪天有人把它加回来，
+    # 今天删题库、换工具的决定就被悄悄推翻了 —— 这条断言专门盯这个。
+    check("数学题库已移除", "assets/bank/math.json" not in names,
+          "" if "assets/bank/math.json" not in names
+          else "assets/bank/math.json 又出现了")
+    check("计算机题库仍在", "assets/bank/comp.json" in names)
+    check("英语题库仍在", "assets/bank/eng.json" in names)
+    check("词库仍在", "assets/words.json" in names)
+    _kx = [n for n in names if n.startswith("assets/katex")]
+    check("KaTeX 资源已移除", not _kx,
+          "" if not _kx else "又出现了 %d 个 katex 文件（数学题不排公式了，"
+          "这套 310KB 资源没用）" % len(_kx))
+
+    # 方法级行为由 MathTest / EngTrainTest / FormulaAudit / PlotAudit /
+    # ExprInputTest 在桌面逐条验证，这里只确认类真的进了 dex（上面已 check）。
+
+    # ── 3d. 输入模板的按键表必须与引擎一致 ────────────────
+    def _probe_batch(exprs):
+        """一次性把一批表达式交给引擎验，返回解析失败的列表。
+        逐条起 JVM 要 20×200ms，批量只要一次。"""
+        if not exprs:
+            return []
+        rc2, out2 = run([JAVA, "-Dfile.encoding=UTF-8", "-cp",
+                         JSON_JAR + os.pathsep + OUT,
+                         "com.zsb.plan.ExprInputTest", "--probe"] + exprs)
+        bad = []
+        for ln in out2.splitlines():
+            if ln.startswith("BAD "):
+                bad.append(ln[4:].strip())
+        return bad
+
+
+    # MathView 的按键表在 ExprInput.KEYS 里。如果哪天有人往 KEYS 加了个
+    # 引擎不认识的键（比如加了 "log" 但 Expr 只认 "lg"），
+    # 用户一按就报错，而单元测试发现不了（测试只验形状不验语义）。
+    try:
+        ei = open(os.path.join(SRC, "ExprInput.java"), encoding="utf-8").read()
+        # 抓 TEMPLATES 数组里的字符串字面量
+        import re as _re
+        m = _re.search(r"TEMPLATES\s*=\s*\{(.*?)\}\s*;", ei, _re.S)
+        tmpl = _re.findall(r'"([^"]*)"', m.group(1)) if m else []
+        check("输入模板非空", len(tmpl) >= 12, "%d 个" % len(tmpl))
+        # 按键表里的函数名必须都在引擎的白名单里
+        mk = _re.search(r"KEYS\s*=\s*\{(.*?)\}\s*;", ei, _re.S)
+        frags = _re.findall(r'"([^"]*)"', mk.group(1)) if mk else []
+        # 只取插入片段（奇数下标），去掉 @ 与 \b
+        ins = [frags[i] for i in range(1, len(frags), 2)]
+        # 按键是「插入片段」，不是独立表达式 —— "^"、"("、"+" 单放在一起
+        # 本来就不可解析。要验的是它插进一个真实表达式里能被接住。
+        CONTEXT = {
+            "^": "x^2", "(": "(x)", ")": "(x)", "+": "x+1", "-": "x-1",
+            "*": "x*2", "/": "x/2", "*2": "x*2",
+        }
+        probes = []
+        for frag in ins:
+            # Java 源码里写的是 "\b"（两个字符：反斜杠 + b），
+            # 正则抓到的是反斜杠+b 而不是真正的退格符。两种都跳过。
+            if frag in ("\b", "", "\\b") or frag.strip("\\") == "b":
+                continue
+            probe = frag.replace("@", "x")
+            probe = probe.replace("()", "(x)")
+            probe = CONTEXT.get(probe, CONTEXT.get(probe.rstrip("0123456789"), probe))
+            # 仍不构成完整表达式的，包一层 x+ 兜底
+            if probe in ("x^2", "(x)", "x+1", "x-1", "x*2", "x/2"):
+                pass
+            elif probe.startswith(("^", ")", "+", "*", "/")):
+                probe = "x" + probe
+            probes.append(probe)
+        probes += list(tmpl)
+        bad_keys = _probe_batch(probes)
+        check("按键表与模板都能被引擎解析", not bad_keys,
+              "" if not bad_keys else "无法解析: %s" % bad_keys[:4])
+    except Exception as e:
+        check("输入模板与引擎一致性", False, "检查本身出错：%s" % e)
 
     # 图标五档齐全
     icons = [n for n in names if "ic_launcher" in n]

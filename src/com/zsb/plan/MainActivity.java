@@ -58,6 +58,9 @@ public class MainActivity extends Activity {
     private BookView book;
     private QuizView quizView;
     private WordView wordView;
+    private MathView mathView;
+    private EngView engView;
+    private LinalgView linalgView;
     private Update updater;
 
     private LinearLayout content;
@@ -83,6 +86,9 @@ public class MainActivity extends Activity {
         book = new BookView(this);
         quizView = new QuizView(this, store);
         wordView = new WordView(this);
+        mathView = new MathView(this);
+        engView = new EngView(this, store);
+        linalgView = new LinalgView(this);
         idx = store.todayIndex(plan);
 
         Window w = getWindow();
@@ -261,6 +267,17 @@ public class MainActivity extends Activity {
             go.setOnClickListener(v -> wordView.open(vf, vt, "今天的单词"));
             vcard.addView(go);
 
+            // 练一练：翻卡只测"见过没"，测不出版面真实能力。
+            // 五种题型分别查读、写、语境、词性 —— 这是"丰富教法"的落点。
+            TextView drill = new TextView(this);
+            drill.setText("✎ 练一练这 " + nNew + " 个词（五种题型）→");
+            drill.setTextColor(C_PURPLE);
+            drill.setTextSize(13.5f);
+            drill.setTypeface(Typeface.DEFAULT_BOLD);
+            drill.setPadding(0, dp(9), 0, dp(2));
+            drill.setOnClickListener(v -> engView.open(vf, vt, "练今天这批词"));
+            vcard.addView(drill);
+
             // 复习按钮：只在有旧词时出现
             final String rvJson = d.vocabReviewJson;
             if (rvJson != null) {
@@ -279,6 +296,34 @@ public class MainActivity extends Activity {
                     }
                 });
                 vcard.addView(rev);
+
+                TextView drillOld = new TextView(this);
+                drillOld.setText("✎ 练这批旧词 →");
+                drillOld.setTextColor(C_PURPLE);
+                drillOld.setTextSize(13.5f);
+                drillOld.setTypeface(Typeface.DEFAULT_BOLD);
+                drillOld.setPadding(0, dp(6), 0, dp(2));
+                drillOld.setOnClickListener(v -> {
+                    try {
+                        org.json.JSONArray arr = new org.json.JSONArray(rvJson);
+                        List<String> ws = new ArrayList<String>();
+                        for (int i = 0; i < arr.length(); i++) {
+                            org.json.JSONObject o = arr.optJSONObject(i);
+                            if (o != null) {
+                                String w = o.optString("w", "");
+                                if (!w.isEmpty()) ws.add(w);
+                            }
+                        }
+                        if (ws.isEmpty()) {
+                            engView.open();
+                        } else {
+                            engView.openList(ws, "练旧词");
+                        }
+                    } catch (Exception e) {
+                        engView.open();
+                    }
+                });
+                vcard.addView(drillOld);
             }
 
             vcard.addView(checkRow(d.date, "V-" + d.date, "今天的单词过完了"));
@@ -492,16 +537,27 @@ public class MainActivity extends Activity {
         if (!TextUtils.isEmpty(t.bankSubject)) {
             TextView quiz = new TextView(this);
             int n = t.bankLimit > 0 ? t.bankLimit : 10;
-            String label = t.bankYear > 0
-                    ? ("✎ 做 " + t.bankYear + " 年真题")
-                    : ("✎ 做题（" + n + " 道）");
+
+            // 数学不走题库：用户明确说数学题库不要了，改成工具。
+            // 题库测的是"记没记住"，而数学考的是"会不会推"。
+            boolean isMath = "math".equals(t.bankSubject);
+            String label;
+            if (isMath) {
+                label = "📈 函数图像与求导";
+            } else if (t.bankYear > 0) {
+                label = "✎ 做 " + t.bankYear + " 年真题";
+            } else {
+                label = "✎ 做题（" + n + " 道）";
+            }
             quiz.setText(label);
             quiz.setTextColor(C_AMBER);
             quiz.setTextSize(12.5f);
             quiz.setTypeface(Typeface.DEFAULT_BOLD);
             quiz.setPadding(0, dp(6), 0, dp(1));
             quiz.setOnClickListener(v -> {
-                if (t.bankYear > 0) {
+                if (isMath) {
+                    mathView.open(0);
+                } else if (t.bankYear > 0) {
                     quizView.openYear(t.bankSubject, t.bankYear,
                             t.bankYear + " 年真题");
                 } else {
@@ -510,6 +566,27 @@ public class MainActivity extends Activity {
                 }
             });
             col.addView(quiz);
+
+            // 数学再给一个直达公式表的入口：查公式比做题更常用
+            if (isMath) {
+                TextView tbl = new TextView(this);
+                tbl.setText("📋 求导公式对照表");
+                tbl.setTextColor(C_TEAL);
+                tbl.setTextSize(12.5f);
+                tbl.setTypeface(Typeface.DEFAULT_BOLD);
+                tbl.setPadding(0, dp(4), 0, dp(1));
+                tbl.setOnClickListener(v -> mathView.open(1));
+                col.addView(tbl);
+
+                TextView la = new TextView(this);
+                la.setText("🔄 线性变换（矩阵拉扯平面）");
+                la.setTextColor(C_PURPLE);
+                la.setTextSize(12.5f);
+                la.setTypeface(Typeface.DEFAULT_BOLD);
+                la.setPadding(0, dp(4), 0, dp(1));
+                la.setOnClickListener(v -> linalgView.open());
+                col.addView(la);
+            }
         }
 
         row.addView(col);
@@ -736,7 +813,9 @@ public class MainActivity extends Activity {
 
     private void renderHard() {
         if (store.hard.isEmpty()) {
-            content.addView(hint("错题库是空的。\n\n检索时选「写不出」，那一节就会进来。"));
+            content.addView(hint("错题库是空的。\n\n检索时选「写不出」，那一节就会进来。"
+                    + "\n英语训练答错的单词也会自动进来。"));
+            content.addView(wideBtn("✎ 练英语单词（五种题型）", () -> engView.open()));
             return;
         }
         LinearLayout card = card("错题库 · " + store.hard.size() + " 项",
@@ -750,12 +829,30 @@ public class MainActivity extends Activity {
             row.setPadding(0, dp(9), 0, dp(9));
 
             TextView tv = new TextView(this);
-            String nm = ch != null ? plan.subject(ch.subject).name + " · " + ch.name : id;
+            // 英语错题的 key 是 "eng:单词"，不是章节 id，plan.chapter() 找不到。
+            // 不特判的话这里会把 "eng:apple" 原样打出来，看着像脏数据。
+            boolean isEngWord = id.startsWith("eng:");
+            String nm;
+            if (isEngWord) {
+                nm = "英语 · 单词 " + id.substring(4);
+            } else if (ch != null) {
+                nm = plan.subject(ch.subject).name + " · " + ch.name;
+            } else {
+                nm = id;
+            }
             tv.setText(nm + "    等级 " + (lv == null ? 1 : lv) + " / 3");
             tv.setTextColor(C_FG);
             tv.setTextSize(13.5f);
             tv.setLayoutParams(new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            if (isEngWord) {
+                final String word = id.substring(4);
+                tv.setOnClickListener(v -> {
+                    List<String> one = new ArrayList<String>();
+                    one.add(word);
+                    engView.openList(one, "重练 " + word);
+                });
+            }
             row.addView(tv);
 
             row.addView(smallBtn("降级", () -> {
@@ -848,6 +945,17 @@ public class MainActivity extends Activity {
         c1.addView(statRow("错题库", store.hard.size() + " 项"));
         c1.addView(statRow("考试日", plan.meta.examDate));
         content.addView(c1);
+
+        // 常驻工具入口：数学和英语的能力不该只在某一天的任务里出现。
+        // 数学题库已经删了（用户不要），换成能画图、能查公式表的工具。
+        LinearLayout tools = card("学习工具", "随时可用，不用等到某一天的任务");
+        tools.addView(wideBtn("📈 函数图像（可叠导数曲线、看切线）", () -> mathView.open(0)));
+        tools.addView(wideBtn("📋 求导公式对照表（40 条，点一条就画图）", () -> mathView.open(1)));
+        tools.addView(wideBtn("✍ 求导练习（写答案，程序判等价）", () -> mathView.open(2)));
+        tools.addView(wideBtn("🔤 英语五练（英译中/中译英/拼写/填空/词性）", () -> engView.open()));
+        tools.addView(wideBtn("🔄 线性变换（2×2 矩阵怎么拉扯平面、特征方向）",
+                () -> linalgView.open()));
+        content.addView(tools);
 
         LinearLayout c2 = card("数据管理", "全部数据只存在这台手机上，不上传任何服务器");
         c2.addView(wideBtn("生成进度码", () -> {
