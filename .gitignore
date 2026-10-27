@@ -40,3 +40,7 @@ fontlist.txt
 worker/.wrangler/
 .wrangler/
 pages/*.apk
+
+_ui*.xml
+_*.py
+_shot*.png
