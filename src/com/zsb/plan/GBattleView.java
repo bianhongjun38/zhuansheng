@@ -197,6 +197,11 @@ public class GBattleView extends LinearLayout {
         if (line == null) line = "";
         tvMsg.setText(line + "\n▸ 点这里看完整战报（" + log.size() + " 条）");
 
+        // 必须**先**出题再渲染手牌：cardView 是靠 pendingQ != null 判断
+        // 「现在点牌=作答」的。原来 askQuestion() 放在 renderOptions() 里，
+        // 而 renderOptions() 在 renderHand() 之后才跑 —— 首次渲染时 pendingQ
+        // 还是 null，手牌全都没绑作答事件，玩家点牌毫无反应。
+        ensureQuestion();
         renderHand();
         renderOptions();
 
@@ -269,8 +274,13 @@ public class GBattleView extends LinearLayout {
             box.addView(tip);
         }
 
-        if (clickable && battle.phase == GBattle.PHASE_PLAY) {
-            box.setOnClickListener(v -> beginQuiz(c));
+        if (clickable && pendingQ != null) {
+            // 敌人已经出题：点牌即作答。答对打出这张，答错弃掉这张。
+            box.setOnClickListener(v -> answerCard(c));
+        } else if (clickable && battle.phase == GBattle.PHASE_PLAY && c.isAdverb()) {
+            // 副词是机制牌，不参与词义考核。手牌里全是副词时出不了题（pendingQ
+            // 为 null），这时副词必须还能直接打出去，否则整手牌是点不动的死牌。
+            box.setOnClickListener(v -> resolveAdverb(c));
         } else if (clickable && battle.phase == GBattle.PHASE_KEEP) {
             box.setOnClickListener(v -> {
                 if (battle.keep(c)) {
@@ -319,14 +329,16 @@ public class GBattleView extends LinearLayout {
                 break;
 
             case GBattle.PHASE_PLAY:
-                // 原来这里写「if (battle.hand.isEmpty()) break;」——
-                // 手牌空了就一个按钮都不渲染，界面上什么都没有，玩家只能
-                // 切 tab 重进。实测撞到过：能量 3/3 回合 1 但底部空白。
-                // 手牌空恰恰是最需要「结束回合」的时候。
+                // 手牌空了就一个按钮都不渲染会让界面死掉 —— 这正是「结束回合」
+                // 最需要出现的时候。
                 if (battle.hand.isEmpty()) {
                     optRow.addView(tv("手牌打空了 —— 结束回合继续", 12.5f, C_FG3));
+                } else if (pendingQ != null) {
+                    // 题目已在 ensureQuestion() 里出好，这里只负责画题面
+                    renderQuiz();
+                    return;
                 } else {
-                    optRow.addView(smallBtn("当前状态与战报", () -> showStatus()));
+                    optRow.addView(tv("手里没有可考的单词牌，直接结束回合", 12.5f, C_FG3));
                 }
                 optRow.addView(smallBtn("结束回合", () -> {
                     advanceTurn();
@@ -347,40 +359,72 @@ public class GBattleView extends LinearLayout {
 
     // ── 答题 ─────────────────────────────────────────────
 
-    private void beginQuiz(GCard c) {
-        pending = c;
-        // 把手牌里的英文词告诉出题器：中译英的答案/干扰项不能从手牌里取，
-        // 否则题面问「明智的」，屏幕上的牌面正好印着 wise —— 答案直接写在脸上。
-        java.util.List<String> handEn = new java.util.ArrayList<>();
-        if (battle != null) {
-            for (GCard h : battle.hand) {
-                if (h != null && h.isWord()) handEn.add(h.en);
-            }
-        }
-        quiz.setHandWords(handEn);
-        pendingQ = quiz.make(c, quiz.randomMode());
-        if (pendingQ == null) { pending = null; return; }
-        renderOptions();
+    /**
+     * 保证当前处于「有题待答」的状态。
+     *
+     * 由 render() 在渲染手牌之前调用 —— 顺序很关键，见 render() 里的注释。
+     */
+    private void ensureQuestion() {
+        if (battle == null) return;
+        if (battle.phase != GBattle.PHASE_PLAY) return;
+        if (pendingQ != null) return;
+        if (battle.hand.isEmpty()) return;
+        askQuestion();
+    }
+
+    /**
+     * 敌人出题。
+     *
+     * 旧流程是玩家先点一张牌、系统再考这张牌 —— 等于自己给自己出题，
+     * 只挑会的就永远不会被考到不会的。现在反过来：敌人先出题，
+     * 题目围绕手牌里的某一张，玩家必须读懂题面才能从手里挑对。
+     *
+     * 挑错就把那张错牌弃掉（认错了自己承担），挑对才算打出这张牌。
+     */
+    private void askQuestion() {
+        if (battle == null || battle.phase != GBattle.PHASE_PLAY) return;
+        if (pendingQ != null) return;
+        if (battle.hand.isEmpty()) return;
+
+        pendingQ = quiz.make(battle.hand, quiz.randomMode());
+        if (pendingQ == null) return;   // 手牌全是副词，出不了题
+
+        // 敌人「施法」出题，让玩家看到是它在发难，而不是系统弹窗
+        sprite.play("cast");
+        pending = pendingQ.card;
     }
 
     private void renderQuiz() {
         optRow.removeAllViews();
 
-        TextView q = tv(pendingQ.prompt, 20, C_FG);
+        // 例句题句子长，字号要小一点，否则一个屏幕放不下
+        boolean isExample = pendingQ.mode == 1;
+        TextView q = tv(pendingQ.prompt, isExample ? 15 : 20, C_FG);
         q.setTypeface(Typeface.DEFAULT_BOLD);
         q.setGravity(Gravity.CENTER);
+        q.setPadding(dp(4), dp(2), dp(4), 0);
+        if (isExample) q.setLineSpacing(dp(3), 1f);
         optRow.addView(q);
 
         if (!pendingQ.sub.isEmpty()) {
             TextView s = tv(pendingQ.sub, 11.5f, C_FG3);
             s.setGravity(Gravity.CENTER);
-            s.setPadding(0, dp(2), 0, dp(8));
+            s.setPadding(dp(4), dp(3), dp(4), dp(8));
             optRow.addView(s);
         }
 
-        for (int i = 0; i < pendingQ.options.length; i++) {
-            final int k = i;
-            optRow.addView(optBtn(pendingQ.options[i], () -> answer(k)));
+        if (pendingQ.options != null) {
+            // 释义辨析题：选项是屏幕上的按钮（干扰项都不是手牌）
+            for (int i = 0; i < pendingQ.options.length; i++) {
+                final int k = i;
+                optRow.addView(optBtn(pendingQ.options[i], () -> answer(k)));
+            }
+        } else {
+            // 其余题型：答案在手上，点牌作答
+            TextView tip = tv("▾ 点你手上对应的那张牌", 12, C_TEAL);
+            tip.setGravity(Gravity.CENTER);
+            tip.setPadding(0, dp(6), 0, dp(2));
+            optRow.addView(tip);
         }
     }
 
@@ -394,6 +438,12 @@ public class GBattleView extends LinearLayout {
      */
     private void advanceTurn() {
         if (battle == null || battle.over()) return;
+        // 结束回合时若还有题没答，必须先清掉：否则 pendingQ 会带进下一回合，
+        // 新回合的牌对不上旧题目，玩家怎么点都是错的。
+        if (pendingQ != null) {
+            pendingQ = null;
+            pending = null;
+        }
         int hpBefore = battle.playerHp;
         battle.endTurn(false);
 
@@ -415,9 +465,48 @@ public class GBattleView extends LinearLayout {
         render();
     }
 
+    /**
+     * 选项制题（题型 3 释义辨析）：点按钮作答。
+     *
+     * 答错时把**正确答案那张牌**弃掉 —— 因为选项不是实体牌，
+     * 没法「弃掉你点错的那个词」。题考的是这张牌，认不出来就该失去它。
+     */
     private void answer(int pick) {
-        boolean right = pick == pendingQ.answer;
-        GCard c = pending;
+        if (pendingQ == null || pendingQ.options == null) return;
+        GCard target = pendingQ.card;
+        String chose = (pick >= 0 && pick < pendingQ.options.length)
+                ? pendingQ.options[pick] : "";
+        boolean right = chose.equalsIgnoreCase(target == null ? "" : target.en);
+        resolve(target, right);
+    }
+
+    /**
+     * 点手牌作答。
+     *
+     * 这是新流程的核心：敌人已经出题，答案就在手上，玩家点自己认为是答案的那张牌。
+     *   · 点对 → 出这张牌打人（走 playCard）
+     *   · 点错 → **弃掉点错的这张**（不是正确答案那张）。认错了自己承担 ——
+     *     否则玩家可以把 5 张牌挨个试一遍，等于把「不认识」变成「多试几次就过」。
+     */
+    private void answerCard(GCard picked) {
+        if (pendingQ == null) return;
+        GCard target = pendingQ.card;
+
+        // 副词是机制牌，不参与词义考核：直接打出去，不判对错
+        if (picked != null && picked.isAdverb()) {
+            pending = null;
+            pendingQ = null;
+            resolveAdverb(picked);
+            return;
+        }
+
+        boolean right = target != null && picked != null && picked.id.equals(target.id);
+        resolve(picked, right);
+    }
+
+    /** 统一的答题结算。c 是玩家实际点的那张牌（答错时被弃掉的就是它）。 */
+    private void resolve(GCard c, boolean right) {
+        if (pendingQ == null) return;
         String explain = pendingQ.explain;
         pending = null;
         pendingQ = null;
@@ -451,23 +540,8 @@ public class GBattleView extends LinearLayout {
                     if (!battle.over()) sprite.play("attack");
                 }
             } else if (c.isAdverb()) {
-                // 副词：消耗它并按 fx 改写本回合规则
-                battle.hand.remove(c);
-                battle.discard.add(c);
-                battle.energy--;
-                battle.applyAdverb(adverbFx(c.id));
-                battle.lastMsg = "【" + c.en + "】" + c.desc;
-                flash = "【副词】" + c.en + " — " + c.desc;
-                addLog(flash, C_PURPLE);
-                // 副词是玩家改写规则，怪物侧只轻微受创反馈
-                sprite.play("hurt");
-                if (battle.playerHp < myHpBefore) {
-                    int took = myHpBefore - battle.playerHp;
-                    addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
-                            + " 攻击　你受到 " + took + " 伤害", C_RED);
-                    if (!battle.over()) sprite.play("attack");
-                }
-                if (battle.energy <= 0 || battle.hand.isEmpty()) advanceTurn();
+                resolveAdverb(c);
+                return;
             }
         } else {
             store.markWrong();
@@ -489,6 +563,34 @@ public class GBattleView extends LinearLayout {
         render();
     }
 
+
+    /**
+     * 打出一张副词牌：消耗它，按 fx 改写本回合规则。
+     *
+     * 副词是机制牌，考它「是什么意思」没有意义（exceedingly 就是「极其」），
+     * 所以它不参与词义考核，玩家点它就直接生效。
+     */
+    private void resolveAdverb(GCard c) {
+        if (c == null) return;
+        int myHpBefore = battle.playerHp;
+        battle.hand.remove(c);
+        battle.discard.add(c);
+        battle.energy--;
+        battle.applyAdverb(adverbFx(c.id));
+        battle.lastMsg = "【" + c.en + "】" + c.desc;
+        flash = "【副词】" + c.en + " — " + c.desc;
+        addLog(flash, C_PURPLE);
+        // 副词是玩家改写规则，怪物侧只轻微受创反馈
+        sprite.play("hurt");
+        if (battle.playerHp < myHpBefore) {
+            int took = myHpBefore - battle.playerHp;
+            addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                    + " 攻击　你受到 " + took + " 伤害", C_RED);
+            if (!battle.over()) sprite.play("attack");
+        }
+        if (battle.energy <= 0 || battle.hand.isEmpty()) advanceTurn();
+        else render();
+    }
 
     /** 副词 id → fx 标识。与 assets/game/cards.json 的 adverbs 段一一对应。 */
     private static String adverbFx(String id) {

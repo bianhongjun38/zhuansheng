@@ -70,7 +70,11 @@ def main():
 
     if do_build:
         print("▶ 构建 APK")
-        code, out = sh("python build_apk.py", cwd=HERE)
+        # 必须带 --bump：手机端 Update.parseVer() 只比较 versionName，
+        # 不 bump 的话新包和旧包版本号相同，手机直接判定「已是最新」，
+        # 永远下不到。这个坑 2026-10-27 卡过一次（versionCode 涨了但
+        # versionName 一直是 1.5.0），今天又踩了一次 —— 所以写在这里。
+        code, out = sh("python build_apk.py --bump", cwd=HERE)
         if code != 0 or "构建成功" not in out:
             print(out[-3000:])
             print("✗ 构建失败，已中止（没有推送任何东西）")
