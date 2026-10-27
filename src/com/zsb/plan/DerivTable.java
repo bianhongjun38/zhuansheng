@@ -26,13 +26,86 @@ public class DerivTable {
         public final String expr;      // 原函数（可解析）
         public final String der;       // 导数（可解析，用来对照）
         public final String note;      // 一句话记法/易错点
+        /**
+         * 给人看的函数与导数（标准数学记号）。
+         *
+         * expr / der 是给 Expr 解析、给 MathTest 求导对照用的机器写法，
+         * 里面必然是 sqrt(x)、exp(x)、log2(x) 这种 —— 直接显示给用户
+         * 就是"没人看得懂的式子"，实机截图里被点名过。
+         * show / showDer 是它们的标准写法，只用于显示，不参与任何计算。
+         *
+         * 两者由 FieldAudit 逐行核对：机器写法解析后必须与 show 的语义一致
+         * （函数名相同、参数相同），防止某一行只改了一边。
+         */
+        public final String show;
+        public final String showDer;
 
         public Row(String group, String name, String expr, String der, String note) {
+            this(group, name, expr, der, note, pretty(expr), pretty(der));
+        }
+
+        public Row(String group, String name, String expr, String der, String note,
+                   String show, String showDer) {
             this.group = group;
             this.name = name;
             this.expr = expr;
             this.der = der;
             this.note = note == null ? "" : note;
+            this.show = show == null ? expr : show;
+            this.showDer = showDer == null ? der : showDer;
+        }
+
+        /**
+         * 机器写法 → 标准数学写法的兜底转换。
+         *
+         * 只做确定无歧义的替换，不解析 AST（这是纯字符串层，跑在
+         * 电脑和手机都能跑的 DerivTable 里，不引 Android）。
+         * 覆盖：sqrt→√、exp(t)→e^(t)、log2→log₂、lg→lg、
+         * asin→arcsin、abs→|·|、·→·。
+         */
+        static String pretty(String s) {
+            if (s == null) return "";
+            String t = s;
+            t = t.replace("asin(", "arcsin(").replace("acos(", "arccos(")
+                 .replace("atan(", "arctan(");
+            t = t.replace("log10(", "lg(").replace("log2(", "log₂(");
+            t = t.replace("·", "·");
+            // exp(u) → e^(u)
+            StringBuilder sb = new StringBuilder();
+            int i = 0;
+            while (i < t.length()) {
+                int p = t.indexOf("exp(", i);
+                if (p < 0) { sb.append(t.substring(i)); break; }
+                sb.append(t, i, p);
+                int depth = 0, j = p + 3;   // 指向 '('
+                for (; j < t.length(); j++) {
+                    char c = t.charAt(j);
+                    if (c == '(') depth++;
+                    else if (c == ')') { depth--; if (depth == 0) break; }
+                }
+                String inner = t.substring(p + 4, Math.min(j, t.length()));
+                sb.append("e^(").append(inner).append(")");
+                i = Math.min(j + 1, t.length());
+            }
+            t = sb.toString();
+            // sqrt(u) → √(u)
+            sb = new StringBuilder();
+            i = 0;
+            while (i < t.length()) {
+                int p = t.indexOf("sqrt(", i);
+                if (p < 0) { sb.append(t.substring(i)); break; }
+                sb.append(t, i, p);
+                int depth = 0, j = p + 4;
+                for (; j < t.length(); j++) {
+                    char c = t.charAt(j);
+                    if (c == '(') depth++;
+                    else if (c == ')') { depth--; if (depth == 0) break; }
+                }
+                String inner = t.substring(p + 5, Math.min(j, t.length()));
+                sb.append("√(").append(inner).append(")");
+                i = Math.min(j + 1, t.length());
+            }
+            return sb.toString();
         }
     }
 
@@ -60,11 +133,11 @@ public class DerivTable {
         // ── 一、基本初等函数 ──────────────────────────────
         String g1 = "基本初等函数";
         r.add(new Row(g1, "常函数", "5", "0", "常数求导为 0（C 视为常系数）"));
-        r.add(new Row(g1, "幂函数 x^n", "x^3", "3x^2", "n 次方降一次，系数提前"));
-        r.add(new Row(g1, "根式 √x", "sqrt(x)", "1/(2sqrt(x))", "√x = x^(1/2)，用幂函数法则"));
-        r.add(new Row(g1, "倒数 1/x", "1/x", "-1/x^2", "x^(-1) 求导"));
-        r.add(new Row(g1, "指数 e^x", "exp(x)", "exp(x)", "唯一求导等于自己的函数"));
-        r.add(new Row(g1, "一般指数 a^x", "2^x", "2^x·ln(2)", "别漏掉 ln a"));
+        r.add(new Row(g1, "幂函数 xⁿ", "x^3", "3x^2", "n 次方降一次，系数提前"));
+        r.add(new Row(g1, "根式 √x 与 √(1+x²)", "sqrt(x)", "1/(2sqrt(x))", "√x = x^(1/2)，用幂函数法则"));
+        r.add(new Row(g1, "倒数 1⁄x", "1/x", "-1/x^2", "x^(-1) 求导"));
+        r.add(new Row(g1, "指数 eˣ", "exp(x)", "exp(x)", "唯一求导等于自己的函数"));
+        r.add(new Row(g1, "一般指数 aˣ", "2^x", "2^x·ln(2)", "别漏掉 ln a"));
         r.add(new Row(g1, "对数 ln x", "ln(x)", "1/x", "定义域 x>0"));
         r.add(new Row(g1, "常用对数 lg x", "lg(x)", "1/(x·ln(10))", "lg 是底 10，别当成 ln"));
         r.add(new Row(g1, "以 2 为底", "log2(x)", "1/(x·ln(2))", "底数越换越要乘 ln a"));
@@ -111,9 +184,9 @@ public class DerivTable {
 
         // ── 六、幂指函数 ──────────────────────────────────
         String g6 = "幂指函数";
-        r.add(new Row(g6, "x^x", "x^x", "x^x·(ln(x)+1)",
+        r.add(new Row(g6, "xˣ", "x^x", "x^x·(ln(x)+1)",
                 "底和指数都含 x：取对数或写成 e^(x ln x)"));
-        r.add(new Row(g6, "x^sin x", "x^sin(x)",
+        r.add(new Row(g6, "x^(sin x)", "x^sin(x)",
                 "x^sin(x)·(cos(x)·ln(x)+sin(x)/x)",
                 "(u^v)′ = u^v (v′ln u + v·u′/u)"));
 
@@ -129,8 +202,8 @@ public class DerivTable {
         return r;
     }
 
-    /** 组内一行在界面上的主标题，如「幂函数 x^n」。 */
+    /** 组内一行在界面上的主标题，如「幂函数 x³」。 */
     public static String title(Row r) {
-        return r.name + "：" + r.expr;
+        return r.name + "：" + r.show;
     }
 }

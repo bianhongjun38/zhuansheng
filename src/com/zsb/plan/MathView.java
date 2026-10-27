@@ -264,10 +264,11 @@ public class MathView {
             b.setTypeface(Typeface.DEFAULT_BOLD);
             b.setGravity(Gravity.CENTER);
             b.setPadding(0, dp(9), 0, dp(9));
-            GradientDrawable g = new GradientDrawable();
-            g.setCornerRadius(dp(7));
-            g.setColor(C_BG3);
-            b.setBackground(g);
+            // 按下要变样，否则手指按下去没有任何反馈，
+            // 用户根本不知道点中没有 —— 实机反馈就是这个问题。
+            b.setBackground(pressable(dp(7)));
+            b.setClickable(true);
+            b.setFocusable(true);
 
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
@@ -293,7 +294,13 @@ public class MathView {
         t.setPadding(0, dp(4), 0, dp(5));
         wrap.addView(t);
 
-        final int perRow = 4;
+        // 3 列而不是 4 列。
+        //
+        // 4 列时每格只有约 75dp 可用宽，"(x+1)(x-1)" 必须缩到 64% 才塞得下，
+        // "x³ − 3x" 直接被截断 —— FitAudit 量出来的（74.04/75.0 卡在临界）。
+        // 减号两侧的空格是课本排版，不能为了塞进格子去删；
+        // 该让格子变宽。3 列每格约 103dp，16 个模板排 6 行，仍然一屏多可见。
+        final int perRow = 3;
         LinearLayout row = null;
         for (int i = 0; i < ExprInput.TEMPLATES.length; i++) {
             if (i % perRow == 0) {
@@ -316,10 +323,9 @@ public class MathView {
             // 按一行的高度给格子，sin(x)/x 会被压扁到看不清分数线。
             cell.setPadding(dp(3), dp(8), dp(3), dp(8));
             cell.setMinimumHeight(dp(46));
-            GradientDrawable g = new GradientDrawable();
-            g.setCornerRadius(dp(7));
-            g.setColor(C_BG3);
-            cell.setBackground(g);
+            cell.setBackground(pressable(dp(7)));
+            cell.setClickable(true);
+            cell.setFocusable(true);
 
             // 上排显示已经排好版的公式，下排是图形种类 ——
             // 只写 "x^2" 看不出是抛物线，只写"抛物线"又不知道点了会画什么。
@@ -338,8 +344,14 @@ public class MathView {
                 cell.addView(nt);
             }
 
+            // 同一行必须等高。
+            //
+            // 原来用 WRAP_CONTENT：分式格子（x²−3x 上面一个 1/x、sin x/x 这种）
+            // 内容高两行，单行的格子只占一行 —— 一行之内高矮不齐，
+            // 视觉上就是"一大一小"。固定成统一高度后整排齐平。
+            cell.setMinimumHeight(dp(TEMPLATE_CELL_H));
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+                    0, dp(TEMPLATE_CELL_H), 1f);
             lp.leftMargin = dp(2);
             lp.rightMargin = dp(2);
             cell.setLayoutParams(lp);
@@ -354,6 +366,136 @@ public class MathView {
         }
         return wrap;
     }
+
+    /** 模板格子统一高度：够放下"分式 + 一行说明"，单行式子也不显得空。 */
+    private static final int TEMPLATE_CELL_H = 62;
+
+    /**
+     * 「怎么写 → 画出来什么样」对照表。
+     *
+     * 用户原话："函数图像那个你得写 sqrt 和 abs 和 exp 对照什么，不然谁知道"。
+     * 只给模板格子（"sqrt(x)"）等于只给了名字，不知道形状、不知道定义域、
+     * 不知道和 x^2 有什么不同 —— 模板再多也用不上。
+     *
+     * 每条给四样：真缩略曲线（PlotGeom 采样，和主图同一份代码）、
+     * 怎么写、中文名、一句形状人话、一句能自己验证的话。
+     * 整条可点，点了就填进输入框并直接画出来。
+     */
+    private LinearLayout buildOutline() {
+        LinearLayout wrap = new LinearLayout(act);
+        wrap.setOrientation(LinearLayout.VERTICAL);
+        wrap.setPadding(0, dp(10), 0, dp(4));
+
+        TextView t = new TextView(act);
+        t.setText("这些写法画出来是什么样");
+        t.setTextSize(11);
+        t.setTextColor(C_FG3);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setPadding(0, 0, 0, dp(2));
+        wrap.addView(t);
+
+        TextView sub = new TextView(act);
+        sub.setText("点任意一行直接画。曲线就是它真实的形状，不是示意图。");
+        sub.setTextSize(10.5f);
+        sub.setTextColor(C_FG3);
+        sub.setPadding(0, 0, 0, dp(7));
+        wrap.addView(sub);
+
+        ExprOutline.Item[] items = ExprOutline.all();
+        int lastGroup = -1;
+        for (int i = 0; i < items.length; i++) {
+            final ExprOutline.Item it = items[i];
+
+            int g = ExprOutline.groupOf(i);
+            if (g != lastGroup) {
+                lastGroup = g;
+                TextView gh = new TextView(act);
+                gh.setText(ExprOutline.GROUPS[g]);
+                gh.setTextSize(11.5f);
+                gh.setTextColor(C_TEAL);
+                gh.setTypeface(Typeface.DEFAULT_BOLD);
+                gh.setPadding(0, dp(i == 0 ? 2 : 9), 0, dp(4));
+                wrap.addView(gh);
+            }
+
+            wrap.addView(outlineRow(it));
+        }
+        return wrap;
+    }
+
+    /** 一条对照：左缩略图，右边写法 + 名字 + 形状 + 自验。整条可点。 */
+    private View outlineRow(final ExprOutline.Item it) {
+        LinearLayout row = new LinearLayout(act);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(8), dp(8), dp(8), dp(8));
+        row.setBackground(pressable(dp(8)));
+        row.setClickable(true);
+        row.setFocusable(true);
+
+        MiniPlot mp = new MiniPlot(act);
+        try {
+            mp.set(Expr.parse(it.sample), it.color);
+        } catch (Exception e) {
+            // 数据都过审计了；真出问题也不该整块白屏
+        }
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+                (int) dp(78), (int) dp(56));
+        mlp.rightMargin = dp(10);
+        row.addView(mp, mlp);
+
+        LinearLayout col = new LinearLayout(act);
+        col.setOrientation(LinearLayout.VERTICAL);
+
+        // 第一行：写法（等宽感，一眼看出该敲什么）
+        TextView w = new TextView(act);
+        w.setText(it.write);
+        w.setTextSize(14);
+        w.setTextColor(C_FG);
+        w.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        col.addView(w);
+
+        // 第二行：中文名
+        TextView nm = new TextView(act);
+        nm.setText(it.name);
+        nm.setTextSize(11.5f);
+        nm.setTextColor(it.color);
+        nm.setPadding(0, dp(1), 0, 0);
+        col.addView(nm);
+
+        // 第三行：形状（这才是用户真正缺的）
+        TextView sh = new TextView(act);
+        sh.setText(it.shape);
+        sh.setTextSize(11);
+        sh.setTextColor(C_FG2);
+        sh.setPadding(0, dp(4), 0, 0);
+        col.addView(sh);
+
+        // 第四行：自己能验的一句话
+        TextView ask = new TextView(act);
+        ask.setText("试试：" + it.ask);
+        ask.setTextSize(10.5f);
+        ask.setTextColor(C_FG3);
+        ask.setPadding(0, dp(3), 0, 0);
+        col.addView(ask);
+
+        row.addView(col, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rlp.topMargin = dp(4);
+        row.setLayoutParams(rlp);
+
+        row.setOnClickListener(v -> {
+            if (etExpr == null) return;
+            etExpr.setText(it.write);
+            etExpr.setSelection(it.write.length());
+            exprText = it.write;
+            draw();
+        });
+        return row;
+    }
+
 
     /** 按一个键：插到光标处（或替换选区），然后刷新。 */
     private void applyKey(String frag) {
@@ -447,6 +589,7 @@ public class MathView {
 
         c1.addView(buildKeypad());
         c1.addView(buildTemplates());
+        c1.addView(buildOutline());
 
         LinearLayout row1 = new LinearLayout(act);
         row1.setOrientation(LinearLayout.HORIZONTAL);
@@ -658,6 +801,69 @@ public class MathView {
         }
     }
 
+    /**
+     * 带按下态的圆角背景。
+     *
+     * 原来每个可点元素都是 GradientDrawable 单色 —— 按下、松手、禁用
+     * 长得一模一样，手指按下去屏幕毫无变化。真机上用户会说"点了没反应"，
+     * 其实事件是收到的，只是没有任何视觉确认。
+     *
+     * 用 StateListDrawable 给 pressed 一个明显更亮的底色：
+     * 深色界面上 C_BG3 → C_BG4 的差别肉眼能看出来，又不会太跳。
+     */
+    private android.graphics.drawable.Drawable pressable(final int radius) {
+        GradientDrawable normal = new GradientDrawable();
+        normal.setCornerRadius(radius);
+        normal.setColor(C_BG3);
+
+        GradientDrawable pressed = new GradientDrawable();
+        pressed.setCornerRadius(radius);
+        // 比常态亮一档：深色底上这个差值足够看清，又不至于像选中态
+        pressed.setColor(0xFF3C4250);
+        // 按下时描一圈青色细边，短按也能看到闪一下
+        pressed.setStroke(dp(1), C_TEAL);
+
+        android.graphics.drawable.StateListDrawable sd =
+                new android.graphics.drawable.StateListDrawable();
+        sd.addState(new int[]{android.R.attr.state_pressed}, pressed);
+        sd.addState(new int[]{android.R.attr.state_focused}, pressed);
+        sd.addState(new int[]{}, normal);
+        return sd;
+    }
+
+    /**
+     * 排好版的公式控件。解析失败就退回纯文本 —— 表里的式子都过审计了，
+     * 但界面不该因为一条数据坏了整块白屏。
+     */
+    private View formula(String expr, int color, float sp) {
+        FormulaView fv = new FormulaView(act);
+        fv.setTextSize(sp);
+        fv.setTextColor(color);
+        int padTop = dp(3);
+        fv.setPadding(0, padTop, 0, 0);
+        try {
+            fv.setExpr(expr);
+        } catch (Exception e) {
+            TextView tv = new TextView(act);
+            tv.setText(expr);
+            tv.setTextSize(sp);
+            tv.setTextColor(color);
+            tv.setTypeface(Typeface.DEFAULT_BOLD);
+            return tv;
+        }
+        return fv;
+    }
+
+    /** 「↓ 求导」这类过程标注，统一字号与缩进。 */
+    private TextView hintLabel(String s) {
+        TextView tv = new TextView(act);
+        tv.setText(s);
+        tv.setTextSize(10.5f);
+        tv.setTextColor(C_FG3);
+        tv.setPadding(dp(6), dp(2), 0, dp(2));
+        return tv;
+    }
+
     private View rowView(final DerivTable.Row r) {
         LinearLayout row = new LinearLayout(act);
         row.setOrientation(LinearLayout.VERTICAL);
@@ -695,27 +901,25 @@ public class MathView {
         head.addView(go);
         row.addView(head);
 
-        TextView fx = new TextView(act);
-        fx.setText(Expr.mathText(Expr.parse(r.expr)));
-        fx.setTextSize(16);
-        fx.setTextColor(C_FG);
-        fx.setTypeface(Typeface.DEFAULT_BOLD);
-        fx.setPadding(0, dp(3), 0, 0);
-        row.addView(fx);
-
-        TextView arrow = new TextView(act);
-        arrow.setText("↓ 求导");
-        arrow.setTextSize(10.5f);
-        arrow.setTextColor(C_FG3);
-        arrow.setPadding(dp(6), dp(2), 0, dp(2));
-        row.addView(arrow);
-
-        TextView dx = new TextView(act);
-        dx.setText(Expr.mathText(Expr.parse(r.der)));
-        dx.setTextSize(16);
-        dx.setTextColor(C_AMBER);
-        dx.setTypeface(Typeface.DEFAULT_BOLD);
-        row.addView(dx);
+        // 用 FormulaView 排真公式，不用 Expr.mathText。
+        //
+        // mathText 是"能粘回输入框的机器写法"，它会原样输出 sqrt(x)、
+        // exp(x)、log2(x) —— 用户看的是这个，当然觉得不是人话。
+        // FormulaView 走 FormulaLayout，sqrt 会画成根号、exp 画成 e 的
+        // 上标、分式画成真的分数线，这才是课本上的样子。
+        //
+        // 注意 r.expr / r.der 仍是机器可解析的字符串，MathTest 照旧拿它们
+        // 做符号求导与数值差分对照 —— 显示换了，审计一点没减弱。
+        // 注意这里传的是 r.expr / r.der（机器写法），不是 r.show。
+        //
+        // FormulaView 自己就会把 sqrt 排成根号、exp 排成 e 的上标 ——
+        // 它需要的是能被 Expr 解析的表达式。若传 r.show（"e^(x)"），
+        // 里面的 e 会被 Expr 当成欧拉数常量折成 2.718282，
+        // 界面上就会出现 "2.718282^x" —— 审计渲染图当场抓到的。
+        // r.show / r.showDer 只用于纯文本场合（列表标题、说明）。
+        row.addView(formula(r.expr, C_FG, 16f));
+        row.addView(hintLabel("↓ 求导"));
+        row.addView(formula(r.der, C_AMBER, 16f));
 
         if (!r.note.isEmpty()) {
             TextView note = new TextView(act);

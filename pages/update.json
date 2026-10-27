@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.4.2",
-  "versionInt": 10402,
-  "versionCode": 20,
-  "notes": "v1.4.2 修「检查更新」永远说已是最新：三源改为取版本最高者，不再被过期清单挡住",
+  "versionName": "1.4.3",
+  "versionInt": 10403,
+  "versionCode": 21,
+  "notes": "v1.4.3（versionCode 21）",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.4.2.apk",
-    "size": 18470876,
-    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.4.2.apk"
+    "name": "zhuansheng-v1.4.3.apk",
+    "size": 18474972,
+    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.4.3.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.4.2"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.4.3"
   }
 }

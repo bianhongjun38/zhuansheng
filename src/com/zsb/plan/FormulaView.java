@@ -132,6 +132,12 @@ public class FormulaView extends View {
         int avail = MeasureSpec.getSize(wSpec);
         int mode = MeasureSpec.getMode(wSpec);
 
+        // 只按宽度缩即可 —— 这是 FitAudit 实测得出的，不是想当然。
+        //
+        // 我一度以为固定高度的格子里分式会"高度溢出"，加了 fitBoth
+        // 做宽高双约束。审计（16 个模板、62dp 格高）跑出来：
+        // 旧逻辑 0 条漏判，height 从来没超过。加了只是多余复杂度，
+        // 已撤回。真要处理高度，先有失败的审计案例再说。
         if (root != null && mode != MeasureSpec.UNSPECIFIED) {
             float limit = avail - getPaddingLeft() - getPaddingRight();
             if (limit > 0) {

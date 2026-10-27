@@ -66,7 +66,7 @@ public class MainActivity extends Activity {
     private LinearLayout content;
     private TextView tvDays, tvLeftLabel;
     private LinearLayout navBar;
-    private final TextView[] navBtn = new TextView[5];
+    private final TextView[] navBtn = new TextView[TAB_NAMES.length];
     private int tab = 0;
     private int idx = 0;
 
@@ -76,7 +76,18 @@ public class MainActivity extends Activity {
     private String timingKey;      // "yyyy-MM-dd|taskId"
     private long timingStart;
 
-    private static final String[] TAB_NAMES = {"今日", "检索", "错题库", "全表", "数据"};
+    /**
+     * 导航只有四个。
+     *
+     * 原来有「检索」这一栏，但它渲染的是 d.reviews —— 和「今日」页里
+     * 那张「到期检索」卡片是同一批数据（同一份 plan.json、同一个
+     * reviewRow）。用户看到的"还是以前的东西"，因为那确实是同一样东西
+     * 换了个位置重复显示。
+     *
+     * 而且检索本身不该单独成页：它属于当天的动作，逾期会累积到当天，
+     * 所以「今日」就是它唯一正确的位置。删掉不丢功能。
+     */
+    private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "数据"};
 
     @Override
     protected void onCreate(Bundle b) {
@@ -203,9 +214,8 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         switch (tab) {
             case 0: renderToday(); break;
-            case 1: renderReview(); break;
-            case 2: renderHard(); break;
-            case 3: renderPlanList(); break;
+            case 1: renderHard(); break;
+            case 2: renderPlanList(); break;
             default: renderStats(); break;
         }
     }
@@ -226,8 +236,23 @@ public class MainActivity extends Activity {
         }
 
         // 检索
+        //
+        // 原来这里还有个独立的「检索」tab，渲染的是同一批 d.reviews ——
+        // 明明是同一份数据换个位置重复显示，用户自然会问"怎么还是以前的东西"。
+        // 检索本来就属于当天：逾期会累积到当天，不单独成页。已删。
+        //
+        // 但"还有多少项没做、会不会累积"这件事要让人看得见，
+        // 所以把逾期统计补在这一张卡上，而不是靠翻页去数。
         if (!d.reviews.isEmpty()) {
-            LinearLayout card = card("到期检索 · " + d.reviews.size() + " 项", "合上书默写，再翻页核对");
+            int done = 0;
+            for (Plan.Review r : d.reviews) {
+                if (store.completed.contains("R-" + r.id)) done++;
+            }
+            int left = d.reviews.size() - done;
+            String sub = left == 0
+                    ? "全部做完了，可以确认这一天"
+                    : "还剩 " + left + " 项没做 · 合上书默写，再翻页核对";
+            LinearLayout card = card("到期检索 · " + d.reviews.size() + " 项", sub);
             for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
             content.addView(card);
         }
@@ -783,29 +808,6 @@ public class MainActivity extends Activity {
         box.addView(btn);
 
         return box;
-    }
-
-    // ══ 检索 ══════════════════════════════════════════════
-    private void renderReview() {
-        String today = Store.todayIso();
-        List<Plan.Day> due = new ArrayList<>();
-        for (Plan.Day d : plan.days) {
-            if (d.reviews.isEmpty()) continue;
-            if (d.date.compareTo(today) <= 0 && !store.completed.contains(d.date)) due.add(d);
-        }
-        if (due.isEmpty()) {
-            // 没有到期的，显示下一个有检索的日子
-            for (Plan.Day d : plan.days) {
-                if (!d.reviews.isEmpty() && d.date.compareTo(today) > 0) { due.add(d); break; }
-            }
-            if (due.isEmpty()) { content.addView(hint("没有待做的检索")); return; }
-            content.addView(hint("今天没有到期的检索。下面是最近的一次："));
-        }
-        for (Plan.Day d : due) {
-            LinearLayout card = card(d.date + "  周" + d.weekday, "到期 " + d.reviews.size() + " 项");
-            for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
-            content.addView(card);
-        }
     }
 
     // ══ 错题库 ════════════════════════════════════════════

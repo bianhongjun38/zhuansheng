@@ -356,6 +356,14 @@ public class FormulaLayout {
         if ("acos".equals(f)) return "arccos";
         if ("atan".equals(f)) return "arctan";
         if ("log10".equals(f)) return "lg";
+        // log2 之前漏在这里，界面上直接印出 "log2(x)" 这种半机器写法。
+        // 求导表里正好有一条"以 2 为底"，用户一眼就能看到。
+        if ("log2".equals(f)) return "log₂";
+        // 这几个原本会把机器名直接印到界面上（sign(x)、floor(x)），
+        // 学生看不懂也不该看懂。换成数学符号。
+        if ("sign".equals(f)) return "sgn";
+        if ("floor".equals(f)) return "⌊";
+        if ("ceil".equals(f)) return "⌈";
         return f;
     }
 

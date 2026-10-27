@@ -121,6 +121,8 @@ def main():
                    os.path.join(SRC, "FormulaLayout.java"),
                    os.path.join(SRC, "EngTrain.java"),
                    os.path.join(SRC, "ExprInput.java"),
+                   os.path.join(SRC, "PlotGeom.java"),
+                   os.path.join(SRC, "ExprOutline.java"),
                    os.path.join(SRC, "Linalg.java"),
                    os.path.join(TEST, "LogicTest.java"),
                    os.path.join(TEST, "StoreTest.java"),
@@ -133,7 +135,12 @@ def main():
                    os.path.join(TEST, "ExprInputTest.java"),
                    os.path.join(TEST, "KeypadAudit.java"),
                    os.path.join(TEST, "LinalgTest.java"),
-                   os.path.join(TEST, "LinalgViewAudit.java")])
+                   os.path.join(TEST, "LinalgViewAudit.java"),
+                   os.path.join(TEST, "DerivAudit.java"),
+                   os.path.join(TEST, "ExprOutlineAudit.java"),
+                   os.path.join(TEST, "OutlineLayoutAudit.java"),
+                   os.path.join(TEST, "MathViewAudit.java"),
+                   os.path.join(TEST, "FitAudit.java")])
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
@@ -157,6 +164,11 @@ def main():
         ("com.zsb.plan.KeypadAudit", "输入面板布局（含 PNG 视觉证据）", audit_dir),
         ("com.zsb.plan.LinalgTest", "线性代数几何（特征向量/网格，含 PNG）", audit_dir),
         ("com.zsb.plan.LinalgViewAudit", "线性变换界面构图（含 PNG）", audit_dir),
+        ("com.zsb.plan.DerivAudit", "求导表显示层（标准记号/可逆一致）", audit_dir),
+        ("com.zsb.plan.MathViewAudit", "数学界面（公式表/等高格/按下态，含 PNG）", audit_dir),
+        ("com.zsb.plan.ExprOutlineAudit", "写法→形状对照表（形状描述经采样验证，含 PNG）", audit_dir),
+        ("com.zsb.plan.OutlineLayoutAudit", "对照表手机排版（行高/折行/裁剪，含 PNG）", audit_dir),
+        ("com.zsb.plan.FitAudit", "模板格子公式缩字（宽/高/字号下限）", audit_dir),
     )
     for cls, label, extra_arg in test_table:
         print("\n▶ " + label)
