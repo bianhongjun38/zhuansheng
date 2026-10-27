@@ -184,13 +184,34 @@ public class Update {
         void onLatest(String tag, int code);
     }
 
+    /**
+     * 取安装包的下载地址。
+     *
+     * **必须用 api.github.com 的资产端点，不能用 browser_download_url。**
+     *
+     * 2026-10-27 实测（不带代理，模拟手机处境）：
+     *   api.github.com                       HTTP 200   321ms
+     *   github.com                           HTTP 000   超时 12s   ← 卡死在这里
+     *   release-assets.githubusercontent.com HTTP 404   388ms（域名可达）
+     *
+     * browser_download_url 是 https://github.com/.../releases/download/...，
+     * 也就是走被阻断的那个域名 —— 版本能查到、但一按下载就永远转圈。
+     *
+     * api.github.com/repos/.../releases/assets/{id} 带 Accept: octet-stream
+     * 会 302 到 release-assets.githubusercontent.com（那个域名直连是通的），
+     * 实测完整下载 745 KB/s、1.4 秒拿 1 MB。
+     */
     private String findApk(JSONObject rel) {
         try {
             JSONArray arr = rel.getJSONArray("assets");
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject a = arr.getJSONObject(i);
                 String name = a.optString("name", "");
-                if (name.endsWith(".apk")) return a.optString("browser_download_url", null);
+                if (!name.endsWith(".apk")) continue;
+                String api = a.optString("url", "");
+                if (api.startsWith("https://api.github.com/")) return api;
+                // 兜底：万一副本接口没给 url，退回老地址（可能很慢但不至于不可用）
+                return a.optString("browser_download_url", null);
             }
         } catch (Exception ignored) {
         }
@@ -228,16 +249,21 @@ public class Update {
                 final File out = new File(act.getCacheDir(), "update.apk");
                 HttpURLConnection c = null;
                 try {
-                    // Release 资产会 302 到 objects.githubusercontent.com，
-                    // 用 setInstanceFollowRedirects 在部分机型上会丢 redirect，
-                    // 这里手动跟一次。
+                    // 下载链路说明见 findApk()：起点是 api.github.com 的资产端点，
+                    // 带 Accept: octet-stream 才会 302 到 release-assets.githubusercontent.com。
+                    // 不带这个头，API 会返回该资产的 JSON 描述（几 KB），
+                    // 表现为「下载飞快完成，然后提示文件不完整」。
                     String target = url;
-                    for (int hop = 0; hop < 5; hop++) {
+                    for (int hop = 0; hop < 6; hop++) {
                         c = (HttpURLConnection) new URL(target).openConnection();
                         c.setConnectTimeout(15000);
                         c.setReadTimeout(60000);
                         c.setInstanceFollowRedirects(false);
                         c.setRequestProperty("User-Agent", "zsb-plan");
+                        if (target.contains("api.github.com")) {
+                            c.setRequestProperty("Accept", "application/octet-stream");
+                            c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+                        }
                         int sc = c.getResponseCode();
                         if (sc == 301 || sc == 302 || sc == 303 || sc == 307 || sc == 308) {
                             String loc = c.getHeaderField("Location");

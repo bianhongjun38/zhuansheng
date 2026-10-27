@@ -1,0 +1,11 @@
+name = "zsb-update"
+main = "zsb-update.js"
+compatibility_date = "2026-10-27"
+
+# 更新分发 Worker：手机只访问 *.workers.dev，不直连 GitHub。
+# 版本真相仍在 GitHub Release，这里只做稳定入口 + 边缘缓存。
+#
+# 部署：
+#   npx wrangler deploy
+# 验证：
+#   curl https://zsb-update.woctmdeding.workers.dev/update.json

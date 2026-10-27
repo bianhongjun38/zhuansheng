@@ -250,6 +250,27 @@ def main():
     icons = [n for n in names if "ic_launcher" in n]
     check("图标 5 档密度", len(icons) == 5, "%d 个" % len(icons))
 
+    # ── 更新链路 ────────────────────────────────────────
+    # 2026-10-27 实测：github.com 直连超时 12s，api.github.com 200/321ms。
+    # 曾经用 browser_download_url（走 github.com），导致「版本查得到、一按下载
+    # 就永远转圈」。这里做静态校验，确保代码里没退回去。
+    upd_src = os.path.join(PROJ, "src", "com", "zsb", "plan", "Update.java")
+    try:
+        us = open(upd_src, encoding="utf-8").read()
+    except Exception:
+        us = ""
+    check("Update.java 优先用 api 资产端点",
+          'optString("url"' in us and "api.github.com/" in us,
+          "避免 browser_download_url 走被阻断的 github.com")
+    check("下载时带 octet-stream",
+          "application/octet-stream" in us,
+          "不带的话 API 返回 JSON 而不是 APK")
+    check("设置页显示版本号",
+          "检查更新 · 当前 v" in open(os.path.join(
+              PROJ, "src", "com", "zsb", "plan", "MainActivity.java"),
+              encoding="utf-8").read(),
+          "用户要能看到自己装的是哪一版")
+
     return summary()
 
 
