@@ -141,6 +141,49 @@ public class Update {
         }
     }
 
+    /** 给设置页显示用：本机版本号。 */
+    public String currentVersion() {
+        return localVersionName();
+    }
+
+    /**
+     * 查询线上最新版本号，回调在主线程。
+     * 失败时给出 null，调用方负责显示「查询失败」。
+     *
+     * 与 check() 的区别：这个**只查不弹窗**，用于设置页按钮文案，
+     * 让用户一眼看到「本机 1.2.0 / 线上 1.2.1」。
+     */
+    public void queryLatest(final boolean silent, final OnLatest cb) {
+        new Thread(new Runnable() {
+            public void run() {
+                JSONObject rel = fetchLatest();
+                final String tag;
+                final int code;
+                if (rel == null) {
+                    tag = null;
+                    code = 0;
+                } else {
+                    tag = rel.optString("tag_name", "").replaceFirst("^[vV]", "");
+                    code = parseVer(tag);
+                }
+                ui.post(new Runnable() {
+                    public void run() {
+                        if (cb != null) cb.onLatest(tag, code);
+                        else if (!silent) {
+                            toastOnUi(tag == null ? "网络不通，稍后再试"
+                                    : "线上最新 v" + tag);
+                        }
+                    }
+                });
+            }
+        }).start();
+    }
+
+    /** queryLatest 的回调。tag 为 null 表示网络失败。 */
+    public interface OnLatest {
+        void onLatest(String tag, int code);
+    }
+
     private String findApk(JSONObject rel) {
         try {
             JSONArray arr = rel.getJSONArray("assets");

@@ -903,7 +903,22 @@ public class MainActivity extends Activity {
                     }).show();
         }));
 
-        c2.addView(wideBtn("检查更新", () -> updater.check(false)));
+        // 检查更新：按钮文案直接带版本号，省得用户不知道自己装的是哪一版。
+        // 首次渲染显示本机版本，异步查到线上版本后追加「最新 vX.Y.Z」或
+        // 「可升级 vX.Y.Z」。点一下重新查并弹窗（check(false)）。
+        final Button btnUpd = wideBtn("检查更新 · 当前 v" + updater.currentVersion(),
+                () -> updater.check(false));
+        c2.addView(btnUpd);
+        updater.queryLatest(true, (tag, code) -> {
+            String local = updater.currentVersion();
+            if (tag == null) {
+                btnUpd.setText("检查更新 · 当前 v" + local + "（线上查询失败，点击重试）");
+            } else if (code > Update.parseVer(local)) {
+                btnUpd.setText("检查更新 · 当前 v" + local + " → 可升级 v" + tag);
+            } else {
+                btnUpd.setText("检查更新 · 当前 v" + local + "（已是最新）");
+            }
+        });
         c2.addView(wideBtn("清空全部进度", () -> new AlertDialog.Builder(this)
                 .setMessage("清空全部勾选、默写和计时？无法撤销。")
                 .setNegativeButton("取消", null)
