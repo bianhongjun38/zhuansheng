@@ -183,10 +183,12 @@ public class GBattleView extends LinearLayout {
         renderOptions();
 
         if (battle.phase == GBattle.PHASE_WIN) {
-            sprite.play("death");
+            // 胜利时怪物死亡，定格在最后一帧（fallback=null 不回待机）
+            sprite.play("death", null);
             showEnd(true);
         } else if (battle.phase == GBattle.PHASE_LOSE) {
-            sprite.play("death");
+            // 玩家战败，怪物还活着，播个攻击动作收尾
+            sprite.play("attack");
             showEnd(false);
         }
     }
@@ -277,7 +279,12 @@ public class GBattleView extends LinearLayout {
                     battle.chooseKeep(); render();
                 }));
                 optRow.addView(smallBtn("直接攻击（不答题）", () -> {
-                    battle.attackDirect(); render();
+                    int hp0 = battle.enemyHp;
+                battle.attackDirect();
+                flash = "【直接攻击】造成 " + Math.max(0, hp0 - battle.enemyHp) + " 伤害";
+                addLog(flash, C_TEAL);
+                sprite.play("hurt");
+                render();
                 }));
                 break;
 
@@ -285,8 +292,7 @@ public class GBattleView extends LinearLayout {
                 if (battle.hand.isEmpty()) break;
                 optRow.addView(smallBtn("当前状态与战报", () -> showStatus()));
                 optRow.addView(smallBtn("结束回合", () -> {
-                    addLog("── 主动结束回合", C_FG3);
-                    battle.endTurn(false); render();
+                    advanceTurn();
                 }));
                 break;
 
@@ -332,6 +338,37 @@ public class GBattleView extends LinearLayout {
         }
     }
 
+    /**
+     * 推进一回合，先把敌人这次的攻击"演"出来再刷界面。
+     *
+     * 原实现直接 battle.endTurn(false); render()，敌人的攻击只体现在
+     * 血量数字瞬间变小上，怪物一个动作都没有 —— 玩家看不出是挨打了。
+     * 这里先算一次 endTurn，比较前后血量：掉血了就播 attack，
+     * 让动作和伤害数字对得上。
+     */
+    private void advanceTurn() {
+        if (battle == null || battle.over()) return;
+        int hpBefore = battle.playerHp;
+        battle.endTurn(false);
+
+        boolean hurt = battle.playerHp < hpBefore;
+        if (battle.phase == GBattle.PHASE_LOSE) {
+            render();
+            return;
+        }
+        if (hurt) {
+            int dmg = hpBefore - battle.playerHp;
+            flash = "▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                    + " 攻击　你受到 " + dmg + " 伤害";
+            addLog(flash, C_RED);
+            sprite.play("attack");
+        } else {
+            addLog("── 你结束了回合（敌人还在蓄力）", C_FG3);
+            sprite.play("move");
+        }
+        render();
+    }
+
     private void answer(int pick) {
         boolean right = pick == pendingQ.answer;
         GCard c = pending;
@@ -352,8 +389,8 @@ public class GBattleView extends LinearLayout {
                         + (battle.chain > 1 ? "（连锁 ×" + battle.chain + "）" : "");
                 addLog(flash, C_TEAL);
                 if (battle.critReady && dmg > 0) addLog("★ 暴击生效", C_AMBER);
-                sprite.play("attack");
-                postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
+                // 玩家出牌打人，怪物是"挨打"的一方 —— 播 hurt 不是 attack
+                sprite.play("hurt");
             } else if (c.isAdverb()) {
                 // 副词：消耗它并按 fx 改写本回合规则
                 battle.hand.remove(c);
@@ -363,17 +400,17 @@ public class GBattleView extends LinearLayout {
                 battle.lastMsg = "【" + c.en + "】" + c.desc;
                 flash = "【副词】" + c.en + " — " + c.desc;
                 addLog(flash, C_PURPLE);
-                sprite.play("cast");
-                postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
-                if (battle.energy <= 0 || battle.hand.isEmpty()) battle.endTurn(false);
+                // 副词是玩家改写规则，怪物侧只轻微受创反馈
+                sprite.play("hurt");
+                if (battle.energy <= 0 || battle.hand.isEmpty()) advanceTurn();
             }
         } else {
             store.markWrong();
             battle.onWrong(c);
             flash = "✗ 答错：" + explain + "　敌人充能 +2，下次伤害翻倍";
             addLog(flash, C_RED);
+            // 答错是玩家失误，怪物只是"蓄力"，播 cast 表现蓄力
             sprite.play("cast");
-            postDelayed(() -> { if (!battle.over()) sprite.play("idle"); }, 700);
         }
 
         render();
