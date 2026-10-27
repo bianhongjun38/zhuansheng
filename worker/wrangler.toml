@@ -9,3 +9,33 @@ compatibility_date = "2026-10-27"
 #   npx wrangler deploy
 # 验证：
 #   curl https://zsb-update.woctmdeding.workers.dev/update.json
+
+# ── 2026-10-27 22:27 复测：仍然是账号级故障，不是代码问题 ──────────
+#
+# 证据（不是推断）：
+#   部署一个全新的 3 行 Worker（只 return new Response('pong')），
+#   name=zsb-ping-test，单独域名 zsb-ping-test.woctmdeding.workers.dev：
+#       HTTP 500   Body: error code: 1101
+#       CF-RAY: a51262af69a0ca53-NRT
+#   原 zsb-update 的 /update.json 与 / 也一样：
+#       HTTP 500   Body: error code: 1101
+#       CF-RAY: a512612e18ddc1a7-NRT
+#
+# 结论：这个账号下**任何** Worker 脚本在边缘都抛未捕获异常，
+#       连不碰任何 API 的 pong 都不例外。所以不要再去改 zsb-update.js
+#       的 fetch / cache 逻辑了 —— 改多少遍都不会好。
+#
+# 现在 App 的更新通道实际是：
+#   1. Pages（app.xxjcloudns.kdns.fr）  ← 主通道，已验证 200
+#   2. api.github.com releases/latest    ← 二级兜底，已验证 200
+#   3. 这个 Worker                        ← 死的，留着等账号修复
+#
+# 想彻底摆脱 Pages 的 25 MiB 单文件上限，用 R2 公共桶（不经过 Worker 运行时）：
+#   R2 的 pub-xxxx.r2.dev 域名是对象存储直出，**不走 Workers**，
+#   所以不受这次 1101 故障影响，单对象上限 5 TB、出网免费。
+#   需要做的只有一步（控制台点一次，CLI 做不了）：
+#     Cloudflare Dashboard → R2 → Enable R2
+#   启用后再：
+#     npx wrangler r2 bucket create zsb-apk
+#     npx wrangler r2 object put zsb-apk/zhuansheng-vX.apk --file=... --remote
+#     控制台把该桶设为 Public，拿到 pub-xxxx.r2.dev 地址

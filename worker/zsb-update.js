@@ -12,6 +12,11 @@
  *
  * 版本信息仍然以 GitHub Release 为唯一真相，这一层只是「换个更稳的入口」，
  * 不做二次维护，避免两边版本号打架。
+ * ── 2026-10-27 22:27 实测：本 Worker 在边缘持续 500 / error code 1101 ──
+ * 已用「全新 3 行 pong Worker」对照确认是**账号级 Workers 运行时故障**，
+ * 与本文件代码无关（详见 wrangler.toml 底部记录）。
+ * 不要在这里改 fetch / cache 逻辑来试图修 500 —— 改不好的。
+ * App 目前靠 Pages + GitHub API 两条通道正常工作。
  */
 
 const REPO = 'bianhongjun38/zhuansheng';
