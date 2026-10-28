@@ -448,6 +448,16 @@ public class Update {
         new Thread(new Runnable() {
             public void run() {
                 final File out = new File(act.getCacheDir(), "update.apk");
+
+                // 关键：每次下载前必须清掉上一次的残留。
+                //
+                // 以前这里不删。download() 成功路径从不 delete(out)，只有
+                // "某个源失败"才删。于是用户装过一次后 /cache/update.apk
+                // 永久保留旧安装包，下一次更新会拿它做 Range 续传：
+                // 服务器回 416 → 旧代码把 416 当成功 → 安装旧包。
+                // 现象就是"能收到更新提示，但装出来还是旧版本"，且永久复现。
+                if (out.exists()) out.delete();
+
                 Exception last = null;
 
                 outer:
@@ -457,6 +467,12 @@ public class Update {
                         long got = fetchResumable(src, out, pd);
                         if (got < 1024 * 1024) {
                             throw new Exception("文件不完整（" + got + " 字节）");
+                        }
+                        // 必须是真正的 APK（zip 头 PK\x03\x04）。
+                        // 只有长度检查不够：断流时长度可能过线但内容残缺，
+                        // 那种文件系统装到一半会报"解析包出现问题"。
+                        if (!looksLikeApk(out)) {
+                            throw new Exception("下载内容不是有效安装包（" + got + " 字节）");
                         }
                         ui.post(new Runnable() {
                             public void run() { pd.dismiss(); install(out); }
@@ -524,8 +540,14 @@ public class Update {
 
         int sc = c.getResponseCode();
         if (sc == 416) {
-            // 已经下完了（服务端认为请求区间越界）
-            return out.length();
+            // 416 = 请求的区间超出文件总长度。
+            //
+            // 以前这里直接 return out.length()，把它当成"已经下完了"。
+            // 但真实场景是：本地留着**旧版本**的 update.apk，它的长度
+            // 大于服务端这个新文件的长度，于是永远 416，永远返回旧文件。
+            // 这是"更新后版本没变"的根因，必须重下而不是当成功。
+            out.delete();
+            throw new Exception("续传区间失效，已清除重试");
         }
         if (sc != 200 && sc != 206) throw new Exception("HTTP " + sc);
 
@@ -589,5 +611,33 @@ public class Update {
                 android.widget.Toast.makeText(act, s, android.widget.Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    /**
+     * 头 4 字节是不是 zip 魔数 PK\x03\x04。
+     *
+     * APK 就是 zip。Cloudflare 出错时会返回 HTML 错误页（200 + 文本），
+     * 断流会留下半截文件 —— 两者长度都可能过 1MB 门槛，
+     * 但只有真正的 zip 开头才能被系统安装器接受。
+     */
+    private boolean looksLikeApk(File f) {
+        if (f == null || !f.exists() || f.length() < 4) return false;
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream(f);
+            byte[] h = new byte[4];
+            int n = 0;
+            while (n < 4) {
+                int r = in.read(h, n, 4 - n);
+                if (r <= 0) break;
+                n += r;
+            }
+            return n == 4 && h[0] == 0x50 && h[1] == 0x4B
+                    && h[2] == 0x03 && h[3] == 0x04;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+        }
     }
 }

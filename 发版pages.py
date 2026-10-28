@@ -79,10 +79,15 @@ def build_manifest(apk_name, size, vcode, notes, host_on_pages, vname):
         "source": "cloudflare-pages",
     }
     if host_on_pages:
+        # 下载地址必须用 pages.dev，不能用自定义域名 ——
+        # 自定义域名的 Zone 层会把 Range 请求再处理一遍，
+        # 越界 Range 仍返回 416，导致老版本 App 把 416 当成"已下完"
+        # 从而安装缓存里的旧包（表现为"更新了但还是老版本"）。
+        # pages.dev 的 Functions 中间件实测对所有 Range 都返回完整 200。
         man["apk"] = {
             "name": apk_name,
             "size": size,
-            "url": "%s/%s" % (BASE, apk_name),
+            "url": "%s/%s" % (BASE_FALLBACK, apk_name),
         }
     else:
         # APK 超过 Pages 上限：清单里明确不给 Pages 地址，
