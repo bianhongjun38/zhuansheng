@@ -271,6 +271,35 @@ def main():
     if sha(tag):
         print("  tag      %s（已存在，跳过）" % tag)
     else:
+        # ⚠ 打 tag 之前**必须先把 version.json 提交掉**。
+        #
+        # build_apk.py --bump 只改工作区里的 version.json，不 commit。
+        # 如果直接在本地的 tag 命令上打，tag 会指向"上一个 commit"——
+        # 那个 commit 里 versionName 还是旧值。CI 在 tag 上构建时读的是
+        # 仓库内容，于是打出来的包版本号比 tag 少一截：Release 页写着
+        # v1.5.40，附件却叫 zhuansheng-v1.5.39.apk（实测踩到）。
+        # 更糟的是 update.json 已经是 1.5.40，GitHub 那份是 1.5.39，
+        # 两个源版本不一致。
+        need_commit = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=PROJ,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace").stdout.strip()
+        if need_commit:
+            print("\n▶ 提交本次版本变更（tag 必须指向含新 version.json 的 commit）")
+            for cmd in (["git", "add", "-A"],
+                        ["git", "commit", "-m", "release: v%s" % vname]):
+                p = subprocess.run(cmd, cwd=PROJ, capture_output=True,
+                                   text=True, encoding="utf-8", errors="replace")
+                if p.returncode != 0:
+                    print("  ⚠ %s 失败：%s" % (" ".join(cmd),
+                                            (p.stderr or "").strip()[:200]))
+                    break
+            p = subprocess.run(["git", "push", "origin", "main"], cwd=PROJ,
+                               capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+            if p.returncode != 0:
+                print("  ⚠ push 失败：%s" % (p.stderr or "").strip()[:200])
+
         print("\n▶ 打 tag %s 并推送（触发 GitHub Release）" % tag)
         msg = "v%s：%s" % (vname, args.Notes or ("versionCode %d" % vcode))
         for cmd in (["git", "tag", "-a", tag, "-m", msg],
