@@ -49,9 +49,13 @@ public class BoardViewAudit {
         String src = new String(java.nio.file.Files.readAllBytes(
                 java.nio.file.Paths.get("src/com/zsb/plan/BoardView.java")),
                 java.nio.charset.StandardCharsets.UTF_8);
-        boolean hasShortDetail = src.contains("rounds + \" 轮 · \" + total + \" 题 · \" + rate + \"%\"");
+        // 明细行后来又收窄过一次：场次/题数跟节点数量级接近、信息重复，
+        // 换成「层 · 金币 · 正确率」—— 层=爬到哪，金币=攒了多少，正确率=打得准不准。
+        // 断言要钉在**当前**这版真实拼接上，否则源码改了这里还绿，就等于没测。
+        boolean hasShortDetail = src.contains(
+                "\"第\" + (floor + 1) + \"层 · \" + gold + \"金 · \" + rate + \"%\"");
         ok("明细行用的是收窄后的格式", hasShortDetail,
-                "BoardView 里没找到收窄格式，可能又写回长格式了");
+                "BoardView 里的明细行格式变了，请同步这条断言");
 
         // 名字必须靠原生截断，不能靠手算宽度。
         // 这里必须钉死到 nm 这个 View 上 —— 第一版写的是
@@ -62,7 +66,7 @@ public class BoardViewAudit {
                 "BoardView 的 nm 没有 setEllipsize，长名字会挤掉分数");
 
         // 用收窄后的真实格式算宽度
-        String detail = "30 轮 · 600 题 · 100%";
+        String detail = "第30层 · 9999金 · 100%";
         int detW = fm(fSub).stringWidth(detail);
         ok("收窄后的明细放得下", detW <= spare, detW + "px > " + spare + "px");
 
