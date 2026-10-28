@@ -170,6 +170,18 @@ public class GStore {
 
     public void setCurHp(int hp) { sp.edit().putInt("curHp", Math.max(0, hp)).apply(); }
 
+    /**
+     * 当前生命上限。0 表示「还没改过」，按 GameData.playerHp 处理。
+     *
+     * 以前生命上限是个常量（读 cards.json 的 playerHp），只有「非凡的」
+     * 特殊词会在单场战斗里临时 +20。宝箱怪战败要把上限**永久减半**，
+     * 这个损失必须跨战斗、跨进程保留，否则减半只影响当前那一场，
+     * 相当于没罚。所以上限要跟着存档走。
+     */
+    public int curMaxHp() { return sp.getInt("curMaxHp", 0); }
+
+    public void setCurMaxHp(int hp) { sp.edit().putInt("curMaxHp", Math.max(1, hp)).apply(); }
+
     /** 清空已访问记录（新地图 / 新一层时用）。 */
     public void setVisitedClear() { sp.edit().putString("visited", "").apply(); }
 
@@ -365,6 +377,8 @@ public class GStore {
           .putString("visited", "")
           .remove("curRow")
           .remove("curCol")
+          .remove("curMaxHp")     // 新的一局，生命上限回到初始值
+          .remove("curHp")
           .apply();
     }
 

@@ -1432,6 +1432,20 @@ public class GBattleView extends LinearLayout {
             optRow.addView(bigBtn("继续", C_PURPLE, () -> {
                 if (onFinish != null) onFinish.run();
             }));
+        } else if (mimicFight && onDefeatSoft != null) {
+            // 宝箱怪战败：不结束这一局，只砍半生命上限。
+            //
+            // 普通战斗输了要 resetRun()，因为「打不过还能继续走」会让
+            // 塔失去全部压力。但宝箱不是玩家主动挑战的战斗节点 ——
+            // 他只是想开个箱子，被里面的东西咬了一口。
+            // 对这个失误用「整局清零」惩罚过重，会让玩家以后见箱就绕。
+            // 所以单独走这条软失败路径：掉上限，继续爬。
+            battle.onMimicDefeat();
+            optRow.addView(tv("宝箱怪抢走了你的力量：生命上限减半至 "
+                    + battle.playerMaxHp + "。这一局继续。", 12.5f, C_AMBER));
+            optRow.addView(bigBtn("继续爬塔", C_PURPLE, () -> {
+                if (onDefeatSoft != null) onDefeatSoft.run();
+            }));
         } else {
             // 战败必须重开这一局，不能走 onFinish。
             // onFinish 挂的是 advanceAfterBattle()，它无条件 node+1（到层末还翻层），
@@ -1526,6 +1540,19 @@ public class GBattleView extends LinearLayout {
 
     public Runnable onFinish;
     public void setOnFinish(Runnable r) { onFinish = r; }
+
+    /** 战败时不结束这一局的回调（宝箱怪用）。null = 用默认的「重新开始」流程。 */
+    public Runnable onDefeatSoft;
+    public void setOnDefeatSoft(Runnable r) { onDefeatSoft = r; }
+
+    /**
+     * 这一场是不是宝箱怪。
+     *
+     * 宝箱怪的胜负结算和普通战斗不同：赢了照样拿金币，
+     * 但**输了不结束这一局**，只把生命上限减半（见 GBattle.onMimicDefeat）。
+     */
+    private boolean mimicFight = false;
+    public void setMimicFight(boolean b) { mimicFight = b; }
 
     // ── 控件工厂 ─────────────────────────────────────────
 

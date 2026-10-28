@@ -153,7 +153,10 @@ public class GBattle {
         enemyHp = enemyMaxHp;
         enemyChargeNeed = e == null ? 1 : Math.max(1, e.charge);
         enemyCharge = 0;
-        playerMaxHp = g.playerHp;
+        // 生命上限优先用存档里的值 —— 宝箱怪战败会把它永久砍半，
+        // 这个损失必须跟着这一局走，不能每场都回到 cards.json 的初始值。
+        int savedMax = g != null && g.storeRef != null ? g.storeRef.curMaxHp() : 0;
+        playerMaxHp = savedMax > 0 ? savedMax : g.playerHp;
 
         // ── 血量跨战斗保留 ────────────────────────────────────
         // 原来每场战斗都 playerHp = playerMaxHp（满血开局）—— 那样篝火的
@@ -326,7 +329,12 @@ public class GBattle {
         // 原先纯随机的同义对出现率实测 0.4%，机制等于不存在（见 drawCardsWithSyn 注释）。
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
                 + (spRadical ? 1 : 0) - hand.size());
-        if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
+        // 排除已在手上的牌（主要是刚回手的保牌），免得同一个词在一手里出现两张
+        if (need > 0) {
+            java.util.Set<String> hold = new java.util.HashSet<>();
+            for (GCard hc : hand) hold.add(hc.id);
+            hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55, hold));
+        }
         phase = PHASE_CHOOSE;
     }
 
@@ -396,7 +404,11 @@ public class GBattle {
     void refillForTest() {
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
                 + (spRadical ? 1 : 0) - hand.size());
-        if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
+        if (need > 0) {
+            java.util.Set<String> hold = new java.util.HashSet<>();
+            for (GCard hc : hand) hold.add(hc.id);
+            hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55, hold));
+        }
     }
 
 /** 本轮已挑的张数（进保牌界面时清零）。 */
@@ -438,7 +450,13 @@ public class GBattle {
         // ③ 补满手牌。差额补，避免把已保的张数又抽一份回来。
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
                 + (spRadical ? 1 : 0) - kept.size() - hand.size());
-        if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
+        // 排除已保的牌：牌库是按需随机抽，不排除就可能把刚保下的那张
+        // 又抽回手上 —— 同一个词同时出现在手牌区和保牌区，保牌等于没锁。
+        if (need > 0) {
+            java.util.Set<String> hold = new java.util.HashSet<>();
+            for (GCard kc : kept) hold.add(kc.id);
+            hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55, hold));
+        }
 
         keptNow = 0;
         phase = PHASE_PLAY;
@@ -850,6 +868,31 @@ public class GBattle {
     private void saveHp() {
         if (G == null || G.storeRef == null) return;
         G.storeRef.setCurHp(playerHp);
+        G.storeRef.setCurMaxHp(playerMaxHp);
+    }
+
+    /**
+     * 宝箱怪战败的惩罚：生命上限减半，但**这一局继续**。
+     *
+     * 为什么不是直接输：宝箱是奖励点，玩家点开它是想拿金币，不是来
+     * 打一场生死战的。让它和普通战斗一样「输了就清零重来」，
+     * 惩罚重得不合理 —— 玩家会因为怕宝箱怪而开始躲宝箱，
+     * 而宝箱本来是塔里唯一的稳定补给。
+     *
+     * 减半的具体做法：
+     *   · 上限砍半（向下取整，至少留 1）；
+     *   · 当前血量压到新上限以内 —— 否则会出现「20/40 残血反而比
+     *     上限还高」的荒谬状态，下一场开局就被夹回去；
+     *   · 写进存档，跨战斗跨进程保留。
+     *
+     * 已经在半血以下时不回血：减半是惩罚，不是治疗。
+     */
+    public void onMimicDefeat() {
+        int newMax = Math.max(1, playerMaxHp / 2);
+        playerMaxHp = newMax;
+        playerHp = Math.min(playerHp, newMax);
+        lastMsg = "📦 宝箱怪抢走了你的力量：生命上限减半至 " + newMax;
+        saveHp();
     }
 
     /**

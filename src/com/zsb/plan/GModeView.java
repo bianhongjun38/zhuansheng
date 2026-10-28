@@ -194,11 +194,35 @@ public class GModeView extends LinearLayout {
         renderMap();
     }
 
+    /**
+     * 顶栏信息。
+     *
+     * ── 必须显示生命 ────────────────────────────────────
+     * 以前只有金币/特殊词/道具/层数，血量只能在战斗中看到。
+     * 于是出现两种糟糕情况：
+     *   · 刚打完一场剩 12 血，地图上完全看不出自己快死了，
+     *     下一步该选篝火还是继续冲完全没有依据；
+     *   · 篝火「回复 30%」这种选项也无从判断值不值。
+     * 血量和金币一样是这一局的核心资源，必须常驻可见。
+     *
+     * 血量显示按「当前/上限」，上限来自存档（宝箱怪战败会把它砍半）。
+     * curHp() 为 -1 表示这一局还没打过战斗 —— 按满血显示，
+     * 和 GBattle 开局的处理保持一致。
+     */
     private void updateHead() {
         TextView info = findViewById(android.R.id.text1);
-        if (info != null) info.setText("✦ " + store.gold() + "    特殊词 "
+        if (info == null) return;
+        int maxHp = store.curMaxHp() > 0 ? store.curMaxHp() : data.playerHp;
+        int hp = store.curHp();
+        if (hp < 0) hp = maxHp;
+        // 血量低于三成时标红，让「快死了」在地图上就能看出来
+        String hpTxt = "❤ " + Math.min(hp, maxHp) + "/" + maxHp + "    ";
+        info.setText(hpTxt + "✦ " + store.gold() + "    特殊词 "
                 + store.specialCount() + "    道具 " + store.itemCount()
                 + "    Lv." + (store.bestFloor() + 1));
+        // 残血提醒：整个顶栏染红，比只改一段数字更醒目
+        boolean low = hp * 100 < maxHp * 30;
+        info.setTextColor(low ? C_RED : (hp * 100 < maxHp * 60 ? C_AMBER : C_FG));
     }
 
     // ── 地图 ─────────────────────────────────────────────
@@ -713,7 +737,22 @@ public class GModeView extends LinearLayout {
         body.addView(back);
     }
 
-    /** 宝箱：直接拿金币。是奖励点，不是战斗。 */
+    /**
+     * 宝箱：多数时候是金币，但可能是宝箱怪。
+     *
+     * ── 为什么要加宝箱怪 ────────────────────────────────
+     *
+     * 宝箱原本是地图上唯一「无风险纯收益」的格子，于是最优解变成了
+     * 「见箱就开」—— 一个不需要任何判断的选择。加入宝箱怪后，开箱
+     * 变成一次小赌：绝大多数情况白拿金币，少数情况要先打一场。
+     *
+     * 判定放在**点开箱的那一刻**，不是进格子时 —— 玩家看到的永远是
+     * 一个普通宝箱，才有「被骗」的意外感。同时「不打开」这个选项
+     * 也才真的有意义。
+     *
+     * 打不过怎么办：宝箱怪是普通强度（hp 80 / atk 8），不是精英；
+     * 万一输了就走正常的战败流程（这一局结束），不额外惩罚。
+     */
     private void openChest() {
         body.removeAllViews();
         updateHead();
@@ -727,12 +766,52 @@ public class GModeView extends LinearLayout {
 
         LinearLayout acts = box();
         acts.addView(bigBtn("打开 · 拿 " + gold + " 金币", C_TEAL, () -> {
+            // 判定在这里：点下去才知道箱子里是不是有东西在等你
+            if (data.rollMimic(rnd)) {
+                startMimicFight(gold);
+                return;
+            }
             store.addGold(gold);
             flashThen("📦 获得 " + gold + " 金币", this::advanceAfterNode);
         }));
         acts.addView(smallBtn("不打开，直接前进", this::advanceAfterNode));
         body.addView(acts);
     }
+
+    /**
+     * 宝箱怪战。
+     *
+     * 奖励用「这场战斗该给的金币」而不是开箱的 gold —— 打了一场怪，
+     * 收益应该按战斗算（和普通战斗同档），否则宝箱怪战会比普通战斗
+     * 更亏，玩家会觉得被骗了还被罚。
+     *
+     * pendingChestGold 记下宝箱原本的金额，打赢后按两者取高，
+     * 保证「开了箱子还打赢了」永远不亏。
+     */
+    private void startMimicFight(int chestGold) {
+        GameData.Enemy e = data.enemyById("mimic");
+        if (e == null) {   // 数据缺失时退回普通开箱，不给玩家卡死
+            store.addGold(chestGold);
+            flashThen("📦 获得 " + chestGold + " 金币", this::advanceAfterNode);
+            return;
+        }
+        pendingChestGold = chestGold;
+        startBattle(e);
+        if (battleView == null) return;
+        battleView.setMimicFight(true);
+        // 宝箱怪战败：不掉整局，只砍半生命上限，然后继续前进。
+        battleView.setOnDefeatSoft(() -> {
+            pendingChestGold = -1;
+            clearFightNode();
+            store.clearBattleNode();
+            endBattle();
+            advanceStep();
+            renderMap();
+        });
+    }
+
+    /** 宝箱怪战里那个宝箱原本值多少金币。-1 表示不是宝箱怪战。 */
+    private int pendingChestGold = -1;
 
     /** 显示一句结果，等玩家点继续。 */
     private void flashThen(String msg, Runnable next) {
@@ -794,6 +873,12 @@ public class GModeView extends LinearLayout {
      *      于是节点越界、地图上一个能点的格子都没有 —— 玩家被卡死在层末。
      */
     private void advanceAfterBattle() {
+        // 宝箱怪打赢了：把开箱该拿的金币补上（战斗本身另有一份金币奖励，
+        // 见 GBattleView.showEnd）。两个都给，才对得起「开了箱子还打了一场」。
+        if (pendingChestGold > 0) {
+            store.addGold(pendingChestGold);
+            pendingChestGold = -1;
+        }
         clearFightNode();        // 玩家确认过了，这一格才算真正走完
         store.clearBattleNode();
         advanceStep();

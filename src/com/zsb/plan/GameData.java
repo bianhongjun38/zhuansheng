@@ -233,9 +233,26 @@ public class GameData {
      * @param focus 上一张/共鸣槽里的词，可为 null；非空时优先围绕它出同义词
      */
     public List<GCard> drawCardsWithSyn(int n, Random rnd, GCard focus, double seedP) {
+        return drawCardsWithSyn(n, rnd, focus, seedP, null);
+    }
+
+    /**
+     * 同上，但可以排除一批 id 不抽。
+     *
+     * 为什么需要排除：牌库是「全词库按需随机抽」，没有真正的抽牌堆。
+     * 保牌之后要洗牌补手牌，如果不管住「已保下的牌」，
+     * 洗牌完全可能把同一张牌又抽回手上 —— 玩家会看到同一个词
+     * 同时躺在手牌区和保牌区，保牌等于没锁住。
+     *
+     * exclude 里的 id 一律不抽。同义定向那一步也要过这个过滤，
+     * 否则「定向补一张同义词」照样可能补回已保的牌。
+     */
+    public List<GCard> drawCardsWithSyn(int n, Random rnd, GCard focus, double seedP,
+                                        Set<String> exclude) {
         List<GCard> out = new ArrayList<>();
         if (words.isEmpty() || n <= 0) return out;
         Set<String> used = new HashSet<>();
+        if (exclude != null) used.addAll(exclude);
 
         // ① 先抽 n-1 张纯随机
         int head = Math.max(0, n - 1);
@@ -262,7 +279,8 @@ public class GameData {
             if (!syn.isEmpty()) {
                 String pick = syn.get(rnd.nextInt(syn.size()));
                 GCard g = byId.get(pick);
-                if (g != null && !used.contains(g.id)) tail = g;
+                if (g != null && !used.contains(g.id)
+                        && (exclude == null || !exclude.contains(g.id))) tail = g;
             }
         }
 
@@ -500,6 +518,30 @@ public class GameData {
                 }
             }
         }
+    }
+
+    /**
+     * 宝箱怪出现的概率（百分比）。
+     *
+     * 定 25% 的理由：这是「赌博」而不是「惩罚」——
+     * 太低（10%）玩家会无脑开箱，宝箱怪失去了存在感；
+     * 太高（40%）开箱的期望收益转负，玩家开始躲宝箱，
+     * 而宝箱本来是地图上唯一的稳定补给点。
+     * 25% 大约等于「四箱一怪」，每次开箱都还是值得赌。
+     */
+    public int mimicChance = 25;
+
+    /** 开箱时是否触发宝箱怪。 */
+    public boolean rollMimic(Random rnd) {
+        if (mimicChance <= 0) return false;
+        return rnd.nextInt(100) < mimicChance;
+    }
+
+    /** 按 id 取敌人（宝箱怪不参与 pickEnemy 的常规抽取，只能这样拿）。 */
+    public Enemy enemyById(String id) {
+        if (id == null) return null;
+        for (Enemy e : enemies) if (id.equals(e.id)) return e;
+        return null;
     }
 
     /** 按节点类型与层数挑敌人。 */

@@ -446,6 +446,16 @@
       "charge": 2,
       "tier": "boss",
       "sprite": "syntaxwall"
+    },
+    {
+      "id": "mimic",
+      "name": "宝箱怪",
+      "nameEn": "The Mimic",
+      "hp": 80,
+      "atk": 8,
+      "charge": 2,
+      "tier": "mimic",
+      "sprite": "devourer"
     }
   ],
   "balance": {
