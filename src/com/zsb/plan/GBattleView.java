@@ -46,7 +46,7 @@ public class GBattleView extends LinearLayout {
     private GBattle battle;
     private GSprite sprite;
     private LinearLayout stage, handRow, optRow;
-    private TextView tvMsg, tvEnemyHp, tvPlayerHp, tvIntent;
+    private TextView tvMsg, tvEnemyHp, tvPlayerHp, tvIntent, tvResonance;
 
     /** 战报：每回合发生的事都记在这，点战报条可看全部。 */
     private final java.util.ArrayList<String> log = new java.util.ArrayList<>();
@@ -55,6 +55,27 @@ public class GBattleView extends LinearLayout {
     /** 战报/状态的浮层；null 表示没打开。 */
     private android.widget.FrameLayout overlay;
     private android.app.Dialog dialog;
+
+    // ── 受击表现 ─────────────────────────────────────────
+    // 这套动画是 2026-10-28 补的。此前敌人攻击只有一行战报文字，
+    // 血条瞬间跳变，玩家反馈"不知道是否攻击了也没有攻击动作"。
+    /** 血条红色残影的当前值，比真实血量滞后，用来表现"刚掉了多少"。 */
+    private float hpTrail = -1f;
+    /** 残影开始追赶的时间点（uptimeMillis）；0 表示不追赶。 */
+    private long hpTrailStart = 0;
+    /** 血条外层容器，受击时抖动它。 */
+    private LinearLayout midRow;
+    /** 残影条与真实条，宽度按血量比例设置。 */
+    private View hpTrailBar, hpFillBar;
+    /** 玩家血量条总宽（像素），布局时算一次。 */
+    private int hpBarMaxW = 1;
+    /** 屏幕闪红层。 */
+    private View flashView;
+    /** 抖动/残影动画的帧循环。 */
+    private final Runnable fxTick = new Runnable() {
+        @Override public void run() { stepFx(); }
+    };
+    private boolean fxRunning = false;
 
     /** 当前正在答题的牌；null 表示没在答题。 */
     private GCard pending;
@@ -95,16 +116,64 @@ public class GBattleView extends LinearLayout {
         tvIntent.setGravity(Gravity.CENTER);
         tvIntent.setPadding(0, dp(3), 0, 0);
         top.addView(tvIntent);
+
+        // 共鸣槽：只在这一槽有词时出现
+        tvResonance = tv("", 12, C_PURPLE);
+        tvResonance.setGravity(Gravity.CENTER);
+        tvResonance.setPadding(dp(8), dp(4), dp(8), dp(4));
+        tvResonance.setBackground(round(0xFF2A2440, 8, C_PURPLE));
+        LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        rp.topMargin = dp(5);
+        tvResonance.setLayoutParams(rp);
+        tvResonance.setVisibility(GONE);
+        top.addView(tvResonance);
+
         addView(top);
 
-        // 玩家血条
-        LinearLayout mid = new LinearLayout(getContext());
-        mid.setOrientation(HORIZONTAL);
-        mid.setGravity(Gravity.CENTER_VERTICAL);
-        mid.setPadding(dp(14), dp(8), dp(14), dp(8));
+        // 玩家血条 + 受击表现
+        //
+        // 三层结构（原方案只有一层纯文字，受击时只是数字跳变，看不出打了多少）：
+        //   底槽（深色）→ 红色残影条（滞后追赶）→ 真实血量条（绿色）
+        // 残影留在原位、真实条立刻缩短，两者之间的红块就是"这一下掉了多少"。
+        midRow = new LinearLayout(getContext());
+        midRow.setOrientation(VERTICAL);
+        midRow.setPadding(dp(14), dp(8), dp(14), dp(8));
+
+        LinearLayout hpLine = new LinearLayout(getContext());
+        hpLine.setOrientation(HORIZONTAL);
+        hpLine.setGravity(Gravity.CENTER_VERTICAL);
         tvPlayerHp = tv("", 13, C_FG);
-        mid.addView(tvPlayerHp);
-        addView(mid);
+        hpLine.addView(tvPlayerHp);
+        midRow.addView(hpLine);
+
+        android.widget.FrameLayout bar = new android.widget.FrameLayout(getContext());
+        LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(9));
+        bp.topMargin = dp(5);
+        bar.setLayoutParams(bp);
+        bar.setBackground(round(0xFF22252E, 5, 0));
+
+        // 残影条（红）—— 先加，画在底层
+        hpTrailBar = new View(getContext());
+        hpTrailBar.setBackground(round(0xFFE05B5B, 5, 0));
+        bar.addView(hpTrailBar, new android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // 真实血量条（绿）—— 后加，盖在残影之上
+        hpFillBar = new View(getContext());
+        hpFillBar.setBackground(round(C_GREEN, 5, 0));
+        bar.addView(hpFillBar, new android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        midRow.addView(bar);
+        addView(midRow);
+
+        // 血条宽度要等布局完成才知道，post 一次补同步
+        bar.post(new Runnable() {
+            @Override public void run() {
+                hpBarMaxW = Math.max(1, bar.getWidth());
+                syncHpBar();
+            }
+        });
 
         // 战报条：点开看完整日志（答对/答错/触发效果/增减益都在这）
         tvMsg = tv("", 12.5f, C_FG2);
@@ -144,6 +213,25 @@ public class GBattleView extends LinearLayout {
         stage.setOrientation(VERTICAL);
         stage.setPadding(dp(14), dp(8), dp(14), dp(4));
         addView(stage);
+
+        // 受击闪红层：盖在最上层，平时不可见、不接收触摸。
+        //
+        // GBattleView 本身是 LinearLayout，没法"叠"东西；这里把一个
+        // FrameLayout 作为最后一层加进来，闪红层放在其中，靠 match_parent
+        // 铺满整个战斗区，就能实现全屏闪红。
+        android.widget.FrameLayout flashHost = new android.widget.FrameLayout(getContext());
+        flashHost.setLayoutParams(new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0));   // 高度 0，只做覆盖宿主
+        flashView = new View(getContext());
+        flashView.setBackgroundColor(0xFFFF3B3B);
+        flashView.setAlpha(0f);
+        flashView.setClickable(false);
+        flashView.setFocusable(false);
+        flashView.setLayoutParams(new android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        flashView.setVisibility(GONE);
+        flashHost.addView(flashView);
+        addView(flashHost);
     }
 
     // ── 排行榜埋点 ────────────────────────────────────────
@@ -183,14 +271,33 @@ public class GBattleView extends LinearLayout {
         tvPlayerHp.setText("生命 " + battle.playerHp + " / " + battle.playerMaxHp
                 + "    能量 " + battle.energy + " / " + battle.energyMax
                 + "    回合 " + battle.turn);
+        syncHpBar();
 
-        // 敌人意图：还差几回合攻击
+        // 敌人意图：必须说真话。
+        //
+        // 引擎的实际节奏是 endTurn() 里先 enemyCharge++ 再比较，
+        // 所以 chargeNeed=1 的怪每回合结束必打，chargeNeed=2 的隔回合打。
+        // 原来这里写死"下回合攻击（还需 N 回合）"：普通怪永远显示还需 1 回合，
+        // 玩家以为还能安全过一回合，结果结束回合立刻挨打 —— 预告和实际不符。
+        //
+        // left = 距离下次攻击还差几次 endTurn。left==1 就是【本回合结束时】打，
+        // 必须明确写"本回合"，让玩家知道现在就该做防御决策。
         if (battle.enemy != null) {
             int left = battle.enemyChargeNeed - battle.enemyCharge;
-            if (left <= 0) left = 1;
-            tvIntent.setText("意图：下回合攻击 " + battle.enemy.atk
-                    + " 伤害（还需 " + left + " 回合）");
+            if (left < 1) left = 1;
+            int atk = enemyAtk();
+            if (left <= 1) {
+                tvIntent.setText("⚔ 本回合结束时攻击 " + atk + " 伤害");
+                tvIntent.setTextColor(C_RED);
+            } else {
+                tvIntent.setText("⏳ 蓄力中 · 还需 " + (left - 1) + " 回合"
+                        + "（届时攻击 " + atk + "）");
+                tvIntent.setTextColor(C_AMBER);
+            }
         }
+
+        // 共鸣槽提示：跨回合保留，告诉玩家"再打一张同义词就暴击"
+        renderResonance();
 
         // 战报条优先显示最近一次操作结果，其次才是引擎消息
         String line = flash != null && !flash.isEmpty() ? flash : battle.lastMsg;
@@ -453,11 +560,14 @@ public class GBattleView extends LinearLayout {
             return;
         }
         if (hurt) {
-            int dmg = hpBefore - battle.playerHp;
-            flash = "▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+            final int dmg = hpBefore - battle.playerHp;
+            flash = "⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
                     + " 攻击　你受到 " + dmg + " 伤害";
             addLog(flash, C_RED);
-            sprite.play("attack");
+            // 演出交给 enemyStrike：后撤→前冲→命中(闪红+抖动+残影+飘字)→回位
+            enemyStrike(new Runnable() {
+                @Override public void run() { playerHurtFx(dmg); }
+            });
         } else {
             addLog("── 你结束了回合（敌人还在蓄力）", C_FG3);
             sprite.play("move");
@@ -533,11 +643,16 @@ public class GBattleView extends LinearLayout {
                 // 也就是敌人已经打完你了。原来这里直接 render()，那一下完全静默：
                 // 不掉血条动画、不写战报，玩家只看到血量数字莫名少了一截。
                 if (battle.playerHp < myHpBefore) {
-                    int took = myHpBefore - battle.playerHp;
-                    addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                    final int took = myHpBefore - battle.playerHp;
+                    addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
                             + " 攻击　你受到 " + took + " 伤害", C_RED);
-                    // 敌人真打到了你，播它的攻击动作
-                    if (!battle.over()) sprite.play("attack");
+                    if (!battle.over()) {
+                        enemyStrike(new Runnable() {
+                            @Override public void run() { playerHurtFx(took); }
+                        });
+                    } else {
+                        playerHurtFx(took);
+                    }
                 }
             } else if (c.isAdverb()) {
                 resolveAdverb(c);
@@ -553,10 +668,16 @@ public class GBattleView extends LinearLayout {
             // onWrong() 在手牌因此变空时也会内部 endTurn(false)，敌人会真的打你一下。
             // 这种情况要按「攻击」演，不能还停在蓄力动作上。
             if (battle.playerHp < myHpBefore) {
-                int took = myHpBefore - battle.playerHp;
-                addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                final int took = myHpBefore - battle.playerHp;
+                addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
                         + " 攻击　你受到 " + took + " 伤害", C_RED);
-                if (!battle.over()) sprite.play("attack");
+                if (!battle.over()) {
+                    enemyStrike(new Runnable() {
+                        @Override public void run() { playerHurtFx(took); }
+                    });
+                } else {
+                    playerHurtFx(took);
+                }
             }
         }
 
@@ -695,7 +816,10 @@ public class GBattleView extends LinearLayout {
             col.addView(statLine("敌人血量",
                     battle.enemyHp + " / " + battle.enemyMaxHp, null));
             col.addView(statLine("下次攻击",
-                    battle.enemy.atk + " 伤害（还需 " + left + " 回合）", C_AMBER));
+                    enemyAtk() + " 伤害"
+                            + (left <= 1 ? "（本回合结束时）"
+                                         : "（还需 " + (left - 1) + " 回合）"),
+                    left <= 1 ? C_RED : C_AMBER));
         }
 
         // ── 增减益 ──
@@ -1005,5 +1129,229 @@ public class GBattleView extends LinearLayout {
     private int dp(float v) {
         return Math.round(TypedValue.applyDimension(
                 TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+    }
+
+    /**
+     * 敌人这一下实际会打多少。
+     *
+     * 不能直接显示 enemy.atk —— 答错会让伤害翻倍（wrongDamageMultiplier），
+     * 意图写着 8 结果打 16，玩家会以为是 bug。预告必须预报真实数值。
+     */
+    private int enemyAtk() {
+        if (battle == null || battle.enemy == null) return 0;
+        int dmg = battle.enemy.atk;
+        if (battle.wrongDoubled) {
+            dmg = (int) Math.round(dmg * data.wrongDamageMultiplier);
+        }
+        return dmg;
+    }
+
+    // ── 受击表现实现 ─────────────────────────────────────
+
+    /**
+     * 把血量百分比刷到两条血条上。
+     *
+     * hpTrail 是残影：正常情况等于真实血量；掉血时它先留在原处，
+     * 由 stepFx() 逐帧追上来，中间露出的红色就是这次掉了多少。
+     */
+    private void syncHpBar() {
+        if (battle == null || hpFillBar == null) return;
+        int max = Math.max(1, battle.playerMaxHp);
+        int w = hpBarMaxW > 1 ? hpBarMaxW : Math.max(1, midRow.getWidth() - dp(28));
+        if (w > 1) hpBarMaxW = w;
+
+        float cur = Math.max(0f, Math.min(1f, battle.playerHp / (float) max));
+        if (hpTrail < 0f) hpTrail = cur;
+
+        setBarW(hpFillBar, w, cur);
+        setBarW(hpTrailBar, w, Math.max(cur, hpTrail));
+    }
+
+    private void setBarW(View v, int total, float ratio) {
+        if (v == null) return;
+        android.view.ViewGroup.LayoutParams lp = v.getLayoutParams();
+        if (lp == null) return;
+        lp.width = Math.max(0, Math.round(total * ratio));
+        v.setLayoutParams(lp);
+    }
+
+    /**
+     * 敌人攻击表现：后撤蓄力 → 前冲 → 命中反馈 → 回位。
+     *
+     * 用 View 的 translationX/scaleX/scaleY，不需要 Canvas 重绘循环，
+     * 也不用引入动画库 —— 这套属性从 API 11 就有。
+     * 全程 420ms，命中点在第 190ms。
+     */
+    private void enemyStrike(final Runnable onHit) {
+        if (sprite == null) { if (onHit != null) onHit.run(); return; }
+
+        float back = -dp(16);    // 后撤（向右，因为敌人在中上）
+        float hit  = dp(46);     // 前冲
+
+        // ① 蓄力后撤 0~110ms
+        sprite.animate().translationX(back).scaleX(1.10f).scaleY(0.92f)
+                .setDuration(110).withEndAction(new Runnable() {
+            @Override public void run() {
+                // ② 前冲 110~190ms
+                sprite.animate().translationX(hit).scaleX(1.18f).scaleY(0.86f)
+                        .setDuration(80).withEndAction(new Runnable() {
+                    @Override public void run() {
+                        // ③ 命中：扣血已由引擎完成，这里只负责"演"
+                        if (onHit != null) onHit.run();
+                        // ④ 回位 190~420ms
+                        sprite.animate().translationX(0f).scaleX(1f).scaleY(1f)
+                                .setDuration(230).start();
+                    }
+                }).start();
+            }
+        }).start();
+
+        // 精灵动作同步：攻击帧
+        sprite.play("attack");
+    }
+
+    /**
+     * 玩家受击的完整表现：闪红 + 抖动 + 残影 + 飘字。
+     * 所有子效果都是独立的 View 属性，互不阻塞。
+     */
+    private void playerHurtFx(int dmg) {
+        if (dmg <= 0) return;
+
+        // ① 屏幕闪红：淡入 60ms，淡出 260ms
+        if (flashView != null && flashView.getParent() != null) {
+            flashView.setVisibility(VISIBLE);
+            flashView.setAlpha(0f);
+            flashView.animate().alpha(0.32f).setDuration(60)
+                    .withEndAction(new Runnable() {
+                @Override public void run() {
+                    flashView.animate().alpha(0f).setDuration(260)
+                            .withEndAction(new Runnable() {
+                        @Override public void run() {
+                            flashView.setVisibility(GONE);
+                        }
+                    }).start();
+                }
+            }).start();
+        }
+
+        // ② 血条抖动（左右各 6dp，衰减）
+        shakeRow();
+
+        // ③ 残影从当前值开始追赶真实血量
+        if (battle != null) {
+            int max = Math.max(1, battle.playerMaxHp);
+            hpTrail = Math.max(hpTrail, (battle.playerHp + dmg) / (float) max);
+            hpTrailStart = android.os.SystemClock.uptimeMillis() + 220;  // 停 220ms 再追
+        }
+        startFx();
+
+        // ④ 伤害飘字
+        floatDamage(dmg);
+    }
+
+    /** 血条容器左右抖动，衰减到 0。 */
+    private void shakeRow() {
+        if (midRow == null) return;
+        final float[] seq = { -6f, 6f, -5f, 5f, -3f, 3f, -1.5f, 1.5f, 0f };
+        for (int i = 0; i < seq.length; i++) {
+            final float dx = dp(seq[i]);
+            midRow.postDelayed(new Runnable() {
+                @Override public void run() { midRow.setTranslationX(dx); }
+            }, i * 32L);
+        }
+    }
+
+    /** 伤害数字从血条处飘起并淡出。 */
+    private void floatDamage(int dmg) {
+        if (midRow == null || midRow.getParent() == null) return;
+        final TextView ft = tv("-" + dmg, 22, C_RED);
+        ft.setTypeface(Typeface.DEFAULT_BOLD);
+        ft.setAlpha(1f);
+        midRow.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    ((ViewGroup) midRow.getParent()).addView(ft,
+                            new LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT));
+                } catch (Throwable ignored) { return; }
+                ft.animate().translationY(-dp(40)).alpha(0f)
+                        .setDuration(760).withEndAction(new Runnable() {
+                    @Override public void run() {
+                        ViewGroup p = (ViewGroup) ft.getParent();
+                        if (p != null) p.removeView(ft);
+                    }
+                }).start();
+            }
+        });
+    }
+
+    private void startFx() {
+        if (fxRunning) return;
+        fxRunning = true;
+        postDelayed(fxTick, 16L);
+    }
+
+    /** 残影追赶：每帧把 hpTrail 往真实血量收，收齐就停。 */
+    private void stepFx() {
+        if (battle == null) { fxRunning = false; return; }
+        int max = Math.max(1, battle.playerMaxHp);
+        float cur = Math.max(0f, Math.min(1f, battle.playerHp / (float) max));
+        boolean busy = false;
+
+        if (hpTrail > cur + 0.001f
+                && android.os.SystemClock.uptimeMillis() >= hpTrailStart) {
+            hpTrail -= Math.max(0.004f, (hpTrail - cur) * 0.16f);
+            if (hpTrail < cur) hpTrail = cur;
+            busy = true;
+        } else if (hpTrail < cur) {
+            hpTrail = cur;   // 回血（篝火/道具）直接跟上，不做残影
+        }
+
+        setBarW(hpFillBar, hpBarMaxW, cur);
+        setBarW(hpTrailBar, hpBarMaxW, Math.max(cur, hpTrail));
+
+        if (busy) postDelayed(fxTick, 16L);
+        else fxRunning = false;
+    }
+
+    /**
+     * 共鸣槽。
+     *
+     * 玩家需要知道"槽里现在是什么词、打它的同义词就能暴击"，
+     * 否则跨回合机制完全不可见（这是原版连锁最大的问题：触发了才显示，
+     * 玩家不知道还差什么）。
+     * 槽里只显示英文 —— 显示中文就等于把答案印出来了。
+     */
+    private void renderResonance() {
+        if (tvResonance == null) return;
+        if (battle == null || battle.resonance == null) {
+            tvResonance.setVisibility(GONE);
+            return;
+        }
+        tvResonance.setVisibility(VISIBLE);
+        tvResonance.setText("⚡ 共鸣待发：" + battle.resonance.en
+                + "　—　打出与它同义的词可暴击 ×" + (int) Math.round(battle.resonanceMul * 100) / 100.0);
+    }
+
+    /**
+     * 视图离开窗口时必须停掉自循环。
+     *
+     * stepFx() 会一直 postDelayed 自己直到血条追上真实血量，
+     * 如果玩家在中途退出战斗，这个 Runnable 会继续持有 View 引用 ——
+     * 典型的动画泄漏。这里统一收尾。
+     */
+    @Override
+    protected void onDetachedFromWindow() {
+        removeCallbacks(fxTick);
+        fxRunning = false;
+        if (sprite != null) {
+            sprite.animate().cancel();
+            sprite.setTranslationX(0f);
+            sprite.setScaleX(1f);
+            sprite.setScaleY(1f);
+        }
+        if (midRow != null) midRow.setTranslationX(0f);
+        super.onDetachedFromWindow();
     }
 }

@@ -216,6 +216,67 @@ public class GameData {
         return out;
     }
 
+    /**
+     * 带同义保底的抽牌。
+     *
+     * 为什么需要它：vocab.json 里 396 个同义组中 324 个（82%）只有 2 个词，
+     * 而词库有 1654 个词。纯随机抽 5 张出现同义对的概率实测只有 0.4%，
+     * 意味着平均 250 回合才有一次同义连锁 —— 机制等于不存在。
+     *
+     * 做法：先抽 n-1 张；若其中有可共鸣的词，就以 seedP 的概率把最后一张
+     * 定向抽成它的同义词。留出不触发的概率是刻意的：既避免手牌千篇一律，
+     * 也不让玩家摸清"第几张一定是同义词"而跳过背词直接盲点。
+     *
+     * @param focus 上一张/共鸣槽里的词，可为 null；非空时优先围绕它出同义词
+     */
+    public List<GCard> drawCardsWithSyn(int n, Random rnd, GCard focus, double seedP) {
+        List<GCard> out = new ArrayList<>();
+        if (words.isEmpty() || n <= 0) return out;
+        Set<String> used = new HashSet<>();
+
+        // ① 先抽 n-1 张纯随机
+        int head = Math.max(0, n - 1);
+        int guard = 0;
+        while (out.size() < head && guard++ < head * 30) {
+            GCard g = words.get(rnd.nextInt(words.size()));
+            if (used.add(g.id)) out.add(g);
+        }
+
+        // ② 挑一个种子：优先用 focus（共鸣槽已有词），否则用刚抽到的可共鸣词
+        GCard seed = null;
+        if (focus != null && byId.get(focus.id) != null && !synonymsOf(focus.id).isEmpty()) {
+            seed = focus;
+        } else {
+            List<GCard> cand = new ArrayList<>();
+            for (GCard g : out) if (!synonymsOf(g.id).isEmpty()) cand.add(g);
+            if (!cand.isEmpty()) seed = cand.get(rnd.nextInt(cand.size()));
+        }
+
+        // ③ 定向补一张同义词
+        GCard tail = null;
+        if (seed != null && rnd.nextDouble() < seedP) {
+            List<String> syn = synonymsOf(seed.id);
+            if (!syn.isEmpty()) {
+                String pick = syn.get(rnd.nextInt(syn.size()));
+                GCard g = byId.get(pick);
+                if (g != null && !used.contains(g.id)) tail = g;
+            }
+        }
+
+        // ④ 没定向成功就随机补，保证手牌张数不打折
+        guard = 0;
+        while (out.size() < n && guard++ < n * 30) {
+            GCard g = tail != null && !used.contains(tail.id)
+                    ? tail : words.get(rnd.nextInt(words.size()));
+            if (used.add(g.id)) out.add(g);
+            if (g == tail) tail = null;
+        }
+
+        // ⑤ 打乱：定向来的那张不能老在固定位置，否则玩家会跳过背词直接盲点
+        java.util.Collections.shuffle(out, rnd);
+        return out;
+    }
+
     public GCard byId(String id) { return byId.get(id); }
 
     // ── 地图 ─────────────────────────────────────────────

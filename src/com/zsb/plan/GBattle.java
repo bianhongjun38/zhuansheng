@@ -45,6 +45,23 @@ public class GBattle {
 
     /** 本回合已出过牌的最后一张，用于同义连锁判定。 */
     public GCard lastPlayed;
+
+    /**
+     * 同义共鸣槽 —— 跨回合保留。
+     *
+     * 打出任意一张「有同义词」的词牌后，它留在槽里等后续回合配对；
+     * 一旦打出与它同义的牌，触发共鸣暴击并清空。
+     *
+     * 为什么要跨回合：原来只比对 lastPlayed（本回合上一张），
+     * 而 5 张手牌里凑出同义对的概率实测 0.4%，机制等于不存在。
+     */
+    public GCard resonance;
+    /** 共鸣暴击倍率。比普通连锁高，因为凑对本身需要额外的词汇量。 */
+    public double resonanceMul = 1.8;
+    /** 本回合是否已经触发过共鸣（防止一回合内反复刷）。 */
+    public boolean resonanceUsedThisTurn = false;
+    /** 上一张牌是否触发了共鸣，供界面显示。 */
+    public boolean lastWasResonance = false;
     /** 连锁计数，用于界面显示与伤害递增。 */
     public int chain;
     public String lastMsg = "";
@@ -102,14 +119,18 @@ public class GBattle {
         noAttackThisTurn = false;
         lastPlayed = null;
         chain = 0;
+        resonanceUsedThisTurn = false;
+        lastWasResonance = false;
         energy = energyMax;
 
         // 保下来的牌先回手
         hand.clear();
         if (!kept.isEmpty()) { hand.addAll(kept); kept.clear(); }
 
+        // 发牌走「同义保底」版本：以共鸣槽里的词为焦点，约 55% 概率补一张同义词。
+        // 原先纯随机的同义对出现率实测 0.4%，机制等于不存在（见 drawCardsWithSyn 注释）。
         int need = Math.max(0, G.handSize + extraDraw - hand.size());
-        if (need > 0) hand.addAll(G.drawCards(need, rnd));
+        if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
         phase = PHASE_CHOOSE;
     }
 
@@ -150,13 +171,35 @@ public class GBattle {
 
         int dmg = attackBlocked() ? 0 : G.baseDamage;
 
-        // 同义连锁
+        // ── 同义共鸣 / 连环 ────────────────────────────────
+        //
+        // 两条路径，按优先级：
+        //   ① 共鸣槽命中：槽里存的词与这张同义 → 暴击（倍率更高，且跨回合有效）
+        //   ② 本回合连环：与上一张同义 → 递增倍率（原有机制，保留）
+        // 都不满足时，若这张牌本身有同义词，就把它放进槽里等以后配对。
+        lastWasResonance = false;
         boolean chained = lastPlayed != null && G.synonym(lastPlayed.id, c.id);
-        if (chained) {
+
+        if (resonance != null && !resonanceUsedThisTurn && G.synonym(resonance.id, c.id)) {
+            // ① 共鸣暴击
+            dmg = (int) Math.round(dmg * resonanceMul);
+            lastWasResonance = true;
+            resonanceUsedThisTurn = true;
+            resonance = null;          // 触发即消耗
+            chain++;
+        } else if (chained) {
+            // ② 本回合连环
             chain++;
             dmg = (int) Math.round(dmg * Math.pow(G.chainMultiplier, Math.min(chain, 3)));
         } else {
             chain = 0;
+        }
+
+        // 槽是空的、且这张牌有同义词 → 入槽等待
+        // 注意：这里查的是「词库里有没有与它同义的词」，不是「手牌里有没有」——
+        // 手牌里有没有是发牌的事，玩家无法控制；词库里有没有才是稳定的。
+        if (resonance == null && !G.synonymsOf(c.id).isEmpty()) {
+            resonance = c;
         }
 
         // 副词与临时加成
@@ -168,7 +211,8 @@ public class GBattle {
         discard.add(c);
         energy--;
 
-        lastMsg = (chained ? "同义连锁 ×" + chain + "  " : "") + c.en + "  造成 " + dmg + " 伤害";
+        lastMsg = (lastWasResonance ? "⚡ 共鸣暴击  " : (chained ? "同义连锁 ×" + chain + "  " : ""))
+                + c.en + "  造成 " + dmg + " 伤害";
 
         if (enemyHp <= 0) { enemyHp = 0; phase = PHASE_WIN; saveHp(); }
         else if (energy <= 0 || hand.isEmpty()) endTurn(false);
