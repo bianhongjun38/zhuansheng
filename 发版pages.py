@@ -243,7 +243,42 @@ def main():
         raise SystemExit("部署失败")
 
     print("\n✅ 完成：%s/" % BASE)
+
+    # ── 打 tag：GitHub Release 只有打 tag 才会产生 ──
+    #
+    # build.yml 里发 Release 那一步的条件是
+    #     if: startsWith(github.ref, 'refs/tags/v')
+    # 也就是说 push 到 main 只构建 + 传 artifact（Actions 页可下，90 天过期），
+    # **不会**创建 Release。以前每次发版只 commit + push，于是 tag 停在
+    # v1.5.24，后面十多个版本的 Release 页一直是空的（用户来问"release
+    # 怎么不更新"就是这个原因）。
+    #
+    # 这里补上自动打 tag。失败不影响发版 —— Pages 通道已经生效，
+    # tag 只决定 GitHub 那份备份和 Release 页有没有。
+    tag = "v" + vname
+    if sha(tag):
+        print("  tag      %s（已存在，跳过）" % tag)
+    else:
+        print("\n▶ 打 tag %s 并推送（触发 GitHub Release）" % tag)
+        msg = "v%s：%s" % (vname, args.Notes or ("versionCode %d" % vcode))
+        for cmd in (["git", "tag", "-a", tag, "-m", msg],
+                    ["git", "push", "origin", tag]):
+            p = subprocess.run(cmd, cwd=PROJ, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace")
+            if p.returncode != 0:
+                print("  ⚠ %s 失败：%s" % (" ".join(cmd), (p.stderr or "").strip()[:200]))
+                print("    Pages 已发好，只是 GitHub Release 没建。可稍后手动："
+                      "git tag -a %s -m \"...\" && git push origin %s" % (tag, tag))
+                break
+            print("  " + " ".join(cmd) + "  ok")
     return 0
+
+
+def sha(ref):
+    """本地是否已有这个 git 引用（tag/branch）。"""
+    p = subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref],
+                       cwd=PROJ, capture_output=True, text=True)
+    return p.returncode == 0
 
 
 if __name__ == "__main__":
