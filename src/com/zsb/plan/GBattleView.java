@@ -82,6 +82,16 @@ public class GBattleView extends LinearLayout {
     private GQuiz.Q pendingQ;
 
     /**
+     * 敌人台词气泡。
+     *
+     * 为什么单独做一个：玩家答对之后什么反馈都没有 —— 只多了一行战报，
+     * 怪物毫无反应，「用这个词打它」这件事感觉不到。
+     * 现在答对时它会用这个词的中文说一句话，把「打中了」和「这个词什么意思」
+     * 一起显示出来：既给了反馈，又顺手复述了一遍词义。
+     */
+    private TextView tvSpeak;
+
+    /**
      * 本次作答是否走僻义过载通道，值为所考的义项下标；-1 表示普通作答。
      *
      * 单独存一个字段而不是只读 pendingQ.mode：resolve() 开头就把 pendingQ
@@ -119,6 +129,18 @@ public class GBattleView extends LinearLayout {
         tvEnemyHp = tv("", 13, C_FG2);
         tvEnemyHp.setGravity(Gravity.CENTER);
         top.addView(tvEnemyHp);
+
+        // 台词气泡：答对时怪物用这个词的中文说一句
+        tvSpeak = tv("", 12.5f, C_FG);
+        tvSpeak.setGravity(Gravity.CENTER);
+        tvSpeak.setPadding(dp(10), dp(5), dp(10), dp(5));
+        tvSpeak.setBackground(round(0xFF2B303B, 10, 0xFF3A4152));
+        LinearLayout.LayoutParams skp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        skp.topMargin = dp(5);
+        tvSpeak.setLayoutParams(skp);
+        tvSpeak.setVisibility(GONE);
+        top.addView(tvSpeak);
 
         tvIntent = tv("", 12, C_AMBER);
         tvIntent.setGravity(Gravity.CENTER);
@@ -312,11 +334,13 @@ public class GBattleView extends LinearLayout {
         if (line == null) line = "";
         tvMsg.setText(line + "\n▸ 点这里看完整战报（" + log.size() + " 条）");
 
-        // 必须**先**出题再渲染手牌：cardView 是靠 pendingQ != null 判断
-        // 「现在点牌=作答」的。原来 askQuestion() 放在 renderOptions() 里，
-        // 而 renderOptions() 在 renderHand() 之后才跑 —— 首次渲染时 pendingQ
-        // 还是 null，手牌全都没绑作答事件，玩家点牌毫无反应。
-        ensureQuestion();
+        // ── 不再一进战斗就自动出题 ─────────────────────────
+        //
+        // 旧流程是 renderOptions() 里无条件 ensureQuestion()，于是「攻击阶段」
+        // 永远挂着 pendingQ，玩家只能答题、不能保牌 —— 而保牌是花 2 能量的
+        // 战术动作，本来应该和攻击交替使用。结果保牌按钮被 renderQuiz() 的
+        // 提前 return 整个吃掉，一回合内选定攻击之后就再也点不到保牌。
+        // 现在出题改成**玩家点「攻击」才触发**，攻击与保牌才能一来一回。
         renderHand();
         renderOptions();
 
@@ -492,8 +516,13 @@ public class GBattleView extends LinearLayout {
 
         switch (battle.phase) {
             case GBattle.PHASE_CHOOSE:
-                optRow.addView(bigBtn("攻击 · 出牌打人", C_PURPLE, () -> {
-                    battle.chooseAttack(); render();
+                // 一点「攻击」就直接出题，不要再让玩家点第二下。
+                // 每回合都从 PHASE_CHOOSE 开始，如果这里只切阶段不出题，
+                // 玩家会觉得第一下点击没反应 —— 白白多一次交互。
+                optRow.addView(bigBtn("⚔ 攻击 · 出牌打人", C_PURPLE, () -> {
+                    battle.chooseAttack();
+                    askQuestion();
+                    render();
                 }));
                 optRow.addView(bigBtn("保牌 · 花 " + GBattle.keepEnergyCost
                         + " 能量留 2 张（余 " + battle.energy + "）", C_TEAL, () -> {
@@ -527,28 +556,49 @@ public class GBattleView extends LinearLayout {
                 break;
 
             case GBattle.PHASE_PLAY:
+                // 正在答题：只画题面，不画阶段按钮。
+                if (pendingQ != null) { renderQuiz(); return; }
+
                 // 手牌空了就一个按钮都不渲染会让界面死掉 —— 这正是「结束回合」
                 // 最需要出现的时候。
                 if (battle.hand.isEmpty()) {
                     optRow.addView(tv("手牌打空了 —— 结束回合继续", 12.5f, C_FG3));
-                } else if (pendingQ != null) {
-                    // 题目已在 ensureQuestion() 里出好，这里只负责画题面
-                    renderQuiz();
-                    return;
-                } else {
-                    optRow.addView(tv("手里没有可考的单词牌，直接结束回合", 12.5f, C_FG3));
+                } else if (!hasQuizableCard()) {
+                    optRow.addView(tv("手里只剩副词牌，直接打出去或结束回合",
+                            12.5f, C_FG3));
                 }
-                // 保牌不再是「二选一」的整回合动作，而是出牌阶段里随时可用、
-                // 且**可以反复使用**的战术选项：只要当前能量还付得起 2 点
-                // 就能再保一轮，不设「每回合一次」的限制。
-                if (battle.energy >= GBattle.keepEnergyCost) {
-                    optRow.addView(smallBtn("保牌 −" + GBattle.keepEnergyCost
-                            + "能量（余 " + battle.energy
-                            + "，可再保 " + (battle.energy / GBattle.keepEnergyCost)
-                            + " 次）", () -> {
-                        if (battle.chooseKeep()) render();
+
+                // ── 攻击与保牌交替 ──────────────────────────
+                //
+                // 现在这两件事是并列的两个按钮，一回合内可以来回切：
+                //   打一张（−1 能量，答对才扣）→ 回来还能再选保牌
+                //   保一轮（−2 能量）→ 回来还能再攻击
+                // 唯一的限制是能量，不再是「先选哪个就锁死哪个」。
+                if (canAttackByEnergy() && hasQuizableCard()) {
+                    optRow.addView(bigBtn("⚔ 攻击 · 出牌打人（−1 能量）", C_PURPLE,
+                            () -> {
+                        askQuestion();
+                        render();
                     }));
                 }
+
+                // 保牌：花 2 能量挑牌留住。能量够就随时可以进来，
+                // 不设「每回合一次」，也不受「这回合打没打过」限制。
+                if (battle.energy >= GBattle.keepEnergyCost) {
+                    optRow.addView(bigBtn("🛡 保牌 · 花 " + GBattle.keepEnergyCost
+                            + " 能量留 " + data.keepLimit + " 张（余 " + battle.energy
+                            + "）", C_TEAL, () -> {
+                        if (!battle.chooseKeep()) {
+                            flash = "能量不足，保牌需要 " + GBattle.keepEnergyCost + " 点";
+                            addLog(flash, C_AMBER);
+                        }
+                        render();
+                    }));
+                } else {
+                    optRow.addView(tv("保牌需 " + GBattle.keepEnergyCost
+                            + " 能量，当前只剩 " + battle.energy + " 点", 11.5f, C_FG3));
+                }
+
                 addItemBar(optRow);
                 addUltimateButton(optRow);
                 optRow.addView(smallBtn("结束回合", () -> {
@@ -582,6 +632,58 @@ public class GBattleView extends LinearLayout {
         if (battle.hand.isEmpty()) return;
         askQuestion();
     }
+
+    /** 手牌里还有没有能拿来出题的单词牌（副词不算）。 */
+    private boolean hasQuizableCard() {
+        if (battle == null) return false;
+        for (GCard c : battle.hand) {
+            if (c != null && c.isWord() && c.cn != null && !c.cn.isEmpty()) return true;
+        }
+        return false;
+    }
+
+    /** 能量够不够出一次手。 */
+    private boolean canAttackByEnergy() {
+        return battle != null && battle.energy > 0;
+    }
+
+    /**
+     * 让怪物用玩家刚打出的这个词的中文说一句话。
+     *
+     * 设计意图：答对之后原来只有一行绿色战报，怪物毫无反应，
+     * 「我在用它打它」这件事没有落点。现在让怪物把词义复述一遍 ——
+     * 既是打击反馈，又顺手又把释义过了一次眼（答完就忘是背单词最大的漏斗）。
+     *
+     * 注意：只在**答对之后**调用。答题期间任何位置都不能出现词义，
+     * 否则就是上一版「答案写在明面上」的同类错误。
+     */
+    private void enemySpeak(String line) {
+        if (tvSpeak == null) return;
+        if (line == null || line.isEmpty()) { tvSpeak.setVisibility(GONE); return; }
+        tvSpeak.setText(line);
+        tvSpeak.setVisibility(VISIBLE);
+        tvSpeak.setAlpha(0f);
+        tvSpeak.animate().alpha(1f).setDuration(180).start();
+    }
+
+    /** 按题型挑一句合适的中文台词。c 是这轮打出去的牌。 */
+    private void enemySpeakFor(GCard c, String explain) {
+        if (c == null) { enemySpeak(null); return; }
+        String sense = c.isWord() ? GQuiz.firstSensePublic(c.cn) : "";
+        if (sense == null) sense = "";
+        sense = sense.trim();
+        if (sense.isEmpty()) { enemySpeak(null); return; }
+
+        // 例句题额外把整句的中文意思带出来 —— 这是它比「词=义」多给的东西
+        String said = "「" + sense + "」……你居然真懂这个词。";
+        if (c.ex != null && !c.ex.trim().isEmpty() && pendingQLastMode == 1) {
+            said = "「" + sense + "」……这一句我本来没打算让你读懂。";
+        }
+        enemySpeak(said);
+    }
+
+    /** 刚结算掉的那道题的题型。仅用于挑台词，不影响判定。 */
+    private int pendingQLastMode = -1;
 
     /**
      * 敌人出题。
@@ -788,8 +890,13 @@ public class GBattleView extends LinearLayout {
     private void resolve(GCard c, boolean right) {
         if (pendingQ == null) return;
         String explain = pendingQ.explain;
+        pendingQLastMode = pendingQ.mode;
         pending = null;
         pendingQ = null;
+        // 先收掉上一条台词：答错时如果还挂着上一句「你居然真懂这个词」，
+        // 等于在骂人，而且会让人误以为这题答对了。
+        enemySpeak(null);
+
 
         // 记下出手前的血量，用来判断这一下有没有引出「引擎内部自动结束回合」。
         int myHpBefore = battle.playerHp;
@@ -808,6 +915,7 @@ public class GBattleView extends LinearLayout {
                 flash = "🔥 僻义过载　" + c.en + "（" + c.senseText(oi)
                         + "）　真实伤害 " + real;
                 addLog(flash, C_PURPLE);
+                enemySpeak("「" + c.senseText(oi) + "」……这个义项你都知道？");
                 sprite.play("hurt");
                 if (battle.playerHp < myHpBefore) {
                     final int took = myHpBefore - battle.playerHp;
@@ -846,6 +954,8 @@ public class GBattleView extends LinearLayout {
                         + (battle.chain > 1 ? "（连锁 ×" + battle.chain + "）" : "");
                 addLog(flash, C_TEAL);
                 if (battle.critReady && dmg > 0) addLog("★ 暴击生效", C_AMBER);
+                // 怪物用这个词的中文说一句 —— 打击反馈 + 顺手复述词义
+                enemySpeakFor(c, explain);
                 // 玩家出牌打人，怪物是"挨打"的一方 —— 播 hurt 不是 attack
                 sprite.play("hurt");
                 // playCard() 在「能量打空 / 手牌打空」时会自己调 endTurn(false)，

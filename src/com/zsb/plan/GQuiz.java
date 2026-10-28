@@ -65,6 +65,15 @@ public class GQuiz {
 
     private static String key(String cn) { return firstSense(cn); }
 
+    /**
+     * 供界面取「首个义项」。
+     *
+     * 战斗里怪物答对后的台词要用它（把词义复述一遍）。
+     * 不去 GBattleView 里复制一份切分逻辑 —— 两处各写一份，
+     * 迟早会一边改了另一边没改，题目和台词对不上。
+     */
+    public static String firstSensePublic(String cn) { return firstSense(cn); }
+
     /** 随机挑一种题型。例句题要求有例句，所以在出题时再校验。 */
     public int randomMode() {
         int r = rnd.nextInt(100);
