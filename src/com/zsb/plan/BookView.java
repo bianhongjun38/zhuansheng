@@ -104,6 +104,11 @@ public class BookView {
     public void open(final String bookId, final String title, final int pdfPage) {
         this.bookTitle = title;
         this.curBookId = bookId;
+        // 每本书从文字模式开始。不重置的话，上一本停在「原图」时
+        // imageMode 仍是 true，而 buildDialog 把 img 设成 GONE、
+        // 按钮写着「原图」—— 两处对不上，gotoPage 会走 renderPdf
+        // 去画一个隐藏的 ImageView，界面一片空白。
+        this.imageMode = false;
 
         buildDialog(title);
         pageLabel.setText("正在打开…");
@@ -348,7 +353,9 @@ public class BookView {
             img.setVisibility(View.VISIBLE);
             renderPdf(pageNow);
         } else {
-            img.setVisibility(View.VISIBLE);
+            // 切回文字模式必须**隐藏** img。img 加在 scroller 之后，
+            // 留着 VISIBLE 会整块盖在文字上面，用户看到的是原图压着文字。
+            img.setVisibility(View.GONE);
             scroller.setVisibility(View.VISIBLE);
             showText(pageNow);
         }
@@ -443,7 +450,15 @@ public class BookView {
         File cache = new File(act.getCacheDir(), "books");
         if (!cache.exists()) cache.mkdirs();
         File f = new File(cache, curBookId + ".pdf");
-        if (!f.exists() || f.length() == 0) {
+        // 不能只看"文件存在且非空"。
+        // 2026-10-28 审计：Cloudflare Pages 对不存在的路径返回
+        // HTTP 200 + index.html（1108 字节 text/html），不是 404。
+        // fetchBook() 只判 code != 200，于是那个 HTML 被当成 PDF 落盘，
+        // 之后 PdfRenderer 必然抛 IOException；而 ensureRenderer 又因为
+        // f.length() == 1108 > 0 永远跳过重新下载 —— 除非用户手动清缓存，
+        // 这本教材的「原图」永久坏掉。
+        if (!looksLikePdf(f)) {
+            if (f.exists()) f.delete();
             // 三本教材 PDF 共 11.7 MB，占安装包 60%。为了不顶到
             // Cloudflare 两条 25 MiB 单文件上限（Pages 和 Workers
             // Static Assets 都是 25 MiB，实测文档确认），改成按需下载：
@@ -453,8 +468,36 @@ public class BookView {
                         "教材尚未下载，请连网后重试");
             }
         }
-        pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
-        renderer = new PdfRenderer(pfd);
+        try {
+            pfd = ParcelFileDescriptor.open(f, ParcelFileDescriptor.MODE_READ_ONLY);
+            renderer = new PdfRenderer(pfd);
+        } catch (Exception e) {
+            // 打不开就说明这份缓存是坏的（多半是上面那类 HTML 假包，
+            // 或下载被截断）。立刻删掉，否则下次还会拿它初始化失败。
+            if (pfd != null) {
+                try { pfd.close(); } catch (Exception ignored) { }
+                pfd = null;
+            }
+            try { f.delete(); } catch (Exception ignored) { }
+            throw e;
+        }
+    }
+
+    /** 是不是一份真 PDF：%PDF- 魔数 + 至少 1 KB。 */
+    private static boolean looksLikePdf(File f) {
+        if (f == null || !f.exists() || f.length() < 1024) return false;
+        java.io.FileInputStream in = null;
+        try {
+            in = new java.io.FileInputStream(f);
+            byte[] h = new byte[5];
+            int n = in.read(h);
+            return n == 5 && h[0] == 0x25 && h[1] == 0x50
+                    && h[2] == 0x44 && h[3] == 0x46 && h[4] == 0x2D;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            try { if (in != null) in.close(); } catch (Exception ignored) { }
+        }
     }
 
     /**
@@ -487,6 +530,15 @@ public class BookView {
             int code = c.getResponseCode();
             if (code != 200) return false;
             copyTo(c.getInputStream(), tmp);
+            // 长度对得上 + 真的是 PDF，才算下载成功。
+            // Pages 对缺失文件回的是 200 + index.html，不校验内容的话
+            // 那个 HTML 会被当教材存下来，而且因为有 .part 中转，
+            // rename 之后看起来"下载成功了"，坏得很隐蔽。
+            int expect = c.getContentLength();
+            if ((expect > 0 && tmp.length() != expect) || !looksLikePdf(tmp)) {
+                tmp.delete();
+                return false;
+            }
             if (!tmp.renameTo(dst)) {
                 tmp.delete();
                 return false;

@@ -186,7 +186,24 @@ public class GistSync {
             throw new SyncErr("进度内容无法编码成 JSON");
         }
 
-        // 已有 gistId → 只覆盖文件内容；PUT 404 说明 gist 被删了，退化回新建
+        // 已有 gistId → 只覆盖文件内容；404 说明 gist 被删了，退化回新建
+        //
+        // ⚠ 这里必须用 POST，不能用 PUT。
+        // GitHub 更新 gist 的接口是 PATCH /gists/{id}，但 Android 的
+        // HttpURLConnection 只允许 GET/POST/HEAD/OPTIONS/PUT/DELETE/TRACE，
+        // PATCH 会直接抛 ProtocolException。而 PUT /gists/{id} 这个路由
+        // 根本不存在 —— 实测返回 HTTP 404 "Not Found"。
+        //
+        // 后果（2026-10-28 审计发现，一直是坏的）：每次"上传到云端"都被
+        // 当成"gist 已被删除"，走到下面新建一个全新 gist，并把本地保存的
+        // gistId 悄悄改成新的。用户账号下越积越多僵尸 gist，另一台记着
+        // 旧 id 的手机永远拉不到最新进度。
+        //
+        // 实测（真实 token 打 api.github.com）：
+        //   PUT   /gists/{id}  → 404 Not Found
+        //   PATCH /gists/{id}  → 200
+        //   POST  /gists/{id}  → 200   ← 用它，HttpURLConnection 原生支持
+        //   POST  + X-HTTP-Method-Override: PATCH → 200（等价，不需要）
         if (hasGist()) {
             JSONObject upd = new JSONObject();
             try {
@@ -195,7 +212,7 @@ public class GistSync {
                 throw new SyncErr("请求体构造失败");
             }
             try {
-                Resp r = send("PUT", API + "/" + gistId, upd.toString());
+                Resp r = send("POST", API + "/" + gistId, upd.toString());
                 if (r.code == 200 || r.code == 201) {
                     String id = idOf(r.body);
                     if (id != null && !id.isEmpty()) gistId = id;

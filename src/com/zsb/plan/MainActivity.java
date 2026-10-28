@@ -304,7 +304,10 @@ public class MainActivity extends Activity {
         if (!d.reviews.isEmpty()) {
             int done = 0;
             for (Plan.Review r : d.reviews) {
-                if (store.completed.contains("R-" + r.id)) done++;
+                // completed 存的是**日期**（"2026-10-28"），不是任务 id。
+                // 拿 "R-"+id 去查永远 false，卡片副标题就恒为「还剩 N 项没看」，
+                // 永远不会变成"今天要回忆的都看过了"。回忆项得走 isDone(date,id)。
+                if (store.isDone(d.date, "R-" + r.id)) done++;
             }
             int left = d.reviews.size() - done;
             String sub = left == 0
@@ -788,7 +791,10 @@ public class MainActivity extends Activity {
         g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
         chk.setBackground(g);
         chk.setLayoutParams(new LinearLayout.LayoutParams(dp(24), dp(24)));
-        chk.setOnClickListener(v -> store.toggleDone(date, rid));
+        chk.setOnClickListener(v -> {
+            store.toggleDone(date, rid);
+            render();          // 勾了要立刻重画：✓、底色、完成度都要跟着变
+        });
         row.addView(chk);
 
         Plan.Subject sj = plan.subject(r.subject);

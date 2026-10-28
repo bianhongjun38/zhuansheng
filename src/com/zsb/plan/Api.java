@@ -65,9 +65,16 @@ public class Api {
             InputStream in = r.code >= 200 && r.code < 300
                     ? c.getInputStream() : c.getErrorStream();
             String text = readAll(in);
+            // trim 一下再判断首字符：响应体前面带个换行或空格时，
+            // 原来的 charAt(0)=='{' 会直接判定"不是 JSON"，
+            // 于是 body 为 null、ok 永远 false —— 明明服务端返回了 ok:true。
+            if (text != null) text = text.trim();
             if (text != null && text.length() > 0 && text.charAt(0) == '{') {
                 r.body = new JSONObject(text);
-                r.ok = r.body.optBoolean("ok", false);
+                // ok 必须同时满足：HTTP 2xx 且 body 里 ok=true。
+                // 只看 body 的话，一个 500 响应里若恰好带 ok:true 也会被当真。
+                r.ok = (r.code >= 200 && r.code < 300)
+                        && r.body.optBoolean("ok", false);
                 r.msg = r.body.optString("message", "");
             }
             if (!r.ok && r.msg.isEmpty()) {

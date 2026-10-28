@@ -712,9 +712,14 @@ public class EngView {
                 // 只有服务器明确收下才算传过。
                 // ignored=true（用时太短/超上限）也算「服务器已处理」，
                 // 再传一次结果还是一样，不该无限重试。
-                if (res.ok || (res.body != null && res.body.optBoolean("ignored"))) {
+                boolean ignored = res.body != null && res.body.optBoolean("ignored");
+                if (res.ok || ignored) {
+                    // ignored=true（用时过短/超日上限）也要标记已传，
+                    // 否则会无限重试同一个必然被拒的轮次。
+                    // 但它**不算上传成功** —— 以前 sent++ 把拒收也计进
+                    // "已上传 N 轮成绩"，玩家以为上榜了，去排行榜却找不到自己。
                     store.markEngUploaded(r.rev);
-                    sent++;
+                    if (res.ok) sent++;
                 } else {
                     break;   // 网络断了就别硬刷，下次再说
                 }

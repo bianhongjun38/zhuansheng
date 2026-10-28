@@ -55,8 +55,20 @@ for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
 
 
 def ver_int(name):
-    """1.2.2 -> 10202，与 Update.parseVer / worker 保持一致。"""
+    """1.2.2 -> 10202，与 Update.parseVer / worker 保持一致。
+
+    按 100 进制压缩，前提是每段都 < 100。patch 到 100 会碰撞
+    （1.5.100 == 1.6.0 == 10600），所以 build_apk.py --bump
+    已经在 99 时进位。这里再断言一次：宁可在发版时炸掉，
+    也不要静默发一个手机上永远判定为"更旧"的包。
+    """
     p = [int(x) for x in (name.split(".") + ["0", "0", "0"])[:3]]
+    for seg_v in p:
+        if seg_v >= 100:
+            raise SystemExit(
+                "❌ 版本号 %s 有一段 >= 100，会和更高级的版本碰撞"
+                "（1.5.100 与 1.6.0 都算 10600）。"
+                "请先手动把 version.json 调到 1.6.0 再发。" % name)
     return p[0] * 10000 + p[1] * 100 + p[2]
 
 

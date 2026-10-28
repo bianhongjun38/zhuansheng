@@ -108,6 +108,8 @@ public class Update {
      * 所以顺序必须是 Pages 优先，GitHub 只在本机 Pages 全失败时才试。
      */
     private volatile String fallbackGithubUrl;
+    /** GitHub 那个 Release 的版本号，用来确认它和 Pages 清单是不是同一版。 */
+    private volatile int fallbackGithubCode = 0;
 
     private final Activity act;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -241,6 +243,10 @@ public class Update {
         lt.code = code;
         lt.notes = rel.optString("body", "");
         lt.apkUrl = findApk(rel);
+        // 记下 GitHub 这一版的版本号。GitHub Release 靠打 tag 才产生，
+        // 和 Pages 部署之间有天然时间差（实测 tag 曾长期停在 v1.5.24）。
+        // 只有两边版本号一致时，这个地址才能当兜底源用。
+        fallbackGithubCode = code;
         return lt;
     }
 
@@ -293,6 +299,22 @@ public class Update {
             int maj = p.length > 0 ? Integer.parseInt(p[0]) : 0;
             int min = p.length > 1 ? Integer.parseInt(p[1]) : 0;
             int pat = p.length > 2 ? Integer.parseInt(p[2]) : 0;
+            // 每段按 100 进制挤压成整数。**前提是每段都 < 100** ——
+            // 一旦 patch 段到 100，1.5.100 算出来是 10600，和 1.6.0 完全
+            // 相等；再到 1.5.101（10601），切到 1.6.0 反而"变旧"，
+            // 发版脚本会拒绝发布、客户端会显示"已是最新版本"。
+            //
+            // build_apk.py --bump 每次只 +1，按 1.5.39 的速度再 build 61 次
+            // 就会撞上。所以进位归 build_apk.py 管（99 → 进位到下一段），
+            // 这里只做兜底：真碰上越界段就按大端拼接，至少不会碰撞。
+            if (maj >= 100 || min >= 100 || pat >= 100) {
+                // 越界了，100 进制已经表达不了。退回大端拼接：
+                // 1.5.100 → 1*1000000 + 5*10000 + 100*1 = 1050100
+                // 恒大于任何合法的 1.5.99（10599），不会被判成"更旧"。
+                return maj * 1000000L > Integer.MAX_VALUE
+                        ? Integer.MAX_VALUE
+                        : (int) (maj * 1000000L + min * 10000L + pat);
+            }
             return maj * 10000 + min * 100 + pat;
         } catch (Exception e) {
             return 0;
@@ -392,12 +414,46 @@ public class Update {
      */
     private java.util.List<String> buildSources(Latest lt) {
         java.util.List<String> out = new java.util.ArrayList<>();
-        if (lt != null && lt.apkUrl != null) out.add(lt.apkUrl);
-        if (fallbackGithubUrl != null) out.add(fallbackGithubUrl);
+        if (lt != null && lt.apkUrl != null) {
+            // 同一个 Pages 站点有两个域名，互为镜像。
+            // 以前清单里只写 zsb-update.pages.dev，自有域名从来没被用过 ——
+            // 部分运营商网络连不上 pages.dev 时就直接掉到 GitHub 源。
+            // 这里把两个域名都排上，先自有域名再 pages.dev。
+            String url = lt.apkUrl;
+            String appHost = "app.xxjcloudns.kdns.fr/";
+            String pagesHost = "zsb-update.pages.dev/";
+            if (url.contains(pagesHost)) {
+                out.add(url.replace(pagesHost, appHost));
+                out.add(url);
+            } else if (url.contains(appHost)) {
+                out.add(url);
+                out.add(url.replace(appHost, pagesHost));
+            } else {
+                out.add(url);
+            }
+        }
+        // GitHub 兜底源**只在版本号完全一致时**才用。
+        //
+        // 以前无条件排在第二位。但 GitHub Release 是靠打 tag 才产生的，
+        // 而 Pages 一部署就生效 —— 两者之间存在时间差，实测 tag 曾长期
+        // 停在 v1.5.24。于是"提示升级 1.5.39、pages.dev 连不上"时，
+        // 客户端会从 GitHub 拉下 1.5.24 并装上去（如果本机更旧），
+        // 或者被新加的版本校验拦下、报一句莫名其妙的版本错误。
+        if (fallbackGithubUrl != null && fallbackGithubCode == ltCode(lt)) {
+            out.add(fallbackGithubUrl);
+        }
         return out;
     }
 
+    private int ltCode(Latest lt) {
+        return lt == null ? 0 : parseVer(lt.ver);
+    }
+
     private void askUpdate(String ver, String notes, final java.util.List<String> urls) {
+        // 三个源串行探测最长能拖到二十多秒（api.github.com 在国内经常超时）。
+        // 这期间用户很可能已经返回、甚至把 Activity 关了。
+        // 不拦一下就会 BadTokenException / "View not attached to window manager"。
+        if (act == null || act.isFinishing() || act.isDestroyed()) return;
         final java.util.List<String> url = urls;
         String body = "当前 v" + localVersionName() + "，最新 v" + ver + "。";
         if (notes != null && notes.trim().length() > 0) {
@@ -489,7 +545,13 @@ public class Update {
                                     + "，已拒绝安装");
                         }
                         ui.post(new Runnable() {
-                            public void run() { pd.dismiss(); install(out); }
+                            public void run() {
+                                if (act == null || act.isFinishing() || act.isDestroyed()) {
+                                    return;   // 下载完时界面已经没了，不必再弹
+                                }
+                                pd.dismiss();
+                                install(out);
+                            }
                         });
                         return;   // 成功，收工
                     } catch (Exception e) {

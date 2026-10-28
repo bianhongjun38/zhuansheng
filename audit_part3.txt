@@ -1,0 +1,3200 @@
+﻿ 194:         bp.topMargin = dp(5);
+ 195:         bar.setLayoutParams(bp);
+ 196:         bar.setBackground(round(0xFF22252E, 5, 0));
+ 197: 
+ 198:         // 残影条（红）—— 先加，画在底层
+ 199:         hpTrailBar = new View(getContext());
+ 200:         hpTrailBar.setBackground(round(0xFFE05B5B, 5, 0));
+ 201:         bar.addView(hpTrailBar, new android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+ 202: 
+ 203:         // 真实血量条（绿）—— 后加，盖在残影之上
+ 204:         hpFillBar = new View(getContext());
+ 205:         hpFillBar.setBackground(round(C_GREEN, 5, 0));
+ 206:         bar.addView(hpFillBar, new android.widget.FrameLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT));
+ 207: 
+ 208:         midRow.addView(bar);
+ 209:         addView(midRow);
+ 210: 
+ 211:         // 血条宽度要等布局完成才知道，post 一次补同步
+ 212:         bar.post(new Runnable() {
+ 213:             @Override public void run() {
+ 214:                 hpBarMaxW = Math.max(1, bar.getWidth());
+ 215:                 syncHpBar();
+ 216:             }
+ 217:         });
+ 218: 
+ 219:         // 战报条：点开看完整日志（答对/答错/触发效果/增减益都在这）
+ 220:         tvMsg = tv("", 12.5f, C_FG2);
+ 221:         tvMsg.setPadding(dp(10), dp(6), dp(10), dp(6));
+ 222:         tvMsg.setBackground(round(C_BG3, 9, 0));
+ 223:         tvMsg.setOnClickListener(v -> showLog());
+ 224:         LinearLayout.LayoutParams mp = new LinearLayout.LayoutParams(
+ 225:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 226:         mp.leftMargin = dp(12); mp.rightMargin = dp(12); mp.bottomMargin = dp(4);
+ 227:         tvMsg.setLayoutParams(mp);
+ 228:         addView(tvMsg);
+ 229: 
+ 230:         // 手牌区：横向滑动。5 张卡共 560dp 远超屏宽（本机 1264px/560dpi≈361dp），
+ 231:         // 原来用纵向 ScrollView 装横向排列的卡 → 横向溢出且滑不动，
+ 232:         // 第 4 张起被裁在屏幕外。改成 HorizontalScrollView 才能滑完全部。
+ 233:         android.widget.HorizontalScrollView hs =
+ 234:                 new android.widget.HorizontalScrollView(getContext());
+ 235:         hs.setHorizontalScrollBarEnabled(false);
+ 236:         hs.setFillViewport(false);
+ 237:         handRow = new LinearLayout(getContext());
+ 238:         handRow.setOrientation(HORIZONTAL);
+ 239:         handRow.setPadding(dp(10), dp(4), dp(10), dp(8));
+ 240:         hs.addView(handRow);
+ 241:         LinearLayout.LayoutParams hp = new LinearLayout.LayoutParams(
+ 242:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
+ 243:         hs.setLayoutParams(hp);
+ 244:         addView(hs);
+ 245: 
+ 246:         // 保牌区：默认隐藏，只有 kept 非空时才出现（见 renderHand）。
+ 247:         // 放在手牌下方、选项区上方 —— 玩家先看到"手里还有什么"，
+ 248:         // 再看到"已经留住了什么"，最后才是按钮。
+ 249:         keptBox = new LinearLayout(getContext());
+ 250:         keptBox.setOrientation(VERTICAL);
+ 251:         keptBox.setPadding(dp(10), 0, dp(10), dp(2));
+ 252:         keptBox.setVisibility(GONE);
+ 253:         addView(keptBox);
+ 254: 
+ 255:         android.widget.HorizontalScrollView khs =
+ 256:                 new android.widget.HorizontalScrollView(getContext());
+ 257:         khs.setHorizontalScrollBarEnabled(false);
+ 258:         keptRow = new LinearLayout(getContext());
+ 259:         keptRow.setOrientation(HORIZONTAL);
+ 260:         keptRow.setPadding(0, dp(2), 0, dp(2));
+ 261:         khs.addView(keptRow);
+ 262:         keptBox.addView(khs);
+ 263: 
+ 264:         // 选项区（答题 / 阶段按钮都放这）
+ 265:         optRow = new LinearLayout(getContext());
+ 266:         optRow.setOrientation(VERTICAL);
+ 267:         optRow.setPadding(dp(10), dp(6), dp(10), dp(12));
+ 268:         optRow.setBackgroundColor(C_BG2);
+ 269:         addView(optRow);
+ 270: 
+ 271:         stage = new LinearLayout(getContext());
+ 272:         stage.setOrientation(VERTICAL);
+ 273:         stage.setPadding(dp(14), dp(8), dp(14), dp(4));
+ 274:         addView(stage);
+ 275: 
+ 276:         // 受击闪红层：盖在最上层，平时不可见、不接收触摸。
+ 277:         //
+ 278:         // GBattleView 本身是 LinearLayout，没法"叠"东西；这里把一个
+ 279:         // FrameLayout 作为最后一层加进来，闪红层放在其中，靠 match_parent
+ 280:         // 铺满整个战斗区，就能实现全屏闪红。
+ 281:         android.widget.FrameLayout flashHost = new android.widget.FrameLayout(getContext());
+ 282:         flashHost.setLayoutParams(new LinearLayout.LayoutParams(
+ 283:                 ViewGroup.LayoutParams.MATCH_PARENT, 0));   // 高度 0，只做覆盖宿主
+ 284:         flashView = new View(getContext());
+ 285:         flashView.setBackgroundColor(0xFFFF3B3B);
+ 286:         flashView.setAlpha(0f);
+ 287:         flashView.setClickable(false);
+ 288:         flashView.setFocusable(false);
+ 289:         flashView.setLayoutParams(new android.widget.FrameLayout.LayoutParams(
+ 290:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+ 291:         flashView.setVisibility(GONE);
+ 292:         flashHost.addView(flashView);
+ 293:         addView(flashHost);
+ 294:     }
+ 295: 
+ 296:     // ── 排行榜埋点 ────────────────────────────────────────
+ 297:     /** 本场战斗的起点快照。结束时算增量，不能直接读累计值 —— 
+ 298:      *  否则一台手机玩了一整月的累计数会一次性算到今天头上。 */
+ 299:     /** 本场是否已经结算过。render() 每帧都会调 showEnd，没有它就会反复发金币。 */
+ 300:     private boolean endShown;
+ 301:     private long bpT0;
+ 302:     private int bpRight0, bpWrong0, bpGold0;
+ 303:     /** 本场的幂等键：start() 生成一次，补传时一直用它。
+ 304:      *  这样「上报成功但没收到响应、用户重进又打完一场」不会在榜上算两场。 */
+ 305:     private String bpRev = "";
+ 306: 
+ 307:     // ── 开始战斗 ─────────────────────────────────────────
+ 308: 
+ 309:     public void start(GameData.Enemy e) {
+ 310:         battle = new GBattle(data, e, rnd, store);
+ 311:         sprite.load(e == null ? "mists" : e.sprite);
+ 312:         sprite.play("idle");
+ 313:         endShown = false;               // 新一场，允许再结算一次
+ 314:         hideOverlay();                  // 上一场可能留着战报浮层，别带到这一场
+ 315:         bpT0 = System.currentTimeMillis();
+ 316:         bpRight0 = store.right();
+ 317:         bpWrong0 = store.wrong();
+ 318:         bpGold0 = store.gold();
+ 319:         bpRev = Long.toString(bpT0, 36) + "-" + Integer.toString(rnd.nextInt(1 << 20), 36);
+ 320:         render();
+ 321:     }
+ 322: 
+ 323:     // ── 渲染 ─────────────────────────────────────────────
+ 324: 
+ 325:     private void render() {
+ 326:         if (battle == null) return;
+ 327: 
+ 328:         tvEnemyHp.setText(battle.enemy == null ? "敌人"
+ 329:                 : battle.enemy.name + "  " + battle.enemyHp + " / " + battle.enemyMaxHp);
+ 330:         // 不再显示 Lv.：等级等于层数，顶栏已经写了第几层。
+ 331:         // 加成体现在能量上限和伤害里，玩家能感觉到变强，不需要一个重复的数字。
+ 332:         tvPlayerHp.setText("生命 " + battle.playerHp + " / " + battle.playerMaxHp
+ 333:                 + "    能量 " + battle.energy + " / " + battle.energyMax
+ 334:                 + "    回合 " + battle.turn);
+ 335:         syncHpBar();
+ 336: 
+ 337:         // 敌人意图：必须说真话。
+ 338:         //
+ 339:         // 引擎的实际节奏是 endTurn() 里先 enemyCharge++ 再比较，
+ 340:         // 所以 chargeNeed=1 的怪每回合结束必打，chargeNeed=2 的隔回合打。
+ 341:         // 原来这里写死"下回合攻击（还需 N 回合）"：普通怪永远显示还需 1 回合，
+ 342:         // 玩家以为还能安全过一回合，结果结束回合立刻挨打 —— 预告和实际不符。
+ 343:         //
+ 344:         // left = 距离下次攻击还差几次 endTurn。left==1 就是【本回合结束时】打，
+ 345:         // 必须明确写"本回合"，让玩家知道现在就该做防御决策。
+ 346:         if (battle.enemy != null) {
+ 347:             int left = battle.enemyChargeNeed - battle.enemyCharge;
+ 348:             if (left < 1) left = 1;
+ 349:             int atk = enemyAtk();
+ 350:             if (left <= 1) {
+ 351:                 tvIntent.setText("⚔ 本回合结束时攻击 " + atk + " 伤害");
+ 352:                 tvIntent.setTextColor(C_RED);
+ 353:             } else {
+ 354:                 tvIntent.setText("⏳ 蓄力中 · 还需 " + (left - 1) + " 回合"
+ 355:                         + "（届时攻击 " + atk + "）");
+ 356:                 tvIntent.setTextColor(C_AMBER);
+ 357:             }
+ 358:         }
+ 359: 
+ 360:         // 共鸣槽提示：跨回合保留，告诉玩家"再打一张同义词就暴击"
+ 361:         renderResonance();
+ 362: 
+ 363:         // 战报条优先显示最近一次操作结果，其次才是引擎消息
+ 364:         String line = flash != null && !flash.isEmpty() ? flash : battle.lastMsg;
+ 365:         if (line == null) line = "";
+ 366:         tvMsg.setText(line + "\n▸ 点这里看完整战报（" + log.size() + " 条）");
+ 367: 
+ 368:         // ── 不再一进战斗就自动出题 ─────────────────────────
+ 369:         //
+ 370:         // 旧流程是 renderOptions() 里无条件 ensureQuestion()，于是「攻击阶段」
+ 371:         // 永远挂着 pendingQ，玩家只能答题、不能保牌 —— 而保牌是花 2 能量的
+ 372:         // 战术动作，本来应该和攻击交替使用。结果保牌按钮被 renderQuiz() 的
+ 373:         // 提前 return 整个吃掉，一回合内选定攻击之后就再也点不到保牌。
+ 374:         // 现在出题改成**玩家点「攻击」才触发**，攻击与保牌才能一来一回。
+ 375:         renderHand();
+ 376:         renderOptions();
+ 377: 
+ 378:         if (battle.phase == GBattle.PHASE_WIN) {
+ 379:             // 胜利时怪物死亡，定格在最后一帧（fallback=null 不回待机）
+ 380:             sprite.play("death", null);
+ 381:             showEnd(true);
+ 382:         } else if (battle.phase == GBattle.PHASE_LOSE) {
+ 383:             // 玩家战败，怪物还活着，播个攻击动作收尾
+ 384:             sprite.play("attack");
+ 385:             showEnd(false);
+ 386:         }
+ 387:     }
+ 388: 
+ 389:     private void renderHand() {
+ 390:         handRow.removeAllViews();
+ 391:         for (final GCard c : battle.hand) {
+ 392:             handRow.addView(cardView(c, true));
+ 393:         }
+ 394:         if (battle.hand.isEmpty()) {
+ 395:             TextView t = tv("手牌空了", 12, C_FG3);
+ 396:             t.setPadding(dp(8), dp(20), 0, 0);
+ 397:             handRow.addView(t);
+ 398:         }
+ 399:         renderKept();
+ 400:     }
+ 401: 
+ 402:     /**
+ 403:      * 保牌区：把已保下来的牌单独画一遍。
+ 404:      *
+ 405:      * ── 为什么要显示释义注释 ──────────────────────────────
+ 406:      *
+ 407:      * 保牌是「花 2 能量把这张牌留到下一回合」，玩家做这个决定前需要
+ 408:      * 确认自己留的到底是什么。但卡面上**故意不印中文释义**（那会把考题
+ 409:      * 答案印在题面上，见 cardView 的注释）—— 于是保完的牌只剩一个
+ 410:      * 光秃秃的英文单词，和手牌里那些待考的牌长得一模一样，
+ 411:      * 玩家既看不出这是"已保住"的，也确认不了自己保对了没有。
+ 412:      *
+ 413:      * 解决方式与「◆僻义N」一致：在单词下方加一行小字注释。
+ 414:      * 这里是安全窗口 —— 已经保下来的牌**不可能再出题**（keep() 时它
+ 415:      * 已从 hand 移出，出题只从 hand 里挑），所以显示释义不会泄题。
+ 416:      */
+ 417:     private void renderKept() {
+ 418:         if (keptBox == null) return;
+ 419:         if (battle == null || battle.kept.isEmpty()) {
+ 420:             keptBox.setVisibility(GONE);
+ 421:             return;
+ 422:         }
+ 423: 
+ 424:         keptRow.removeAllViews();
+ 425: 
+ 426:         TextView head = tv("🛡 已保 " + battle.kept.size() + " 张 · 下回合回手（不参与洗牌）",
+ 427:                 10.5f, C_TEAL);
+ 428:         head.setTypeface(Typeface.DEFAULT_BOLD);
+ 429:         head.setPadding(0, dp(2), 0, dp(2));
+ 430:         keptBox.removeAllViews();
+ 431:         keptBox.addView(head);
+ 432: 
+ 433:         android.widget.HorizontalScrollView khs =
+ 434:                 new android.widget.HorizontalScrollView(getContext());
+ 435:         khs.setHorizontalScrollBarEnabled(false);
+ 436:         keptRow = new LinearLayout(getContext());
+ 437:         keptRow.setOrientation(HORIZONTAL);
+ 438:         keptRow.setPadding(0, dp(2), 0, dp(2));
+ 439:         khs.addView(keptRow);
+ 440:         keptBox.addView(khs);
+ 441: 
+ 442:         for (GCard c : battle.kept) {
+ 443:             keptRow.addView(keptCardView(c));
+ 444:         }
+ 445:         keptBox.setVisibility(VISIBLE);
+ 446:     }
+ 447: 
+ 448:     /**
+ 449:      * 保牌区里的一张牌。比手牌小一号，且**带释义注释**。
+ 450:      *
+ 451:      * 不可点击：保住的牌这一回合不能再被打出，点了会让人以为能反悔。
+ 452:      */
+ 453:     private View keptCardView(final GCard c) {
+ 454:         LinearLayout box = new LinearLayout(getContext());
+ 455:         box.setOrientation(VERTICAL);
+ 456:         box.setPadding(dp(8), dp(7), dp(8), dp(7));
+ 457: 
+ 458:         GradientDrawable g = new GradientDrawable();
+ 459:         g.setCornerRadius(dp(9));
+ 460:         g.setColor(0xFF1F3040);
+ 461:         g.setStroke(dp(1), C_TEAL);
+ 462:         box.setBackground(g);
+ 463: 
+ 464:         int screenW = getResources().getDisplayMetrics().widthPixels;
+ 465:         int cardW = Math.max(dp(84), (screenW - dp(40)) / 4);
+ 466:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW,
+ 467:                 ViewGroup.LayoutParams.WRAP_CONTENT);
+ 468:         lp.rightMargin = dp(7);
+ 469:         box.setLayoutParams(lp);
+ 470: 
+ 471:         TextView en = tv(c.en, 12.5f, C_TEAL);
+ 472:         en.setTypeface(Typeface.DEFAULT_BOLD);
+ 473:         en.setMaxLines(1);
+ 474:         box.addView(en);
+ 475: 
+ 476:         // 释义注释：单词正下方。与「◆僻义N」同样的位置语言 ——
+ 477:         // 主信息在上、补充信息在下，玩家扫一眼就知道这张是什么。
+ 478:         String sense = c.isWord() ? GQuiz.firstSensePublic(c.cn) : c.desc;
+ 479:         if (sense == null) sense = "";
+ 480:         sense = sense.trim();
+ 481:         if (!sense.isEmpty()) {
+ 482:             TextView cn = tv(sense, 10, C_FG2);
+ 483:             cn.setPadding(0, dp(2), 0, 0);
+ 484:             cn.setMaxLines(2);
+ 485:             box.addView(cn);
+ 486:         }
+ 487: 
+ 488:         if (c.pos != null && !c.pos.isEmpty()) {
+ 489:             TextView pos = tv(c.pos, 9, C_FG3);
+ 490:             pos.setPadding(0, dp(1), 0, 0);
+ 491:             box.addView(pos);
+ 492:         }
+ 493:         return box;
+ 494:     }
+ 495: 
+ 496:     /**
+ 497:      * 卡面。**故意不显示中文释义** —— 那等于把考题的答案印在题面上，
+ 498:      * 正确答案看到「marsh / n / 沼泽」时已经知道该选什么了。
+ 499:      * 释义改在答完之后由战报条给出（见 flashResult / showLog）。
+ 500:      */
+ 501:     private View cardView(final GCard c, boolean clickable) {
+ 502:         LinearLayout box = new LinearLayout(getContext());
+ 503:         box.setOrientation(VERTICAL);
+ 504:         box.setPadding(dp(9), dp(9), dp(9), dp(9));
+ 505:         GradientDrawable g = new GradientDrawable();
+ 506:         g.setCornerRadius(dp(11));
+ 507:         g.setColor(c.isAdverb() ? 0xFF2A2440 : C_BG3);
+ 508:         // 多义项词（熟词僻义候选）用紫色粗描边标出来。这是「这张牌可以过载」
+ 509:         // 的唯一视觉线索 —— 不标的话玩家永远不知道哪张牌值得赌，
+ 510:         // 机制等于不存在。描边宽 2dp 而不是 1dp，才在深色底上看得出来。
+ 511:         boolean overloadable = c.canOverload();
+ 512:         if (overloadable) {
+ 513:             g.setStroke(dp(2), C_PURPLE);
+ 514:         } else {
+ 515:             g.setStroke(dp(1), c.isAdverb() ? C_PURPLE : C_LINE);
+ 516:         }
+ 517:         box.setBackground(g);
+ 518: 
+ 519:         // 卡宽 = 屏宽的三分之一，保证一屏恰好看到 3 张、左右露边提示可滑
+ 520:         int screenW = getResources().getDisplayMetrics().widthPixels;
+ 521:         int cardW = Math.max(dp(92), (screenW - dp(40)) / 3);
+ 522:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW,
+ 523:                 ViewGroup.LayoutParams.WRAP_CONTENT);
+ 524:         lp.rightMargin = dp(8);
+ 525:         box.setLayoutParams(lp);
+ 526: 
+ 527:         TextView en = tv(c.en, 13.5f, C_FG);
+ 528:         en.setTypeface(Typeface.DEFAULT_BOLD);
+ 529:         box.addView(en);
+ 530: 
+ 531:         TextView sub = tv(c.isAdverb() ? "副词·机制" : c.pos, 10, C_FG3);
+ 532:         sub.setPadding(0, dp(1), 0, dp(3));
+ 533:         box.addView(sub);
+ 534: 
+ 535:         // 僻义过载标记 + 重铸标记。两个都是「这张牌有额外玩法」的提示，
+ 536:         // 挤在同一行显示，避免卡面被撑高后一屏放不下。
+ 537:         StringBuilder tag = new StringBuilder();
+ 538:         if (overloadable) tag.append("◆僻义").append(c.senseCount());
+ 539:         if (GBattle.isReWord(c)) {
+ 540:             if (tag.length() > 0) tag.append(" ");
+ 541:             tag.append("♻re-");
+ 542:         }
+ 543:         if (tag.length() > 0) {
+ 544:             TextView badge = tv(tag.toString(), 9.5f, C_PURPLE);
+ 545:             badge.setTypeface(Typeface.DEFAULT_BOLD);
+ 546:             badge.setPadding(0, 0, 0, dp(2));
+ 547:             box.addView(badge);
+ 548:         }
+ 549: 
+ 550:         // 副词是机制牌，按名字选就行，不考释义，所以保留效果说明
+ 551:         if (c.isAdverb() && c.desc != null && !c.desc.isEmpty()) {
+ 552:             TextView cn = tv(c.desc, 11, C_FG2);
+ 553:             cn.setMaxLines(3);
+ 554:             box.addView(cn);
+ 555:         }
+ 556: 
+ 557:         // 同义提示：和上一张同义则标出来
+ 558:         if (battle != null && battle.lastPlayed != null
+ 559:                 && data.synonym(battle.lastPlayed.id, c.id)) {
+ 560:             TextView tip = tv("连锁 ×" + (battle.chain + 1), 10, C_TEAL);
+ 561:             tip.setPadding(0, dp(4), 0, 0);
+ 562:             box.addView(tip);
+ 563:         }
+ 564: 
+ 565:         if (clickable && pendingQ != null) {
+ 566:             // 敌人已经出题：点牌即作答。答对打出这张，答错弃掉这张。
+ 567:             box.setOnClickListener(v -> answerCard(c));
+ 568:         } else if (clickable && battle.phase == GBattle.PHASE_PLAY && c.isAdverb()) {
+ 569:             // 副词是机制牌，不参与词义考核。手牌里全是副词时出不了题（pendingQ
+ 570:             // 为 null），这时副词必须还能直接打出去，否则整手牌是点不动的死牌。
+ 571:             box.setOnClickListener(v -> resolveAdverb(c));
+ 572:         } else if (clickable && battle.phase == GBattle.PHASE_KEEP) {
+ 573:             box.setOnClickListener(v -> {
+ 574:                 if (battle.keep(c)) {
+ 575:                     battle.lastMsg = "已保：" + c.en;
+ 576:                     render();
+ 577:                 }
+ 578:             });
+ 579:         }
+ 580:         return box;
+ 581:     }
+ 582: 
+ 583:     // ── 阶段按钮 ─────────────────────────────────────────
+ 584: 
+ 585:     /**
+ 586:      * 战斗中的道具条。
+ 587:      *
+ 588:      * 道具（nevertheless / anyhow / anyway / further）在 cards.json 里
+ 589:      * 早就定义好了，但从来没有出现在任何界面 —— 商店不卖、战斗里不能用，
+ 590:      * 等于这四个道具不存在。这里按「持有才显示」列出手牌上方的一行。
+ 591:      *
+ 592:      * 文案必须把效果写出来：玩家背包里放着一个「尽管如此」，
+ 593:      * 光看词根本猜不到它是「免疫一次伤害」。
+ 594:      */
+ 595:     private void addItemBar(LinearLayout parent) {
+ 596:         org.json.JSONArray ids = store.items();
+ 597:         if (ids.length() == 0) return;
+ 598:         java.util.Set<String> seen = new java.util.HashSet<>();
+ 599:         for (int i = 0; i < ids.length(); i++) {
+ 600:             final String id = ids.optString(i);
+ 601:             if (id == null || id.isEmpty() || !seen.add(id)) continue;
+ 602:             GameData.Item found = null;
+ 603:             for (GameData.Item it : data.items) {
+ 604:                 if (it.id.equals(id)) { found = it; break; }
+ 605:             }
+ 606:             if (found == null) continue;
+ 607:             final GameData.Item item = found;
+ 608:             parent.addView(smallBtn("🎒 " + item.nameEn + " — " + item.desc, () -> {
+ 609:                 if (battle.useItem(item.id)) {
+ 610:                     flash = "🎒 已使用【" + item.nameEn + "】" + item.desc;
+ 611:                     addLog(flash, C_AMBER);
+ 612:                 } else {
+ 613:                     flash = "这个道具现在用不了";
+ 614:                     addLog(flash, C_FG3);
+ 615:                 }
+ 616:                 render();
+ 617:             }));
+ 618:         }
+ 619:     }
+ 620: 
+ 621:     /**
+ 622:      * 「Ultimate」按钮：每层只能用一次，本回合伤害 ×3。
+ 623:      *
+ 624:      * 特殊词 ultimate 的说明是「每层可用一次：本回合伤害 ×3」，
+ 625:      * 没有按钮就没法发动 —— 效果写了却点不到，等于没实现。
+ 626:      * 只有买过 ultimate 且这一层还没用过时才显示。
+ 627:      */
+ 628:     private void addUltimateButton(LinearLayout parent) {
+ 629:         if (battle == null || !battle.canUltimate()) return;
+ 630:         parent.addView(smallBtn("✨ 终极 — 本回合伤害 ×3（每层一次）", () -> {
+ 631:             if (battle.fireUltimate()) {
+ 632:                 flash = "✨ 终极发动：本回合伤害 ×3";
+ 633:                 addLog(flash, C_AMBER);
+ 634:             }
+ 635:             render();
+ 636:         }));
+ 637:     }
+ 638: 
+ 639:     private void renderOptions() {
+ 640:         optRow.removeAllViews();
+ 641:         if (pendingQ != null) { renderQuiz(); return; }
+ 642: 
+ 643:         switch (battle.phase) {
+ 644:             case GBattle.PHASE_CHOOSE:
+ 645:                 // 一点「攻击」就直接出题，不要再让玩家点第二下。
+ 646:                 // 每回合都从 PHASE_CHOOSE 开始，如果这里只切阶段不出题，
+ 647:                 // 玩家会觉得第一下点击没反应 —— 白白多一次交互。
+ 648:                 optRow.addView(bigBtn("⚔ 攻击 · 出牌打人", C_PURPLE, () -> {
+ 649:                     battle.chooseAttack();
+ 650:                     askQuestion();
+ 651:                     render();
+ 652:                 }));
+ 653:                 optRow.addView(bigBtn("保牌 · 花 " + GBattle.keepEnergyCost
+ 654:                         + " 能量留 2 张（余 " + battle.energy + "）", C_TEAL, () -> {
+ 655:                     if (!battle.chooseKeep()) {
+ 656:                         flash = "能量不足，保牌需要 " + GBattle.keepEnergyCost + " 点";
+ 657:                         addLog(flash, C_AMBER);
+ 658:                     }
+ 659:                     render();
+ 660:                 }));
+ 661:                 addItemBar(optRow);
+ 662:                 optRow.addView(smallBtn("直接攻击（不答题）", () -> {
+ 663:                     // attackDirect() 内部会 endTurn()，也就是敌人同样会打你一下。
+ 664:                     // 原来直接调它再 render()，敌人这一下的动作完全看不见。
+ 665:                     int hp0 = battle.enemyHp;
+ 666:                     int myHp0 = battle.playerHp;
+ 667:                     int dealt = battle.attackDirect();
+ 668:                     flash = "【直接攻击】造成 " + dealt + " 伤害";
+ 669:                     addLog(flash, C_TEAL);
+ 670:                     if (battle.over()) { render(); return; }
+ 671:                     // 敌人反击
+ 672:                     if (battle.playerHp < myHp0) {
+ 673:                         int took = myHp0 - battle.playerHp;
+ 674:                         addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+ 675:                                 + " 反击　你受到 " + took + " 伤害", C_RED);
+ 676:                         sprite.play("attack");
+ 677:                     } else {
+ 678:                         sprite.play("hurt");
+ 679:                     }
+ 680:                     render();
+ 681:                 }));
+ 682:                 break;
+ 683: 
+ 684:             case GBattle.PHASE_PLAY:
+ 685:                 // 正在答题：只画题面，不画阶段按钮。
+ 686:                 if (pendingQ != null) { renderQuiz(); return; }
+ 687: 
+ 688:                 // 手牌空了就一个按钮都不渲染会让界面死掉 —— 这正是「结束回合」
+ 689:                 // 最需要出现的时候。
+ 690:                 if (battle.hand.isEmpty()) {
+ 691:                     optRow.addView(tv("手牌打空了 —— 结束回合继续", 12.5f, C_FG3));
+ 692:                 } else if (!hasQuizableCard()) {
+ 693:                     optRow.addView(tv("手里只剩副词牌，直接打出去或结束回合",
+ 694:                             12.5f, C_FG3));
+ 695:                 }
+ 696: 
+ 697:                 // ── 攻击与保牌交替 ──────────────────────────
+ 698:                 //
+ 699:                 // 现在这两件事是并列的两个按钮，一回合内可以来回切：
+ 700:                 //   打一张（−1 能量，答对才扣）→ 回来还能再选保牌
+ 701:                 //   保一轮（−2 能量）→ 回来还能再攻击
+ 702:                 // 唯一的限制是能量，不再是「先选哪个就锁死哪个」。
+ 703:                 if (canAttackByEnergy() && hasQuizableCard()) {
+ 704:                     optRow.addView(bigBtn("⚔ 攻击 · 出牌打人（−1 能量）", C_PURPLE,
+ 705:                             () -> {
+ 706:                         askQuestion();
+ 707:                         render();
+ 708:                     }));
+ 709:                 }
+ 710: 
+ 711:                 // 保牌：花 2 能量挑牌留住。能量够就随时可以进来，
+ 712:                 // 不设「每回合一次」，也不受「这回合打没打过」限制。
+ 713:                 if (battle.energy >= GBattle.keepEnergyCost) {
+ 714:                     optRow.addView(bigBtn("🛡 保牌 · 花 " + GBattle.keepEnergyCost
+ 715:                             + " 能量留 " + data.keepLimit + " 张（余 " + battle.energy
+ 716:                             + "）", C_TEAL, () -> {
+ 717:                         if (!battle.chooseKeep()) {
+ 718:                             flash = "能量不足，保牌需要 " + GBattle.keepEnergyCost + " 点";
+ 719:                             addLog(flash, C_AMBER);
+ 720:                         }
+ 721:                         render();
+ 722:                     }));
+ 723:                 } else {
+ 724:                     optRow.addView(tv("保牌需 " + GBattle.keepEnergyCost
+ 725:                             + " 能量，当前只剩 " + battle.energy + " 点", 11.5f, C_FG3));
+ 726:                 }
+ 727: 
+ 728:                 addItemBar(optRow);
+ 729:                 addUltimateButton(optRow);
+ 730:                 optRow.addView(smallBtn("结束回合", () -> {
+ 731:                     advanceTurn();
+ 732:                 }));
+ 733:                 break;
+ 734: 
+ 735:             case GBattle.PHASE_KEEP:
+ 736:                 optRow.addView(smallBtn("确定（本轮已保 " + battle.keptNow
+ 737:                         + " / " + data.keepLimit + " 张）", () -> {
+ 738:                     battle.endKeep(); render();
+ 739:                 }));
+ 740:                 break;
+ 741: 
+ 742:             default:
+ 743:                 break;
+ 744:         }
+ 745:     }
+ 746: 
+ 747:     // ── 答题 ─────────────────────────────────────────────
+ 748: 
+ 749:     /**
+ 750:      * 保证当前处于「有题待答」的状态。
+ 751:      *
+ 752:      * 由 render() 在渲染手牌之前调用 —— 顺序很关键，见 render() 里的注释。
+ 753:      */
+ 754:     private void ensureQuestion() {
+ 755:         if (battle == null) return;
+ 756:         if (battle.phase != GBattle.PHASE_PLAY) return;
+ 757:         if (pendingQ != null) return;
+ 758:         if (battle.hand.isEmpty()) return;
+ 759:         askQuestion();
+ 760:     }
+ 761: 
+ 762:     /** 手牌里还有没有能拿来出题的单词牌（副词不算）。 */
+ 763:     private boolean hasQuizableCard() {
+ 764:         if (battle == null) return false;
+ 765:         for (GCard c : battle.hand) {
+ 766:             if (c != null && c.isWord() && c.cn != null && !c.cn.isEmpty()) return true;
+ 767:         }
+ 768:         return false;
+ 769:     }
+ 770: 
+ 771:     /** 能量够不够出一次手。 */
+ 772:     private boolean canAttackByEnergy() {
+ 773:         return battle != null && battle.energy > 0;
+ 774:     }
+ 775: 
+ 776:     /**
+ 777:      * 让怪物用玩家刚打出的这个词的中文说一句话。
+ 778:      *
+ 779:      * 设计意图：答对之后原来只有一行绿色战报，怪物毫无反应，
+ 780:      * 「我在用它打它」这件事没有落点。现在让怪物把词义复述一遍 ——
+ 781:      * 既是打击反馈，又顺手又把释义过了一次眼（答完就忘是背单词最大的漏斗）。
+ 782:      *
+ 783:      * 注意：只在**答对之后**调用。答题期间任何位置都不能出现词义，
+ 784:      * 否则就是上一版「答案写在明面上」的同类错误。
+ 785:      */
+ 786:     private void enemySpeak(String line) {
+ 787:         if (tvSpeak == null) return;
+ 788:         if (line == null || line.isEmpty()) { tvSpeak.setVisibility(GONE); return; }
+ 789:         tvSpeak.setText(line);
+ 790:         tvSpeak.setVisibility(VISIBLE);
+ 791:         tvSpeak.setAlpha(0f);
+ 792:         tvSpeak.animate().alpha(1f).setDuration(180).start();
+ 793:     }
+ 794: 
+ 795:     /**
+ 796:      * 按题型挑一句合适的中文台词。c 是这轮打出去的牌。
+ 797:      *
+ 798:      * ── 例句题说的是「整句的翻译」，不是单个单词 ────────────────
+ 799:      *
+ 800:      * 旧版无论什么题型都只念单词的第一个义项，例句题也念。
+ 801:      * 但例句题考的本来就是「你能不能读懂这一整句」——
+ 802:      * 玩家读着 The captain gave the order to ___ ship. 选对了 abandon，
+ 803:      * 怪物却只回「放弃，抛弃」两个字，等于把最大的学习收益（整句释义）
+ 804:      * 白白扔掉，而且答对一句长句却只换来两个字的回应，反馈严重不足。
+ 805:      *
+ 806:      * 现在例句题走 exCnFirst（数据侧已经切好第一句，见 GCard），
+ 807:      * 把整句中文念出来；没有译文数据时才退回单词义。
+ 808:      * 其余题型仍然念单词义 —— 那些题型本来就没给句子。
+ 809:      */
+ 810:     private void enemySpeakFor(GCard c, String explain) {
+ 811:         if (c == null) { enemySpeak(null); return; }
+ 812: 
+ 813:         String sense = c.isWord() ? GQuiz.firstSensePublic(c.cn) : "";
+ 814:         if (sense == null) sense = "";
+ 815:         sense = sense.trim();
+ 816: 
+ 817:         // 例句题优先念整句译文
+ 818:         String sentence = c.exCnFirst == null ? "" : c.exCnFirst.trim();
+ 819:         if (pendingQLastMode == 1 && !sentence.isEmpty()) {
+ 820:             // 译文可能很长（有些例句译文三十多个字），台词框只有一行，
+ 821:             // 超出会被截断成省略号。这里按 44 字上限收一收，保住完整语义。
+ 822:             enemySpeak("「" + shorten(sentence, 44) + "」……这一句我本来没打算让你读懂。");
+ 823:             return;
+ 824:         }
+ 825: 
+ 826:         if (sense.isEmpty()) { enemySpeak(null); return; }
+ 827:         enemySpeak("「" + sense + "」……你居然真懂这个词。");
+ 828:     }
+ 829: 
+ 830:     /**
+ 831:      * 超长文本截到 max 字以内，末尾补省略号。
+ 832:      *
+ 833:      * 中文按字算，一个汉字算一个 —— 台词框宽度固定，不截会直接溢出。
+ 834:      */
+ 835:     private static String shorten(String s, int max) {
+ 836:         if (s == null) return "";
+ 837:         String t = s.trim();
+ 838:         if (t.length() <= max) return t;
+ 839:         return t.substring(0, max) + "…";
+ 840:     }
+ 841: 
+ 842:     /** 刚结算掉的那道题的题型。仅用于挑台词，不影响判定。 */
+ 843:     private int pendingQLastMode = -1;
+ 844: 
+ 845:     /**
+ 846:      * 敌人出题。
+ 847:      *
+ 848:      * 旧流程是玩家先点一张牌、系统再考这张牌 —— 等于自己给自己出题，
+ 849:      * 只挑会的就永远不会被考到不会的。现在反过来：敌人先出题，
+ 850:      * 题目围绕手牌里的某一张，玩家必须读懂题面才能从手里挑对。
+ 851:      *
+ 852:      * 挑错就把那张错牌弃掉（认错了自己承担），挑对才算打出这张牌。
+ 853:      */
+ 854:     private void askQuestion() {
+ 855:         if (battle == null || battle.phase != GBattle.PHASE_PLAY) return;
+ 856:         if (pendingQ != null) return;
+ 857:         if (battle.hand.isEmpty()) return;
+ 858: 
+ 859:         pendingQ = quiz.make(battle.hand, quiz.randomMode());
+ 860:         if (pendingQ == null) return;   // 手牌全是副词，出不了题
+ 861: 
+ 862:         // 敌人「施法」出题，让玩家看到是它在发难，而不是系统弹窗
+ 863:         sprite.play("cast");
+ 864:         pending = pendingQ.card;
+ 865:     }
+ 866: 
+ 867:     private void renderQuiz() {
+ 868:         optRow.removeAllViews();
+ 869: 
+ 870:         // 例句题句子长，字号要小一点，否则一个屏幕放不下
+ 871:         boolean isExample = pendingQ.mode == 1;
+ 872:         TextView q = tv(pendingQ.prompt, isExample ? 15 : 20, C_FG);
+ 873:         q.setTypeface(Typeface.DEFAULT_BOLD);
+ 874:         q.setGravity(Gravity.CENTER);
+ 875:         q.setPadding(dp(4), dp(2), dp(4), 0);
+ 876:         if (isExample) q.setLineSpacing(dp(3), 1f);
+ 877:         optRow.addView(q);
+ 878: 
+ 879:         if (!pendingQ.sub.isEmpty()) {
+ 880:             TextView s = tv(pendingQ.sub, 11.5f, C_FG3);
+ 881:             s.setGravity(Gravity.CENTER);
+ 882:             s.setPadding(dp(4), dp(3), dp(4), dp(8));
+ 883:             optRow.addView(s);
+ 884:         }
+ 885: 
+ 886:         if (pendingQ.options != null) {
+ 887:             // 释义辨析题：选项是屏幕上的按钮（干扰项都不是手牌）
+ 888:             //
+ 889:             // lucid（精英掉落）：每题排除一个错误选项。
+ 890:             // 在界面层划掉而不是改题库数据 —— 题库是共用的，改一处会污染
+ 891:             // 后续所有题目；这里只在渲染时决定「这一题这个选项不可点」。
+ 892:             int cut = -1;
+ 893:             if (battle != null && battle.spLucid && pendingQ.options.length > 2) {
+ 894:                 java.util.Random lr = new java.util.Random(pendingQ.prompt.hashCode());
+ 895:                 for (int tries = 0; tries < 8; tries++) {
+ 896:                     int k = lr.nextInt(pendingQ.options.length);
+ 897:                     if (k != pendingQ.answer) { cut = k; break; }
+ 898:                 }
+ 899:             }
+ 900:             for (int i = 0; i < pendingQ.options.length; i++) {
+ 901:                 final int k = i;
+ 902:                 TextView ob = optBtn(pendingQ.options[i], () -> answer(k));
+ 903:                 if (k == cut) {
+ 904:                     ob.setText("✗ " + pendingQ.options[i]);
+ 905:                     ob.setAlpha(0.35f);
+ 906:                     ob.setPaintFlags(ob.getPaintFlags()
+ 907:                             | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+ 908:                     ob.setOnClickListener(null);   // 划掉的就是不能点
+ 909:                     ob.setClickable(false);
+ 910:                 }
+ 911:                 optRow.addView(ob);
+ 912:             }
+ 913:         } else if (pendingQ.mode == 4) {
+ 914:             // 僻义过载走的是选项制，答案不在手上 —— 提示语不能写「点牌」，
+ 915:             // 否则玩家会去点手牌，而那正是这题要避免的作弊路径。
+ 916:             TextView tip = tv("▾ 选出这个词的生僻义项", 12, C_PURPLE);
+ 917:             tip.setGravity(Gravity.CENTER);
+ 918:             tip.setPadding(0, dp(6), 0, dp(2));
+ 919:             optRow.addView(tip);
+ 920:         } else {
+ 921:             // 其余题型：答案在手上，点牌作答
+ 922:             TextView tip = tv("▾ 点你手上对应的那张牌", 12, C_TEAL);
+ 923:             tip.setGravity(Gravity.CENTER);
+ 924:             tip.setPadding(0, dp(6), 0, dp(2));
+ 925:             optRow.addView(tip);
+ 926:         }
+ 927: 
+ 928:         // ── 僻义过载入口 ──────────────────────────────────
+ 929:         //
+ 930:         // 只有当前题目的目标牌有第二个义项时才出现。点它会把题面换成
+ 931:         // 生僻义项重新出题，答对 2.2 倍真实伤害、答错自伤 4 点。
+ 932:         // 放在最底下、用醒目色，是因为它是个「加注」操作，
+ 933:         // 不该和正常作答混在一起被误触。
+ 934:         if (pendingQ.card != null && pendingQ.card.canOverload()
+ 935:                 && pendingQ.mode != 4) {
+ 936:             // 【绝不能写 pendingQ.card.en】。
+ 937:             // 这一题问的是「中文 → 从手牌里挑出那个词」，答案就是这张牌的单词。
+ 938:             // 之前按钮写成「🔥 僻义过载 · <单词>」，等于把答案直接印在题面上，
+ 939:             // 玩家不用辨识，照着按钮上的拼写去点牌就行 —— 和手牌上
+ 940:             //「◆僻义2」标记泄露答案是同一种错误。
+ 941:             // 所以这里只说加注规则，不透露是哪张牌。
+ 942:             optRow.addView(smallBtn("🔥 僻义过载（答对 2.2×，答错自伤 "
+ 943:                     + GBattle.overloadWrongSelfDamage + "）",
+ 944:                     this::startOverload));
+ 945:         }
+ 946:     }
+ 947: 
+ 948:     /**
+ 949:      * 把当前题目换成僻义题。
+ 950:      *
+ 951:      * 目标牌仍然是玩家按过载时选中的那张（他手上有它、答对就打它），
+ 952:      * 但**题面改成给单词选释义**：四选一挑它的僻义。
+ 953:      *
+ 954:      * 为什么不能沿用「给中文选牌」：手牌上印着「◆僻义2」，
+ 955:      * 玩家点哪张都看得见那个标记 —— 题面问「哪个是它的僻义」时，
+ 956:      * 带 ◆ 的牌本身就把答案指出来了。改成选释义之后，标记不再是提示，
+ 957:      * 因为这时要答的是「哪个意思」，而不是「哪张牌」。
+ 958:      */
+ 959:     private void startOverload() {
+ 960:         if (battle == null || pendingQ == null) return;
+ 961:         GCard target = pendingQ.card;
+ 962:         GQuiz.Q oq = quiz.makeOverload(target);
+ 963:         if (oq == null) {
+ 964:             addLog("这张牌没有可考的僻义", C_AMBER);
+ 965:             return;
+ 966:         }
+ 967:         pendingQ = oq;
+ 968:         // 这里同样不能带 target.en —— flash/addLog 会立刻把答案显示出来。
+ 969:         flash = "🔥 僻义过载：改考生僻义项";
+ 970:         addLog(flash, C_PURPLE);
+ 971:         render();
+ 972:     }
+ 973: 
+ 974:     /**
+ 975:      * 推进一回合，先把敌人这次的攻击"演"出来再刷界面。
+ 976:      *
+ 977:      * 原实现直接 battle.endTurn(false); render()，敌人的攻击只体现在
+ 978:      * 血量数字瞬间变小上，怪物一个动作都没有 —— 玩家看不出是挨打了。
+ 979:      * 这里先算一次 endTurn，比较前后血量：掉血了就播 attack，
+ 980:      * 让动作和伤害数字对得上。
+ 981:      */
+ 982:     private void advanceTurn() {
+ 983:         if (battle == null || battle.over()) return;
+ 984:         // 结束回合时若还有题没答，必须先清掉：否则 pendingQ 会带进下一回合，
+ 985:         // 新回合的牌对不上旧题目，玩家怎么点都是错的。
+ 986:         if (pendingQ != null) {
+ 987:             pendingQ = null;
+ 988:             pending = null;
+ 989:         }
+ 990:         int hpBefore = battle.playerHp;
+ 991:         battle.endTurn(false);
+ 992: 
+ 993:         boolean hurt = battle.playerHp < hpBefore;
+ 994:         if (battle.phase == GBattle.PHASE_LOSE) {
+ 995:             render();
+ 996:             return;
+ 997:         }
+ 998:         if (hurt) {
+ 999:             final int dmg = hpBefore - battle.playerHp;
+1000:             flash = "⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+1001:                     + " 攻击　你受到 " + dmg + " 伤害";
+1002:             addLog(flash, C_RED);
+1003:             // 演出交给 enemyStrike：后撤→前冲→命中(闪红+抖动+残影+飘字)→回位
+1004:             enemyStrike(new Runnable() {
+1005:                 @Override public void run() { playerHurtFx(dmg); }
+1006:             });
+1007:         } else {
+1008:             addLog("── 你结束了回合（敌人还在蓄力）", C_FG3);
+1009:             sprite.play("move");
+1010:         }
+1011:         render();
+1012:     }
+1013: 
+1014:     /**
+1015:      * 选项制题（题型 3 释义辨析）：点按钮作答。
+1016:      *
+1017:      * 答错时把**正确答案那张牌**弃掉 —— 因为选项不是实体牌，
+1018:      * 没法「弃掉你点错的那个词」。题考的是这张牌，认不出来就该失去它。
+1019:      */
+1020:     private void answer(int pick) {
+1021:         if (pendingQ == null || pendingQ.options == null) return;
+1022:         GCard target = pendingQ.card;
+1023: 
+1024:         // 僻义过载（mode 4）也是选项题，但判对错的方式不同：
+1025:         // 它选的是「哪个释义」，不是「哪个单词」，所以直接比 answer 下标，
+1026:         // 不能走下面那个和 target.en 比字符串的分支。
+1027:         if (pendingQ.mode == 4) {
+1028:             // 不论对错都要记住义项下标：答对要用它结算 2.2 倍伤害，
+1029:             // 答错要用它打出「你答的是什么、正确答案是什么」的说明。
+1030:             overloadIndex = pendingQ.senseIndex;
+1031: 
+1032:             // ── 同义容差：选中的选项只要和正确答案「是同一个意思」就算对 ──
+1033:             //
+1034:             // 原来是纯下标比较（pick == pendingQ.answer）。出题侧已经尽量
+1035:             // 保证选项互不同义，但中文释义本来就是一堆近义写法
+1036:             // （收费/费用、进步/进展、相等的/等量），题库里同一概念
+1037:             // 常有多种表述，光靠出题去重不可能穷尽。
+1038:             //
+1039:             // 一旦漏网，玩家选一个明明说得通的选项却被判错，
+1040:             // 就是「生僻义回答常见意思也算错」那种冤枉感。
+1041:             // 所以判题侧再兜一层：文字归一化后相等或互相包含即算对。
+1042:             boolean right = pick == pendingQ.answer;
+1043:             if (!right && pick >= 0 && pick < pendingQ.options.length
+1044:                     && pendingQ.answer >= 0 && pendingQ.answer < pendingQ.options.length) {
+1045:                 right = GQuiz.sameSensePublic(pendingQ.options[pick],
+1046:                                                pendingQ.options[pendingQ.answer]);
+1047:             }
+1048:             resolve(target, right);
+1049:             return;
+1050:         }
+1051: 
+1052:         String chose = (pick >= 0 && pick < pendingQ.options.length)
+1053:                 ? pendingQ.options[pick] : "";
+1054:         boolean right = chose.equalsIgnoreCase(target == null ? "" : target.en);
+1055:         resolve(target, right);
+1056:     }
+1057: 
+1058:     /**
+1059:      * 点手牌作答。
+1060:      *
+1061:      * 这是新流程的核心：敌人已经出题，答案就在手上，玩家点自己认为是答案的那张牌。
+1062:      *   · 点对 → 出这张牌打人（走 playCard）
+1063:      *   · 点错 → **弃掉点错的这张**（不是正确答案那张）。认错了自己承担 ——
+1064:      *     否则玩家可以把 5 张牌挨个试一遍，等于把「不认识」变成「多试几次就过」。
+1065:      */
+1066:     private void answerCard(GCard picked) {
+1067:         if (pendingQ == null) return;
+1068:         GCard target = pendingQ.card;
+1069: 
+1070:         // 副词是机制牌，不参与词义考核：直接打出去，不判对错
+1071:         if (picked != null && picked.isAdverb()) {
+1072:             pending = null;
+1073:             pendingQ = null;
+1074:             resolveAdverb(picked);
+1075:             return;
+1076:         }
+1077: 
+1078:         boolean right = target != null && picked != null && picked.id.equals(target.id);
+1079:         // style="pendingQ.mode == 4" 时记住考的是第几个义项，供 resolve() 结算用
+1080:         overloadIndex = (pendingQ.mode == 4) ? pendingQ.senseIndex : -1;
+1081:         resolve(picked, right);
+1082:     }
+1083: 
+1084:     /** 统一的答题结算。c 是玩家实际点的那张牌（答错时被弃掉的就是它）。 */
+1085:     private void resolve(GCard c, boolean right) {
+1086:         if (pendingQ == null) return;
+1087:         String explain = pendingQ.explain;
+1088:         pendingQLastMode = pendingQ.mode;
+1089:         pending = null;
+1090:         pendingQ = null;
+1091:         // 先收掉上一条台词：答错时如果还挂着上一句「你居然真懂这个词」，
+1092:         // 等于在骂人，而且会让人误以为这题答对了。
+1093:         enemySpeak(null);
+1094: 
+1095: 
+1096:         // 记下出手前的血量，用来判断这一下有没有引出「引擎内部自动结束回合」。
+1097:         int myHpBefore = battle.playerHp;
+1098: 
+1099:         // 僻义过载走单独的结算：倍率不同，答错也不走敌人的充能逻辑。
+1100:         // 这里必须在常规分支之前拦下来，否则过载会被当成普通答对处理，
+1101:         // 2.2 倍伤害就白写了。
+1102:         if (overloadIndex >= 0) {
+1103:             int oi = overloadIndex;
+1104:             overloadIndex = -1;
+1105:             if (right && c != null) {
+1106:                 store.markRight();
+1107:                 int hpBefore = battle.enemyHp;
+1108:                 int dmg = battle.playCardOverload(c, oi);
+1109:                 int real = hpBefore - battle.enemyHp;
+1110:                 flash = "🔥 僻义过载　" + c.en + "（" + c.senseText(oi)
+1111:                         + "）　真实伤害 " + real;
+1112:                 addLog(flash, C_PURPLE);
+1113:                 enemySpeak("「" + c.senseText(oi) + "」……这个义项你都知道？");
+1114:                 sprite.play("hurt");
+1115:                 if (battle.playerHp < myHpBefore) {
+1116:                     final int took = myHpBefore - battle.playerHp;
+1117:                     addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+1118:                             + " 攻击　你受到 " + took + " 伤害", C_RED);
+1119:                     if (!battle.over()) {
+1120:                         enemyStrike(new Runnable() {
+1121:                             @Override public void run() { playerHurtFx(took); }
+1122:                         });
+1123:                     } else {
+1124:                         playerHurtFx(took);
+1125:                     }
+1126:                 }
+1127:             } else {
+1128:                 store.markWrong();
+1129:                 battle.onOverloadWrong(c);
+1130:                 flash = "✗ 僻义答错：" + explain + "　自伤 "
+1131:                         + GBattle.overloadWrongSelfDamage;
+1132:                 addLog(flash, C_RED);
+1133:                 playerHurtFx(GBattle.overloadWrongSelfDamage);
+1134:             }
+1135:             render();
+1136:             return;
+1137:         }
+1138: 
+1139:         if (right) {
+1140:             store.markRight();
+1141:             addLog("✓ 答对：" + (c == null ? "" : c.en + " = " + c.cn), C_GREEN);
+1142:             if (c == null) {
+1143:                 // 不该发生，防御性处理
+1144:             } else if (battle.phase == GBattle.PHASE_PLAY && c.isWord()) {
+1145:                 int hpBefore = battle.enemyHp;
+1146:                 int dmg = battle.playCard(c);
+1147:                 int real = hpBefore - battle.enemyHp;
+1148:                 flash = "【攻击】" + c.en + "  造成 " + real + " 伤害"
+1149:                         + (battle.chain > 1 ? "（连锁 ×" + battle.chain + "）" : "");
+1150:                 addLog(flash, C_TEAL);
+1151:                 if (battle.critReady && dmg > 0) addLog("★ 暴击生效", C_AMBER);
+1152:                 // 怪物用这个词的中文说一句 —— 打击反馈 + 顺手复述词义
+1153:                 enemySpeakFor(c, explain);
+1154:                 // 玩家出牌打人，怪物是"挨打"的一方 —— 播 hurt 不是 attack
+1155:                 sprite.play("hurt");
+1156:                 // playCard() 在「能量打空 / 手牌打空」时会自己调 endTurn(false)，
+1157:                 // 也就是敌人已经打完你了。原来这里直接 render()，那一下完全静默：
+1158:                 // 不掉血条动画、不写战报，玩家只看到血量数字莫名少了一截。
+1159:                 if (battle.playerHp < myHpBefore) {
+1160:                     final int took = myHpBefore - battle.playerHp;
+1161:                     addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+1162:                             + " 攻击　你受到 " + took + " 伤害", C_RED);
+1163:                     if (!battle.over()) {
+1164:                         enemyStrike(new Runnable() {
+1165:                             @Override public void run() { playerHurtFx(took); }
+1166:                         });
+1167:                     } else {
+1168:                         playerHurtFx(took);
+1169:                     }
+1170:                 }
+1171:             } else if (c.isAdverb()) {
+1172:                 resolveAdverb(c);
+1173:                 return;
+1174:             }
+1175:         } else {
+1176:             store.markWrong();
+1177:             battle.onWrong(c);
+1178:             flash = "✗ 答错：" + explain + "　敌人充能 +2，下次伤害翻倍";
+1179:             addLog(flash, C_RED);
+1180:             // 答错是玩家失误，怪物只是"蓄力"，播 cast 表现蓄力
+1181:             sprite.play("cast");
+1182:             // onWrong() 在手牌因此变空时也会内部 endTurn(false)，敌人会真的打你一下。
+1183:             // 这种情况要按「攻击」演，不能还停在蓄力动作上。
+1184:             if (battle.playerHp < myHpBefore) {
+1185:                 final int took = myHpBefore - battle.playerHp;
+1186:                 addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+1187:                         + " 攻击　你受到 " + took + " 伤害", C_RED);
+1188:                 if (!battle.over()) {
+1189:                     enemyStrike(new Runnable() {
+1190:                         @Override public void run() { playerHurtFx(took); }
+1191:                     });
+1192:                 } else {
+1193:                     playerHurtFx(took);
+1194:                 }
+1195:             }
+1196:         }
+1197: 
+1198:         render();
+1199:     }
+1200: 
+1201: 
+1202:     /**
+1203:      * 打出一张副词牌：消耗它，按 fx 改写本回合规则。
+1204:      *
+1205:      * 副词是机制牌，考它「是什么意思」没有意义（exceedingly 就是「极其」），
+1206:      * 所以它不参与词义考核，玩家点它就直接生效。
+1207:      */
+1208:     private void resolveAdverb(GCard c) {
+1209:         if (c == null) return;
+1210:         int myHpBefore = battle.playerHp;
+1211:         battle.hand.remove(c);
+1212:         battle.discard.add(c);
+1213:         battle.energy--;
+1214:         battle.applyAdverb(adverbFx(c.id));
+1215:         battle.lastMsg = "【" + c.en + "】" + c.desc;
+1216:         flash = "【副词】" + c.en + " — " + c.desc;
+1217:         addLog(flash, C_PURPLE);
+1218:         // 副词是玩家改写规则，怪物侧只轻微受创反馈
+1219:         sprite.play("hurt");
+1220:         if (battle.playerHp < myHpBefore) {
+1221:             int took = myHpBefore - battle.playerHp;
+1222:             addLog("▶ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+1223:                     + " 攻击　你受到 " + took + " 伤害", C_RED);
+1224:             if (!battle.over()) sprite.play("attack");
+1225:         }
+1226:         if (battle.energy <= 0 || battle.hand.isEmpty()) advanceTurn();
+1227:         else render();
+1228:     }
+1229: 
+1230:     /** 副词 id → fx 标识。与 assets/game/cards.json 的 adverbs 段一一对应。 */
+1231:     private static String adverbFx(String id) {
+1232:         switch (id) {
+1233:             case "exceedingly":    return "nextCardX2_single";
+1234:             case "particularly":   return "firstX2_5_restHalf";
+1235:             case "increasingly":   return "ramp30_hp5";
+1236:             case "practically":    return "singleX3";
+1237:             case "exclusively":    return "singleX3";
+1238:             case "basically":      return "allFixed12";
+1239:             case "indeed":         return "guaranteedCrit_chargeUp1";
+1240:             case "altogether":     return "discardAll_plus8";
+1241:             case "quickly":        return "chargeDown1_dmgDown30";
+1242:             case "slowly":         return "noCharge_noAttack";
+1243:             case "suddenly":       return "true20_discard1";
+1244:             case "immediately":    return "skipCharge_chargeUp1";
+1245:             case "gradually":      return "rampPerTurn2";
+1246:             case "deliberately":   return "skipTurn_nextX2";
+1247:             case "naturally":      return "noConsume_halfDmg";
+1248:             case "normally":       return "redrawHand_chargeUp1";
+1249:             case "consequently":   return "draw2_dmgHalf";
+1250:             case "accordingly":    return "chargeDownPerCard_dmg40";
+1251:             case "hence":          return "enemyNextHalf_noAttack";
+1252:             case "moreover":       return "handPlus3_unusable";
+1253:             case "mercifully":     return "heal15orClearCharge";
+1254:             case "fortunately":    return "randomRareCard";
+1255:             case "presently":      return "enemyFullChargeNext";
+1256:             default:               return "";
+1257:         }
+1258:     }
+1259: 
+1260:     // ── 战报 / 状态 ──────────────────────────────────────
+1261: 
+1262:     private void addLog(String s, int color) {
+1263:         if (s == null || s.isEmpty()) return;
+1264:         log.add(s);
+1265:         // 只留最近 120 条，防止长时间对局内存无限增长
+1266:         while (log.size() > 120) log.remove(0);
+1267:     }
+1268: 
+1269:     /** 完整战报：在一层可滚动的浮层里显示，带颜色。 */
+1270:     private void showLog() {
+1271:         if (log.isEmpty()) { toast("还没有战报"); return; }
+1272:         android.widget.ScrollView sv = new android.widget.ScrollView(getContext());
+1273:         sv.setBackgroundColor(0x00000000);
+1274:         LinearLayout col = new LinearLayout(getContext());
+1275:         col.setOrientation(VERTICAL);
+1276:         col.setPadding(dp(14), dp(12), dp(14), dp(12));
+1277:         sv.addView(col);
+1278: 
+1279:         TextView h = tv("战报（" + log.size() + " 条）", 15, C_FG);
+1280:         h.setTypeface(Typeface.DEFAULT_BOLD);
+1281:         h.setPadding(0, 0, 0, dp(8));
+1282:         col.addView(h);
+1283: 
+1284:         for (String s : log) {
+1285:             TextView r = tv(s, 12, s.startsWith("✓") ? C_GREEN
+1286:                     : s.startsWith("✗") ? C_RED
+1287:                     : s.startsWith("【攻击】") ? C_TEAL
+1288:                     : s.startsWith("【副词】") ? C_PURPLE
+1289:                     : s.startsWith("★") ? C_AMBER
+1290:                     : C_FG2);
+1291:             r.setPadding(0, dp(2), 0, dp(2));
+1292:             col.addView(r);
+1293:         }
+1294: 
+1295:         col.addView(smallBtn("关闭", this::hideOverlay));
+1296: 
+1297:         showOverlay(sv);
+1298:     }
+1299: 
+1300:     /** 当前状态：血量/能量/回合/敌人充能/所有增益减益。 */
+1301:     private void showStatus() {
+1302:         android.widget.ScrollView sv = new android.widget.ScrollView(getContext());
+1303:         sv.setBackgroundColor(0x00000000);
+1304:         LinearLayout col = new LinearLayout(getContext());
+1305:         col.setOrientation(VERTICAL);
+1306:         col.setPadding(dp(14), dp(12), dp(14), dp(12));
+1307:         sv.addView(col);
+1308: 
+1309:         TextView h = tv("当前状态", 15, C_FG);
+1310:         h.setTypeface(Typeface.DEFAULT_BOLD);
+1311:         h.setPadding(0, 0, 0, dp(8));
+1312:         col.addView(h);
+1313: 
+1314:         col.addView(statLine("回合", String.valueOf(battle.turn), null));
+1315:         col.addView(statLine("本轮答对", store.right() + " 次", C_GREEN));
+1316:         col.addView(statLine("本轮答错", store.wrong() + " 次", C_RED));
+1317:         col.addView(statLine("生命", battle.playerHp + " / " + battle.playerMaxHp, null));
+1318:         col.addView(statLine("能量", battle.energy + " / " + battle.energyMax, null));
+1319:         col.addView(statLine("手牌", battle.hand.size() + " 张", null));
+1320:         col.addView(statLine("已保牌", battle.keptNow + " / " + data.keepLimit + " 张", null));
+1321:         if (!battle.kept.isEmpty()) {
+1322:             StringBuilder sb = new StringBuilder();
+1323:             for (GCard k : battle.kept) sb.append(k.en).append("  ");
+1324:             col.addView(statLine("保牌内容", sb.toString().trim(), C_TEAL));
+1325:         }
+1326:         if (battle.enemy != null) {
+1327:             int left = battle.enemyChargeNeed - battle.enemyCharge;
+1328:             if (left <= 0) left = 1;
+1329:             col.addView(statLine("敌人", battle.enemy.name, null));
+1330:             col.addView(statLine("敌人血量",
+1331:                     battle.enemyHp + " / " + battle.enemyMaxHp, null));
+1332:             col.addView(statLine("下次攻击",
+1333:                     enemyAtk() + " 伤害"
+1334:                             + (left <= 1 ? "（本回合结束时）"
+1335:                                          : "（还需 " + (left - 1) + " 回合）"),
+1336:                     left <= 1 ? C_RED : C_AMBER));
+1337:         }
+1338: 
+1339:         // ── 增减益 ──
+1340:         TextView bh = tv("当前的增益 / 减益", 13, C_FG);
+1341:         bh.setTypeface(Typeface.DEFAULT_BOLD);
+1342:         bh.setPadding(0, dp(12), 0, dp(4));
+1343:         col.addView(bh);
+1344: 
+1345:         boolean any = false;
+1346:         if (battle.turnDamageMul != 1.0) {
+1347:             col.addView(buff("伤害倍率 ×" + fmt(battle.turnDamageMul),
+1348:                     battle.turnDamageMul > 1 ? C_GREEN : C_RED));
+1349:             any = true;
+1350:         }
+1351:         if (battle.turnFlatBonus != 0) {
+1352:             col.addView(buff("固定加成 " + (battle.turnFlatBonus > 0 ? "+" : "")
+1353:                     + battle.turnFlatBonus, battle.turnFlatBonus > 0 ? C_GREEN : C_RED));
+1354:             any = true;
+1355:         }
+1356:         if (battle.critReady) { col.addView(buff("必暴击（下一张牌）", C_AMBER)); any = true; }
+1357:         if (battle.skipEnemyCharge) { col.addView(buff("冻结敌人充能", C_GREEN)); any = true; }
+1358:         if (battle.noAttackThisTurn) { col.addView(buff("本回合无法攻击", C_RED)); any = true; }
+1359:         if (battle.wrongDoubled) { col.addView(buff("敌人下次伤害翻倍", C_RED)); any = true; }
+1360:         if (battle.chain > 1) { col.addView(buff("同义连锁 ×" + battle.chain, C_TEAL)); any = true; }
+1361:         if (battle.extraDraw > 0) { col.addView(buff("额外抽牌 +" + battle.extraDraw, C_GREEN)); any = true; }
+1362:         if (!any) {
+1363:             TextView none = tv("无（本回合状态正常）", 12, C_FG3);
+1364:             none.setPadding(0, dp(2), 0, dp(2));
+1365:             col.addView(none);
+1366:         }
+1367: 
+1368:         col.addView(smallBtn("关闭", this::hideOverlay));
+1369:         showOverlay(sv);
+1370:     }
+1371: 
+1372:     private TextView statLine(String k, String v, Integer vColor) {
+1373:         TextView t = tv(k + "：" + v, 12.5f, vColor == null ? C_FG2 : vColor);
+1374:         t.setPadding(0, dp(3), 0, dp(3));
+1375:         return t;
+1376:     }
+1377: 
+1378:     private TextView buff(String s, int color) {
+1379:         TextView t = tv("· " + s, 12.5f, color);
+1380:         t.setPadding(0, dp(3), 0, dp(3));
+1381:         return t;
+1382:     }
+1383: 
+1384:     private static String fmt(double d) {
+1385:         if (Math.abs(d - Math.round(d)) < 0.01) return String.valueOf(Math.round(d));
+1386:         return String.format(java.util.Locale.US, "%.2f", d);
+1387:     }
+1388: 
+1389:     /**
+1390:      * 浮层用 Dialog 实现，不挂在 GBattleView 上。
+1391:      *
+1392:      * 踩过的坑：GBattleView 是纵向 LinearLayout，把浮层 addView 到它末尾时，
+1393:      * 就算给浮层设 MATCH_PARENT 也会被其它子 view 抢走高度，
+1394:      * 面板被顶到屏幕外（实测只露出最上面几行）。Dialog 有独立 window，
+1395:      * 不受父布局分配影响。
+1396:      */
+1397:     private void showOverlay(View content) {
+1398:         hideOverlay();
+1399:         int screenH = getResources().getDisplayMetrics().heightPixels;
+1400: 
+1401:         dialog = new android.app.Dialog(getContext(), android.R.style.Theme_Translucent_NoTitleBar);
+1402:         android.widget.FrameLayout root = new android.widget.FrameLayout(getContext());
+1403:         root.setOnClickListener(v -> hideOverlay());
+1404: 
+1405:         LinearLayout wrap = new LinearLayout(getContext());
+1406:         wrap.setOrientation(VERTICAL);
+1407:         wrap.setBackground(round(C_BG2, 14, C_LINE));
+1408:         wrap.setPadding(dp(6), dp(6), dp(6), dp(6));
+1409:         wrap.setOnClickListener(v -> { });
+1410:         android.widget.FrameLayout.LayoutParams wp =
+1411:                 new android.widget.FrameLayout.LayoutParams(
+1412:                         ViewGroup.LayoutParams.MATCH_PARENT,
+1413:                         (int) (screenH * 0.62f));
+1414:         wp.gravity = Gravity.CENTER;
+1415:         wp.setMargins(dp(16), 0, dp(16), 0);
+1416:         wrap.setLayoutParams(wp);
+1417:         wrap.addView(content, new LinearLayout.LayoutParams(
+1418:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+1419:         root.addView(wrap);
+1420: 
+1421:         dialog.setContentView(root);
+1422:         android.view.Window w = dialog.getWindow();
+1423:         if (w != null) {
+1424:             w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(0x00000000));
+1425:             w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+1426:             w.setDimAmount(0.75f);
+1427:             w.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND);
+1428:         }
+1429:         dialog.setCanceledOnTouchOutside(true);
+1430:         dialog.setCancelable(true);   // 显式声明：BACK 一定能关掉，别把人困在浮层里
+1431:         dialog.setOnCancelListener(d -> { dialog = null; });
+1432:         dialog.show();
+1433:     }
+1434: 
+1435:     private void hideOverlay() {
+1436:         if (dialog != null) {
+1437:             try { dialog.dismiss(); } catch (Exception ignore) { }
+1438:             dialog = null;
+1439:         }
+1440:         if (overlay != null) { removeView(overlay); overlay = null; }
+1441:     }
+1442: 
+1443:     // ── 结束 ─────────────────────────────────────────────
+1444: 
+1445:     private void showEnd(boolean win) {
+1446:         // 原来用 optRow.setTag("end") 当守卫，但那个 tag 只设不清：
+1447:         // 打第二场时 start() 没复位它，这里就直接 return，
+1448:         // 「继续」按钮永远加不出来 → onFinish 不触发 → 地图不推进。
+1449:         // 玩家看到的是「打完了但界面没反应」。
+1450:         // 换成每场开头复位的字段，既挡住重复发金币，也不会跨局残留。
+1451:         if (endShown) return;
+1452:         endShown = true;
+1453:         optRow.removeAllViews();
+1454: 
+1455:         TextView t = tv(win ? "胜利" : "失败", 26, win ? C_GREEN : C_RED);
+1456:         t.setTypeface(Typeface.DEFAULT_BOLD);
+1457:         t.setGravity(Gravity.CENTER);
+1458:         t.setPadding(0, dp(10), 0, dp(10));
+1459:         optRow.addView(t);
+1460: 
+1461:         if (win) {
+1462:             int gold = battle.goldReward();
+1463:             store.addGold(gold);
+1464:             TextView g = tv("+" + gold + " 金币", 14, C_AMBER);
+1465:             g.setGravity(Gravity.CENTER);
+1466:             optRow.addView(g);
+1467:             // 精英怪必掉一件（特殊词优先，集齐后掉道具）。
+1468:             // 掉落必须在 recordBattle 之前就写进存档：recordBattle 会读
+1469:             // store 的当前值算增量，先掉后记才和玩家看到的数字一致。
+1470:             addEliteDrop();
+1471:         }
+1472: 
+1473:         recordBattle(win);
+1474: 
+1475:         if (win) {
+1476:             optRow.addView(bigBtn("继续", C_PURPLE, () -> {
+1477:                 if (onFinish != null) onFinish.run();
+1478:             }));
+1479:         } else if (mimicFight && onDefeatSoft != null) {
+1480:             // 宝箱怪战败：不结束这一局，只砍半生命上限。
+1481:             //
+1482:             // 普通战斗输了要 resetRun()，因为「打不过还能继续走」会让
+1483:             // 塔失去全部压力。但宝箱不是玩家主动挑战的战斗节点 ——
+1484:             // 他只是想开个箱子，被里面的东西咬了一口。
+1485:             // 对这个失误用「整局清零」惩罚过重，会让玩家以后见箱就绕。
+1486:             // 所以单独走这条软失败路径：掉上限，继续爬。
+1487:             battle.onMimicDefeat();
+1488:             optRow.addView(tv("宝箱怪抢走了你的力量：生命上限减半至 "
+1489:                     + battle.playerMaxHp + "。这一局继续。", 12.5f, C_AMBER));
+1490:             optRow.addView(bigBtn("继续爬塔", C_PURPLE, () -> {
+1491:                 if (onDefeatSoft != null) onDefeatSoft.run();
+1492:             }));
+1493:         } else {
+1494:             // 战败必须重开这一局，不能走 onFinish。
+1495:             // onFinish 挂的是 advanceAfterBattle()，它无条件 node+1（到层末还翻层），
+1496:             // 也就是说「输了也能白拿一个节点」—— 这一局永远输不掉，
+1497:             // 塔就没有任何失败压力。而且 gold/层数还会继续累加。
+1498:             optRow.addView(tv("这一局结束了。金币与特殊词清零，从第 1 层重新开始。",
+1499:                     12.5f, C_FG3));
+1500:             optRow.addView(bigBtn("重新开始", C_PURPLE, () -> {
+1501:                 store.resetRun();
+1502:                 if (onFinish != null) onFinish.run();
+1503:             }));
+1504:         }
+1505:     }
+1506: 
+1507:     /**
+1508:      * 精英掉落：打赢精英怪当场给一件东西，并写进存档。
+1509:      *
+1510:      * 只对 tier 以 elite 开头的敌人触发（colossus / judge）。普通怪、
+1511:      * boss、宝箱怪都不掉 —— 掉落如果人人都有，就不再是「值得去赌的格子」。
+1512:      *
+1513:      * 为什么在这里而不是 GBattle 里：掉落是「这一局的地图进度」的一部分，
+1514:      * 和金币一样属于结算界面的事；GBattle 只管战斗规则，不该知道排行榜、
+1515:      * 存档和卡片池。
+1516:      */
+1517:     private void addEliteDrop() {
+1518:         if (battle == null || battle.enemy == null) return;
+1519:         String tier = battle.enemy.tier == null ? "" : battle.enemy.tier;
+1520:         if (!tier.startsWith("elite")) return;
+1521: 
+1522:         Object drop = data.rollEliteDrop(store, rnd);
+1523:         if (drop == null) {
+1524:             // 特殊词和道具都集齐了。给一笔补偿金币，不让精英白打。
+1525:             int bonus = data.eliteGold / 2;
+1526:             store.addGold(bonus);
+1527:             TextView t = tv("🏆 精英掉落：所有特殊词与道具都已集齐，补偿 +"
+1528:                     + bonus + " 金币", 13, C_AMBER);
+1529:             t.setGravity(Gravity.CENTER);
+1530:             t.setPadding(0, dp(6), 0, dp(6));
+1531:             optRow.addView(t);
+1532:             return;
+1533:         }
+1534: 
+1535:         TextView head = tv("🏆 精英掉落", 15, C_AMBER);
+1536:         head.setTypeface(Typeface.DEFAULT_BOLD);
+1537:         head.setGravity(Gravity.CENTER);
+1538:         head.setPadding(0, dp(8), 0, dp(2));
+1539:         optRow.addView(head);
+1540: 
+1541:         if (drop instanceof GameData.Special) {
+1542:             GameData.Special sp = (GameData.Special) drop;
+1543:             store.addSpecial(sp.id);
+1544:             TextView n = tv("【" + sp.nameEn + "】特殊词 · 永久被动", 14, C_TEAL);
+1545:             n.setGravity(Gravity.CENTER);
+1546:             optRow.addView(n);
+1547:             TextView e = tv(sp.effect, 12.5f, C_FG2);
+1548:             e.setGravity(Gravity.CENTER);
+1549:             optRow.addView(e);
+1550:         } else if (drop instanceof GameData.Item) {
+1551:             GameData.Item it = (GameData.Item) drop;
+1552:             store.addItem(it.id);
+1553:             TextView n = tv("【" + it.nameEn + "】道具 · 一次性", 14, C_TEAL);
+1554:             n.setGravity(Gravity.CENTER);
+1555:             optRow.addView(n);
+1556:             TextView e = tv(it.desc, 12.5f, C_FG2);
+1557:             e.setGravity(Gravity.CENTER);
+1558:             optRow.addView(e);
+1559:         }
+1560:     }
+1561: 
+1562:     /**
+1563:      * 把这一场记进本地并按天聚合，然后后台补传。
+1564:      *
+1565:      * 为什么用「增量」而不是直接读累计值：right()/wrong()/gold() 都是
+1566:      * 这台手机的累计数（一个月的量）。直接上报会让今天凭空涨几千分，
+1567:      * 排行榜立刻变成「谁玩得久谁第一」，和当天表现无关。
+1568:      *
+1569:      * 失败静默：成绩存本地就够了，上传失败不该弹窗打断玩家。
+1570:      */
+1571:     private void recordBattle(boolean win) {
+1572:         try {
+1573:             if (bpRev == null || bpRev.isEmpty()) return;
+1574:             GStore.Battle b = new GStore.Battle();
+1575:             b.day = com.zsb.plan.StateLogic.todayIso();
+1576:             // ── 爬塔进度用「总层数」而不是 layer() ──────────────
+1577:             //
+1578:             // 这是排行榜一直没数据的真正原因。store.layer() 只在
+1579:             // 一整张地图走到尽头时才 +1（见 GModeView.advanceStep），
+1580:             // 而一张图有好几层 —— 大多数玩家整局都停在第 0 层。
+1581:             // 于是一路爬到第 8 层的人，榜上显示的还是「第 1 层」，
+1582:             // 看起来就像没同步。
+1583:             //
+1584:             // 真实爬塔进度 = layer() * 每层行数 + curRow()。
+1585:             // 这样既包括跨地图的层数，也包括地图内已经走过的行数，
+1586:             // 和玩家在界面上看到的 Lv. 对得上。
+1587:             // 层数口径统一走 store.floorIndex()，不再在这里重算。
+1588:             // 之前战斗强度、商店价格、顶栏、排行榜各算一套，
+1589:             // 同一个「第 3 层」在不同地方指的东西不一样。
+1590:             b.floor = store.floorIndex();
+1591:             b.node = store.layer();   // 第几张地图 —— 排行榜也要能看到
+1592:             b.win = win;
+1593:             b.gold = Math.max(0, store.gold() - bpGold0);
+1594:             b.right = Math.max(0, store.right() - bpRight0);
+1595:             b.wrong = Math.max(0, store.wrong() - bpWrong0);
+1596:             b.ms = Math.max(0, System.currentTimeMillis() - bpT0);
+1597:             b.started = bpT0;
+1598:             b.rev = bpRev;
+1599:             // 一题都没答就结束的战斗（全程「直接攻击」）也记。
+1600:             //
+1601:             // 原来这里要求 total()>0，理由是"服务端会拒收"。但站在玩家
+1602:             // 角度看这是错的：他确实爬到了第几层、确实打完了这场，
+1603:             // 排行榜却完全没有他 —— 表现就是"我的爬塔记录没同步"。
+1604:             // 战败的那一场更冤：输了本来就掉层，干脆连存在感都没有。
+1605:             //
+1606:             // 现在一律记录；服务端若因题目数太少而忽略，那是它的判断，
+1607:             // 客户端不该提前替它扔掉玩家的成绩。
+1608:             store.addBattle(b);
+1609:         } catch (Exception ignored) {
+1610:             // 记不上不能影响玩家继续玩
+1611:         }
+1612:         // 不再在战斗结束时自动上报 —— 排行榜改成玩家主动上传（见 BoardView.doUpload）。
+1613:         // 原来每打一场就传一条，服务端按条累加，于是榜上是「一堆散记录
+1614:         // 加起来的数」，玩家看到的金币/层数和自己界面对不上。
+1615:     }
+1616: 
+1617:     public Runnable onFinish;
+1618:     public void setOnFinish(Runnable r) { onFinish = r; }
+1619: 
+1620:     /** 战败时不结束这一局的回调（宝箱怪用）。null = 用默认的「重新开始」流程。 */
+1621:     public Runnable onDefeatSoft;
+1622:     public void setOnDefeatSoft(Runnable r) { onDefeatSoft = r; }
+1623: 
+1624:     /**
+1625:      * 这一场是不是宝箱怪。
+1626:      *
+1627:      * 宝箱怪的胜负结算和普通战斗不同：赢了照样拿金币，
+1628:      * 但**输了不结束这一局**，只把生命上限减半（见 GBattle.onMimicDefeat）。
+1629:      */
+1630:     private boolean mimicFight = false;
+1631:     public void setMimicFight(boolean b) { mimicFight = b; }
+1632: 
+1633:     // ── 控件工厂 ─────────────────────────────────────────
+1634: 
+1635:     private TextView tv(String s, float size, int color) {
+1636:         TextView t = new TextView(getContext());
+1637:         t.setText(s);
+1638:         t.setTextSize(size);
+1639:         t.setTextColor(color);
+1640:         return t;
+1641:     }
+1642: 
+1643:     private TextView bigBtn(String s, int color, Runnable r) {
+1644:         TextView t = tv(s, 15, Color.WHITE);
+1645:         t.setTypeface(Typeface.DEFAULT_BOLD);
+1646:         t.setGravity(Gravity.CENTER);
+1647:         t.setPadding(0, dp(13), 0, dp(13));
+1648:         GradientDrawable g = new GradientDrawable();
+1649:         g.setCornerRadius(dp(12));
+1650:         g.setColor(color);
+1651:         t.setBackground(g);
+1652:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1653:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1654:         lp.bottomMargin = dp(8);
+1655:         t.setLayoutParams(lp);
+1656:         t.setOnClickListener(v -> r.run());
+1657:         return t;
+1658:     }
+1659: 
+1660:     private TextView smallBtn(String s, Runnable r) {
+1661:         TextView t = tv(s, 13, C_FG2);
+1662:         t.setGravity(Gravity.CENTER);
+1663:         t.setPadding(0, dp(10), 0, dp(10));
+1664:         GradientDrawable g = new GradientDrawable();
+1665:         g.setCornerRadius(dp(10));
+1666:         g.setColor(C_BG3);
+1667:         t.setBackground(g);
+1668:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1669:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1670:         lp.bottomMargin = dp(6);
+1671:         t.setLayoutParams(lp);
+1672:         t.setOnClickListener(v -> r.run());
+1673:         return t;
+1674:     }
+1675: 
+1676:     private TextView optBtn(String s, Runnable r) {
+1677:         TextView t = tv(s, 15, C_FG);
+1678:         t.setGravity(Gravity.CENTER);
+1679:         t.setPadding(dp(12), dp(13), dp(12), dp(13));
+1680:         GradientDrawable g = new GradientDrawable();
+1681:         g.setCornerRadius(dp(11));
+1682:         g.setColor(C_BG3);
+1683:         g.setStroke(dp(1), C_LINE);
+1684:         t.setBackground(g);
+1685:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1686:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1687:         lp.bottomMargin = dp(7);
+1688:         t.setLayoutParams(lp);
+1689:         t.setOnClickListener(v -> r.run());
+1690:         return t;
+1691:     }
+1692: 
+1693:     private void toast(String s) {
+1694:         android.widget.Toast.makeText(getContext(), s,
+1695:                 android.widget.Toast.LENGTH_SHORT).show();
+1696:     }
+1697: 
+1698:     private GradientDrawable round(int fill, float radius, int stroke) {
+1699:         GradientDrawable g = new GradientDrawable();
+1700:         g.setColor(fill);
+1701:         g.setCornerRadius(dp(radius));
+1702:         if (stroke != 0) g.setStroke(dp(1), stroke);
+1703:         return g;
+1704:     }
+1705: 
+1706:     private int dp(float v) {
+1707:         return Math.round(TypedValue.applyDimension(
+1708:                 TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+1709:     }
+1710: 
+1711:     /**
+1712:      * 敌人这一下实际会打多少。
+1713:      *
+1714:      * 不能直接显示 enemy.atk —— 答错会让伤害翻倍（wrongDamageMultiplier），
+1715:      * 意图写着 8 结果打 16，玩家会以为是 bug。预告必须预报真实数值。
+1716:      */
+1717:     private int enemyAtk() {
+1718:         if (battle == null || battle.enemy == null) return 0;
+1719:         int dmg = battle.enemy.atk;
+1720:         if (battle.wrongDoubled) {
+1721:             dmg = (int) Math.round(dmg * data.wrongDamageMultiplier);
+1722:         }
+1723:         return dmg;
+1724:     }
+1725: 
+1726:     // ── 受击表现实现 ─────────────────────────────────────
+1727: 
+1728:     /**
+1729:      * 把血量百分比刷到两条血条上。
+1730:      *
+1731:      * hpTrail 是残影：正常情况等于真实血量；掉血时它先留在原处，
+1732:      * 由 stepFx() 逐帧追上来，中间露出的红色就是这次掉了多少。
+1733:      */
+1734:     private void syncHpBar() {
+1735:         if (battle == null || hpFillBar == null) return;
+1736:         int max = Math.max(1, battle.playerMaxHp);
+1737:         int w = hpBarMaxW > 1 ? hpBarMaxW : Math.max(1, midRow.getWidth() - dp(28));
+1738:         if (w > 1) hpBarMaxW = w;
+1739: 
+1740:         float cur = Math.max(0f, Math.min(1f, battle.playerHp / (float) max));
+1741:         if (hpTrail < 0f) hpTrail = cur;
+1742: 
+1743:         setBarW(hpFillBar, w, cur);
+1744:         setBarW(hpTrailBar, w, Math.max(cur, hpTrail));
+1745:     }
+1746: 
+1747:     private void setBarW(View v, int total, float ratio) {
+1748:         if (v == null) return;
+1749:         android.view.ViewGroup.LayoutParams lp = v.getLayoutParams();
+1750:         if (lp == null) return;
+1751:         lp.width = Math.max(0, Math.round(total * ratio));
+1752:         v.setLayoutParams(lp);
+1753:     }
+1754: 
+1755:     /**
+1756:      * 敌人攻击表现：后撤蓄力 → 前冲 → 命中反馈 → 回位。
+1757:      *
+1758:      * 用 View 的 translationX/scaleX/scaleY，不需要 Canvas 重绘循环，
+1759:      * 也不用引入动画库 —— 这套属性从 API 11 就有。
+1760:      * 全程 420ms，命中点在第 190ms。
+1761:      */
+1762:     private void enemyStrike(final Runnable onHit) {
+1763:         if (sprite == null) { if (onHit != null) onHit.run(); return; }
+1764: 
+1765:         float back = -dp(16);    // 后撤（向右，因为敌人在中上）
+1766:         float hit  = dp(46);     // 前冲
+1767: 
+1768:         // ① 蓄力后撤 0~110ms
+1769:         sprite.animate().translationX(back).scaleX(1.10f).scaleY(0.92f)
+1770:                 .setDuration(110).withEndAction(new Runnable() {
+1771:             @Override public void run() {
+1772:                 // ② 前冲 110~190ms
+1773:                 sprite.animate().translationX(hit).scaleX(1.18f).scaleY(0.86f)
+1774:                         .setDuration(80).withEndAction(new Runnable() {
+1775:                     @Override public void run() {
+1776:                         // ③ 命中：扣血已由引擎完成，这里只负责"演"
+1777:                         if (onHit != null) onHit.run();
+1778:                         // ④ 回位 190~420ms
+1779:                         sprite.animate().translationX(0f).scaleX(1f).scaleY(1f)
+1780:                                 .setDuration(230).start();
+1781:                     }
+1782:                 }).start();
+1783:             }
+1784:         }).start();
+1785: 
+1786:         // 精灵动作同步：攻击帧
+1787:         sprite.play("attack");
+1788:     }
+1789: 
+1790:     /**
+1791:      * 玩家受击的完整表现：闪红 + 抖动 + 残影 + 飘字。
+1792:      * 所有子效果都是独立的 View 属性，互不阻塞。
+1793:      */
+1794:     private void playerHurtFx(int dmg) {
+1795:         if (dmg <= 0) return;
+1796: 
+1797:         // ① 屏幕闪红：淡入 60ms，淡出 260ms
+1798:         if (flashView != null && flashView.getParent() != null) {
+1799:             flashView.setVisibility(VISIBLE);
+1800:             flashView.setAlpha(0f);
+1801:             flashView.animate().alpha(0.32f).setDuration(60)
+1802:                     .withEndAction(new Runnable() {
+1803:                 @Override public void run() {
+1804:                     flashView.animate().alpha(0f).setDuration(260)
+1805:                             .withEndAction(new Runnable() {
+1806:                         @Override public void run() {
+1807:                             flashView.setVisibility(GONE);
+1808:                         }
+1809:                     }).start();
+1810:                 }
+1811:             }).start();
+1812:         }
+1813: 
+1814:         // ② 血条抖动（左右各 6dp，衰减）
+1815:         shakeRow();
+1816: 
+1817:         // ③ 残影从当前值开始追赶真实血量
+1818:         if (battle != null) {
+1819:             int max = Math.max(1, battle.playerMaxHp);
+1820:             hpTrail = Math.max(hpTrail, (battle.playerHp + dmg) / (float) max);
+1821:             hpTrailStart = android.os.SystemClock.uptimeMillis() + 220;  // 停 220ms 再追
+1822:         }
+1823:         startFx();
+1824: 
+1825:         // ④ 伤害飘字
+1826:         floatDamage(dmg);
+1827:     }
+1828: 
+1829:     /** 血条容器左右抖动，衰减到 0。 */
+1830:     private void shakeRow() {
+1831:         if (midRow == null) return;
+1832:         final float[] seq = { -6f, 6f, -5f, 5f, -3f, 3f, -1.5f, 1.5f, 0f };
+1833:         for (int i = 0; i < seq.length; i++) {
+1834:             final float dx = dp(seq[i]);
+1835:             midRow.postDelayed(new Runnable() {
+1836:                 @Override public void run() { midRow.setTranslationX(dx); }
+1837:             }, i * 32L);
+1838:         }
+1839:     }
+1840: 
+1841:     /** 伤害数字从血条处飘起并淡出。 */
+1842:     private void floatDamage(int dmg) {
+1843:         if (midRow == null || midRow.getParent() == null) return;
+1844:         final TextView ft = tv("-" + dmg, 22, C_RED);
+1845:         ft.setTypeface(Typeface.DEFAULT_BOLD);
+1846:         ft.setAlpha(1f);
+1847:         midRow.post(new Runnable() {
+1848:             @Override public void run() {
+1849:                 try {
+1850:                     ((ViewGroup) midRow.getParent()).addView(ft,
+1851:                             new LinearLayout.LayoutParams(
+1852:                                     ViewGroup.LayoutParams.WRAP_CONTENT,
+1853:                                     ViewGroup.LayoutParams.WRAP_CONTENT));
+1854:                 } catch (Throwable ignored) { return; }
+1855:                 ft.animate().translationY(-dp(40)).alpha(0f)
+1856:                         .setDuration(760).withEndAction(new Runnable() {
+1857:                     @Override public void run() {
+1858:                         ViewGroup p = (ViewGroup) ft.getParent();
+1859:                         if (p != null) p.removeView(ft);
+1860:                     }
+1861:                 }).start();
+1862:             }
+1863:         });
+1864:     }
+1865: 
+1866:     private void startFx() {
+1867:         if (fxRunning) return;
+1868:         fxRunning = true;
+1869:         postDelayed(fxTick, 16L);
+1870:     }
+1871: 
+1872:     /** 残影追赶：每帧把 hpTrail 往真实血量收，收齐就停。 */
+1873:     private void stepFx() {
+1874:         if (battle == null) { fxRunning = false; return; }
+1875:         int max = Math.max(1, battle.playerMaxHp);
+1876:         float cur = Math.max(0f, Math.min(1f, battle.playerHp / (float) max));
+1877:         boolean busy = false;
+1878: 
+1879:         if (hpTrail > cur + 0.001f
+1880:                 && android.os.SystemClock.uptimeMillis() >= hpTrailStart) {
+1881:             hpTrail -= Math.max(0.004f, (hpTrail - cur) * 0.16f);
+1882:             if (hpTrail < cur) hpTrail = cur;
+1883:             busy = true;
+1884:         } else if (hpTrail < cur) {
+1885:             hpTrail = cur;   // 回血（篝火/道具）直接跟上，不做残影
+1886:         }
+1887: 
+1888:         setBarW(hpFillBar, hpBarMaxW, cur);
+1889:         setBarW(hpTrailBar, hpBarMaxW, Math.max(cur, hpTrail));
+1890: 
+1891:         if (busy) postDelayed(fxTick, 16L);
+1892:         else fxRunning = false;
+1893:     }
+1894: 
+1895:     /**
+1896:      * 共鸣槽。
+1897:      *
+1898:      * 玩家需要知道"槽里现在是什么词、打它的同义词就能暴击"，
+1899:      * 否则跨回合机制完全不可见（这是原版连锁最大的问题：触发了才显示，
+1900:      * 玩家不知道还差什么）。
+1901:      * 槽里只显示英文 —— 显示中文就等于把答案印出来了。
+1902:      */
+1903:     private void renderResonance() {
+1904:         if (tvResonance == null) return;
+1905:         if (battle == null) { tvResonance.setVisibility(GONE); return; }
+1906: 
+1907:         // 三连打断的进度优先显示：它是「这回合还能不能免伤」的直接答案，
+1908:         // 比共鸣提示更影响当下的决策。打断用掉之后才轮到共鸣条。
+1909:         if (!battle.interruptedThisTurn && battle.streak > 0) {
+1910:             tvResonance.setVisibility(VISIBLE);
+1911:             tvResonance.setText("🛡 连对 " + battle.streak + " / " + battle.interruptNeed
+1912:                     + "　—　再连对 " + Math.max(0, battle.interruptNeed - battle.streak)
+1913:                     + " 次可截下敌人这次攻击");
+1914:             return;
+1915:         }
+1916: 
+1917:         if (battle.resonance == null) {
+1918:             tvResonance.setVisibility(GONE);
+1919:             return;
+1920:         }
+1921:         tvResonance.setVisibility(VISIBLE);
+1922:         tvResonance.setText("⚡ 共鸣待发：" + battle.resonance.en
+1923:                 + "　—　打出与它同义的词可暴击 ×" + (int) Math.round(battle.resonanceMul * 100) / 100.0);
+1924:     }
+1925: 
+1926:     /**
+1927:      * 视图离开窗口时必须停掉自循环。
+1928:      *
+1929:      * stepFx() 会一直 postDelayed 自己直到血条追上真实血量，
+1930:      * 如果玩家在中途退出战斗，这个 Runnable 会继续持有 View 引用 ——
+1931:      * 典型的动画泄漏。这里统一收尾。
+1932:      */
+1933:     @Override
+1934:     protected void onDetachedFromWindow() {
+1935:         removeCallbacks(fxTick);
+1936:         fxRunning = false;
+1937:         if (sprite != null) {
+1938:             sprite.animate().cancel();
+1939:             sprite.setTranslationX(0f);
+1940:             sprite.setScaleX(1f);
+1941:             sprite.setScaleY(1f);
+1942:         }
+1943:         if (midRow != null) midRow.setTranslationX(0f);
+1944:         super.onDetachedFromWindow();
+1945:     }
+1946: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GCard.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import java.util.ArrayList;
+   4: import java.util.Collections;
+   5: import java.util.List;
+   6: 
+   7: /**
+   8:  * 一张牌 = 一个词条。
+   9:  *
+  10:  * 设计要点：卡面本身不区分「同义牌」和「普通牌」，同义关系由 GameData
+  11:  * 在出牌时实时查表判断 —— 因为同一个词可能属于多个同义组（regulate、rough
+  12:  * 各属 4 组），提前写死成字段一定会漏。
+  13:  */
+  14: public class GCard {
+  15:     public static final int KIND_WORD   = 0;   // 普通词牌
+  16:     public static final int KIND_ADVERB = 1;   // 副词机制牌
+  17:     public static final int KIND_SPECIAL= 2;   // 精英掉落特殊词
+  18: 
+  19:     public final String id;        // 唯一标识（词形 / 副词 id）
+  20:     public final String en;        // 英文面
+  21:     public final String cn;        // 中文面（首个义项，卡面上显示的就是这个）
+  22:     public final String pos;       // 词性
+  23:     public final int kind;
+  24:     public final String desc;      // 副词/特殊词的机制说明
+  25:     /** 例句与译文。答错时在提示里给出，让错误当场变成一次学习。 */
+  26:     public final String ex, exCn;
+  27: 
+  28:     /**
+  29:      * 例句整句的中文译文（只取第一句，与 ex 一一对应）。
+  30:      *
+  31:      * 为什么要单独切一份：words.json 的 exCn 是「多句挤在一个字段里」的
+  32:      * 拼接串（实测 a 的 exCn 是「我需要一个解释。 I have a dog. 我有一只狗。」），
+  33:      * 而 ex 同样是拼接的。直接在界面里拼整串去念，怪物会一口气说完三句
+  34:      * 毫不相干的翻译，既不像台词，也不对应题面那一句。
+  35:      *
+  36:      * exCnFirst 只在构造时算一次，之后只读；空串表示数据里没有译文。
+  37:      */
+  38:     public final String exCnFirst;
+  39: 
+  40:     /**
+  41:      * 取「第一句」：遇到中英文句末标点就截断，再切掉尾部残留的英文片段。
+  42:      *
+  43:      * 两步的原因是数据实测：
+  44:      *   · 965 条有译文的词里，条条可能挤着 2~3 句（「我需要一个解释。 I have a dog. …」），
+  45:      *     不切第一句，怪物会把三句不相干的翻译一口气念完；
+  46:      *   · 光切句还不够 —— 有些条目的中英混排不在句号处分开，而是在
+  47:      *     **中文逗号**后直接接半句英文（实测 chain：「生活是一串串的快乐时光， He started a fast food chain」）。
+  48:      *     这种行按句号切完，尾部仍挂着一截英文，念出来像机器在报错。
+  49:      *     所以第二步专门砍掉「尾巴上那段连续的英文」。
+  50:      *
+  51:      * 注意不能反过来「有英文就整句丢掉」：proof 的译文是
+  52:      * 「…科学证据证明iPad 对教育有好处」，丢掉就把整句学习价值一起扔了。
+  53:      * 只砍**尾部**连续英文串，句中的专有名词（iPad）原样保留。
+  54:      */
+  55:     private static String firstSentence(String s) {
+  56:         if (s == null) return "";
+  57:         String t = s.trim();
+  58:         if (t.isEmpty()) return "";
+  59: 
+  60:         // ① 切第一句
+  61:         String head = t;
+  62:         for (int i = 0; i < t.length(); i++) {
+  63:             char ch = t.charAt(i);
+  64:             if (ch == '.' || ch == '!' || ch == '?' || ch == '\u3002'
+  65:                     || ch == '\uFF01' || ch == '\uFF1F' || ch == '\uFF0E') {
+  66:                 String cut = t.substring(0, i).trim();
+  67:                 // 纯英文句号可能是缩写/小数点，前面没内容就别乱切
+  68:                 if (cut.isEmpty()) continue;
+  69:                 head = cut;
+  70:                 break;
+  71:             }
+  72:         }
+  73: 
+  74:         // ② 砍掉尾部残留的英文串。
+  75:         //    从末尾往前扫，遇到中文就停；扫到的英文（含空格、撇号、连字符）
+  76:         //    整段切掉，再把尾巴上的中文标点和空格收拾干净。
+  77:         int end = head.length();
+  78:         int i = end;
+  79:         while (i > 0) {
+  80:             char ch = head.charAt(i - 1);
+  81:             boolean eng = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+  82:                     || ch == ' ' || ch == '\'' || ch == '-' || ch == '\u2019';
+  83:             if (!eng) break;
+  84:             i--;
+  85:         }
+  86:         if (i < end) {
+  87:             // 只剩英文/空白 → 整句没有中文，说明数据不是译文，宁可返回空串
+  88:             String rest = head.substring(0, i).trim();
+  89:             // 尾部那截如果不含至少 2 个英文字母，就不是"英文串"，别误删（如结尾的 & 空格）
+  90:             int letters = 0;
+  91:             for (int k = i; k < end; k++) {
+  92:                 char ch = head.charAt(k);
+  93:                 if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) letters++;
+  94:             }
+  95:             if (letters >= 2) {
+  96:                 head = trimTailPunct(rest);
+  97:             }
+  98:         }
+  99:         // ③ 太短的不要。
+ 100:         //    实测 965 条译文里，47 条按上述规则切完只剩 1~5 个字，
+ 101:         //    而且都是残缺片段：「雅」「务」「上」「裤的」「的过去式是」
+ 102:         //    「算机的恐惧」。这类东西念出来比不念更难懂，等于用一句
+ 103:         //    噪音替换掉本来有用的单词义。所以不足 6 字直接判为无效，
+ 104:         //    由调用方退回单词义。
+ 105:         //    6~7 字是完好的短句（「他们必遭失败」「她生性很敏感」），保留。
+ 106:         String out = head.trim();
+ 107:         if (out.length() < 6) return "";
+ 108:         return out;
+ 109:     }
+ 110: 
+ 111:     /** 去掉尾部的中文标点与空白。 */
+ 112:     private static String trimTailPunct(String s) {
+ 113:         String t = s;
+ 114:         while (!t.isEmpty()) {
+ 115:             char ch = t.charAt(t.length() - 1);
+ 116:             if (ch == ' ' || ch == ',' || ch == '\uFF0C' || ch == '\u3001'
+ 117:                     || ch == ';' || ch == '\uFF1B' || ch == ':' || ch == '\uFF1A') {
+ 118:                 t = t.substring(0, t.length() - 1);
+ 119:             } else break;
+ 120:         }
+ 121:         return t;
+ 122:     }
+ 123: 
+ 124:     /**
+ 125:      * 全部义项，形如 {"n|危险", "v|使…危险"}。
+ 126:      *
+ 127:      * 只有 vocab.json 里 senses.size() >= 2 的词才会填这个（实测 324 / 1654）。
+ 128:      * 空列表 = 单义词，没有「僻义」，也就没有过载模式。
+ 129:      *
+ 130:      * 为什么存成 "pos|中文" 的扁平串而不是嵌套对象：这个类要能脱离 org.json
+ 131:      * 在纯 Java 测试里跑，而且卡面只需要「第几个义项的中文是什么」。
+ 132:      */
+ 133:     public final List<String> senses;
+ 134: 
+ 135:     public GCard(String id, String en, String cn, String pos, int kind, String desc) {
+ 136:         this(id, en, cn, pos, kind, desc, "", "", null);
+ 137:     }
+ 138: 
+ 139:     public GCard(String id, String en, String cn, String pos, int kind,
+ 140:                  String desc, String ex, String exCn) {
+ 141:         this(id, en, cn, pos, kind, desc, ex, exCn, null);
+ 142:     }
+ 143: 
+ 144:     public GCard(String id, String en, String cn, String pos, int kind,
+ 145:                  String desc, String ex, String exCn, List<String> senses) {
+ 146:         this.id = id; this.en = en; this.cn = cn;
+ 147:         this.pos = pos == null ? "" : pos;
+ 148:         this.kind = kind;
+ 149:         this.desc = desc == null ? "" : desc;
+ 150:         this.ex = ex == null ? "" : ex;
+ 151:         this.exCn = exCn == null ? "" : exCn;
+ 152:         this.exCnFirst = firstSentence(this.exCn);
+ 153:         this.senses = senses == null
+ 154:                 ? Collections.<String>emptyList()
+ 155:                 : Collections.unmodifiableList(new ArrayList<>(senses));
+ 156:     }
+ 157: 
+ 158:     public boolean isWord()   { return kind == KIND_WORD; }
+ 159:     public boolean isAdverb() { return kind == KIND_ADVERB; }
+ 160:     public boolean isSpecial(){ return kind == KIND_SPECIAL; }
+ 161: 
+ 162:     /** 连锁用的分组键：词性 + 中文义。空词性不算同类。 */
+ 163:     public String groupKey() {
+ 164:         if (pos.isEmpty() || cn.isEmpty()) return null;
+ 165:         return pos + "|" + cn;
+ 166:     }
+ 167: 
+ 168:     // ── 熟词僻义（过载模式）──────────────────────────────
+ 169: 
+ 170:     /** 义项数量。1 = 单义，够不上过载。 */
+ 171:     public int senseCount() {
+ 172:         return senses.size();
+ 173:     }
+ 174: 
+ 175:     /** 是否可以过载：至少两个义项，且第一个义项之外还有实义。 */
+ 176:     public boolean canOverload() {
+ 177:         if (senses.size() < 2) return false;
+ 178:         for (int i = 1; i < senses.size(); i++) {
+ 179:             if (senseText(i).length() > 0) return true;
+ 180:         }
+ 181:         return false;
+ 182:     }
+ 183: 
+ 184:     /**
+ 185:      * 取第 i 个义项的「中文部分」。i 越界返回空串。
+ 186:      *
+ 187:      * 存的格式是 "pos|中文"，这里切开后半段。历史数据里没有竖线时
+ 188:      * 整串当中文用 —— 宁可显示得糙一点，也不能因为格式不一致就抛异常。
+ 189:      */
+ 190:     public String senseText(int i) {
+ 191:         if (i < 0 || i >= senses.size()) return "";
+ 192:         String s = senses.get(i);
+ 193:         int bar = s.indexOf('|');
+ 194:         return bar < 0 ? s.trim() : s.substring(bar + 1).trim();
+ 195:     }
+ 196: 
+ 197:     /** 取第 i 个义项的词性。没写就返回空串。 */
+ 198:     public String sensePos(int i) {
+ 199:         if (i < 0 || i >= senses.size()) return "";
+ 200:         String s = senses.get(i);
+ 201:         int bar = s.indexOf('|');
+ 202:         return bar < 0 ? "" : s.substring(0, bar).trim();
+ 203:     }
+ 204: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GistSync.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.os.Handler;
+   4: import android.os.Looper;
+   5: 
+   6: import org.json.JSONObject;
+   7: 
+   8: import java.io.ByteArrayOutputStream;
+   9: import java.io.IOException;
+  10: import java.io.InputStream;
+  11: import java.io.OutputStream;
+  12: import java.net.HttpURLConnection;
+  13: import java.net.SocketTimeoutException;
+  14: import java.net.URL;
+  15: import java.net.UnknownHostException;
+  16: import java.util.Iterator;
+  17: 
+  18: /**
+  19:  * 云同步后端 —— 用 GitHub Gist 当免费的进度仓库，不需要自建服务器。
+  20:  *
+  21:  * 为什么选 Gist：
+  22:  *   · 没有服务器要维护、没有数据库要备份，用户自己的 GitHub 账号就是账号体系
+  23:  *   · 内容存成一个文件 zsb-progress.json，手机上看得到、出问题能手改
+  24:  *   · 私有 gist（public:false）只有 token 持有者能读
+  25:  *
+  26:  * 依赖限制：只用 Android 自带 API + java.net，不引任何第三方网络库。
+  27:  *
+  28:  * 线程模型（重要）：
+  29:  *   · push0/pull0 内部是**阻塞**的，绝不能在主线程调
+  30:  *   · 对外主要用 pushAsync/pullAsync，网络在后台线程跑，
+  31:  *     回调统一 post 回主线程，UI 里可以放心直接改控件
+  32:  *   · push/pull 这两个同步版本留给测试和特殊场景，失败返回 null，不抛异常
+  33:  *
+  34:  * 错误处理原则：不让任何异常漏到调用方。HTTP 状态码翻译成中文人话，
+  35:  * token 本身绝不进异常消息、绝不打日志（只出现在请求头里）。
+  36:  */
+  37: public class GistSync {
+  38: 
+  39:     /** 同步结果回调。实现方保证在主线程被调用。 */
+  40:     public interface Cb {
+  41:         void ok(String v);
+  42:         void fail(String msg);
+  43:     }
+  44: 
+  45:     private static final String API = "https://api.github.com/gists";
+  46:     private static final String FILE = "zsb-progress.json";
+  47:     /** 连接/读取超时，毫秒。手机弱网下 15 秒比 GitHub 默认短，够用且不卡死。 */
+  48:     private static final int TIMEOUT = 15000;
+  49:     private static final String DESC = "zsb-plan 学习进度（App 自动同步）";
+  50: 
+  51:     private final String token;
+  52:     private String gistId;
+  53:     private String lastError;
+  54: 
+  55:     private final Handler ui = new Handler(Looper.getMainLooper());
+  56: 
+  57:     public GistSync(String token, String gistId) {
+  58:         this.token = token == null ? "" : token.trim();
+  59:         this.gistId = gistId == null ? "" : gistId.trim();
+  60:     }
+  61: 
+  62:     public String getGistId() {
+  63:         return gistId;
+  64:     }
+  65: 
+  66:     /** 上一次同步失败的说明，成功时为 null。调试用，不用于 UI。 */
+  67:     public String getLastError() {
+  68:         return lastError;
+  69:     }
+  70: 
+  71:     public boolean hasGist() {
+  72:         return gistId != null && !gistId.isEmpty();
+  73:     }
+  74: 
+  75:     // ── 对外：异步 ────────────────────────────────────────
+  76:     /** 后台创建/更新 gist，成功后回调新的（或原有的）gistId。 */
+  77:     public void pushAsync(final String localJson, final Cb cb) {
+  78:         final Cb c = cb == null ? new Cb() {
+  79:             @Override public void ok(String v) { }
+  80:             @Override public void fail(String msg) { }
+  81:         } : cb;
+  82:         new Thread(new Runnable() {
+  83:             @Override public void run() {
+  84:                 String id = null;
+  85:                 String err = null;
+  86:                 try {
+  87:                     id = push0(localJson);
+  88:                 } catch (SyncErr e) {
+  89:                     err = e.getMessage();
+  90:                 } catch (Throwable t) {
+  91:                     err = "同步出错：" + brief(t);
+  92:                 }
+  93:                 final String fid = id;
+  94:                 final String ferr = err;
+  95:                 ui.post(new Runnable() {
+  96:                     @Override public void run() {
+  97:                         if (fid != null && !fid.isEmpty()) c.ok(fid);
+  98:                         else c.fail(ferr == null ? "同步失败" : ferr);
+  99:                     }
+ 100:                 });
+ 101:             }
+ 102:         }, "zsb-gist-push").start();
+ 103:     }
+ 104: 
+ 105:     /** 后台读取云端正文。没有 gist / 没有该文件时 ok(null)。 */
+ 106:     public void pullAsync(final Cb cb) {
+ 107:         final Cb c = cb == null ? new Cb() {
+ 108:             @Override public void ok(String v) { }
+ 109:             @Override public void fail(String msg) { }
+ 110:         } : cb;
+ 111:         new Thread(new Runnable() {
+ 112:             @Override public void run() {
+ 113:                 String body = null;
+ 114:                 String err = null;
+ 115:                 try {
+ 116:                     body = pull0();
+ 117:                 } catch (SyncErr e) {
+ 118:                     err = e.getMessage();
+ 119:                 } catch (Throwable t) {
+ 120:                     err = "读取出错：" + brief(t);
+ 121:                 }
+ 122:                 final String fbody = body;
+ 123:                 final String ferr = err;
+ 124:                 ui.post(new Runnable() {
+ 125:                     @Override public void run() {
+ 126:                         if (ferr == null) c.ok(fbody);
+ 127:                         else c.fail(ferr);
+ 128:                     }
+ 129:                 });
+ 130:             }
+ 131:         }, "zsb-gist-pull").start();
+ 132:     }
+ 133: 
+ 134:     // ── 对外：同步（阻塞，勿在主线程调）────────────────────
+ 135:     /**
+ 136:      * 创建或更新 gist，返回 gistId；失败返回 null（原因见 getLastError）。
+ 137:      * gistId 为空时走 POST 新建，非空时走 PUT 覆盖同名文件。
+ 138:      */
+ 139:     public String push(String localJson) {
+ 140:         lastError = null;
+ 141:         try {
+ 142:             return push0(localJson);
+ 143:         } catch (SyncErr e) {
+ 144:             lastError = e.getMessage();
+ 145:             return null;
+ 146:         } catch (Throwable t) {
+ 147:             lastError = "同步出错：" + brief(t);
+ 148:             return null;
+ 149:         }
+ 150:     }
+ 151: 
+ 152:     /** 拉取 zsb-progress.json 正文；没有 gist 或文件不存在返回 null。 */
+ 153:     public String pull() {
+ 154:         lastError = null;
+ 155:         try {
+ 156:             return pull0();
+ 157:         } catch (SyncErr e) {
+ 158:             lastError = e.getMessage();
+ 159:             return null;
+ 160:         } catch (Throwable t) {
+ 161:             lastError = "读取出错：" + brief(t);
+ 162:             return null;
+ 163:         }
+ 164:     }
+ 165: 
+ 166:     // ── 内部实现 ──────────────────────────────────────────
+ 167:     /** 内部错误载体：message 已经是能直接显示给用户的中文。 */
+ 168:     private static class SyncErr extends Exception {
+ 169:         private static final long serialVersionUID = 1L;
+ 170: 
+ 171:         SyncErr(String m) {
+ 172:             super(m);
+ 173:         }
+ 174:     }
+ 175: 
+ 176:     private String push0(String localJson) throws SyncErr {
+ 177:         if (token.isEmpty()) throw new SyncErr("还没填 GitHub Token");
+ 178:         String content = (localJson == null || localJson.trim().isEmpty()) ? "{}" : localJson;
+ 179: 
+ 180:         JSONObject fileObj = new JSONObject();
+ 181:         JSONObject wrap = new JSONObject();
+ 182:         try {
+ 183:             fileObj.put("content", content);
+ 184:             wrap.put(FILE, fileObj);
+ 185:         } catch (Throwable t) {
+ 186:             throw new SyncErr("进度内容无法编码成 JSON");
+ 187:         }
+ 188: 
+ 189:         // 已有 gistId → 只覆盖文件内容；PUT 404 说明 gist 被删了，退化回新建
+ 190:         if (hasGist()) {
+ 191:             JSONObject upd = new JSONObject();
+ 192:             try {
+ 193:                 upd.put("files", wrap);
+ 194:             } catch (Throwable t) {
+ 195:                 throw new SyncErr("请求体构造失败");
+ 196:             }
+ 197:             try {
+ 198:                 Resp r = send("PUT", API + "/" + gistId, upd.toString());
+ 199:                 if (r.code == 200 || r.code == 201) {
+ 200:                     String id = idOf(r.body);
+ 201:                     if (id != null && !id.isEmpty()) gistId = id;
+ 202:                     return gistId;
+ 203:                 }
+ 204:                 if (r.code != 404) throw new SyncErr(httpMsg(r.code, r.body));
+ 205:                 // 404：gist 不存在（被删/换了账号）→ 往下走新建
+ 206:             } catch (SyncErr e) {
+ 207:                 throw e;
+ 208:             } catch (Throwable t) {
+ 209:                 throw new SyncErr(netMsg(t));
+ 210:             }
+ 211:         }
+ 212: 
+ 213:         JSONObject create = new JSONObject();
+ 214:         try {
+ 215:             create.put("description", DESC);
+ 216:             create.put("public", false);
+ 217:             create.put("files", wrap);
+ 218:         } catch (Throwable t) {
+ 219:             throw new SyncErr("请求体构造失败");
+ 220:         }
+ 221:         try {
+ 222:             Resp r = send("POST", API, create.toString());
+ 223:             if (r.code == 201 || r.code == 200) {
+ 224:                 String id = idOf(r.body);
+ 225:                 if (id == null || id.isEmpty()) throw new SyncErr("云端没返回 gist id");
+ 226:                 gistId = id;
+ 227:                 return gistId;
+ 228:             }
+ 229:             throw new SyncErr(httpMsg(r.code, r.body));
+ 230:         } catch (SyncErr e) {
+ 231:             throw e;
+ 232:         } catch (Throwable t) {
+ 233:             throw new SyncErr(netMsg(t));
+ 234:         }
+ 235:     }
+ 236: 
+ 237:     private String pull0() throws SyncErr {
+ 238:         if (token.isEmpty()) throw new SyncErr("还没填 GitHub Token");
+ 239:         if (!hasGist()) return null;   // 没 id 就是没东西可拉，不算错误
+ 240: 
+ 241:         Resp r;
+ 242:         try {
+ 243:             r = send("GET", API + "/" + gistId, null);
+ 244:         } catch (Throwable t) {
+ 245:             throw new SyncErr(netMsg(t));
+ 246:         }
+ 247:         if (r.code == 404) return null;       // gist 不存在 → 当没有
+ 248:         if (r.code != 200) throw new SyncErr(httpMsg(r.code, r.body));
+ 249: 
+ 250:         try {
+ 251:             JSONObject root = new JSONObject(r.body);
+ 252:             JSONObject files = root.optJSONObject("files");
+ 253:             if (files == null) return null;
+ 254:             JSONObject f = files.optJSONObject(FILE);
+ 255:             if (f == null) return null;
+ 256:             // GitHub 超过 1MB 的文件不给 content，要另取 raw_url —— 进度不会那么大
+ 257:             if (!f.has("content") || f.isNull("content")) return null;
+ 258:             return f.optString("content", null);
+ 259:         } catch (Throwable t) {
+ 260:             throw new SyncErr("云端返回内容不是合法 JSON");
+ 261:         }
+ 262:     }
+ 263: 
+ 264:     // ── HTTP 底座 ─────────────────────────────────────────
+ 265:     private static class Resp {
+ 266:         int code;
+ 267:         String body = "";
+ 268:     }
+ 269: 
+ 270:     /**
+ 271:      * 发一次请求并把响应体读全。
+ 272:      * 网络层异常不在这里翻译，统一抛给上层用 netMsg() 转中文。
+ 273:      */
+ 274:     private Resp send(String method, String url, String body) throws IOException {
+ 275:         HttpURLConnection c = null;
+ 276:         try {
+ 277:             c = (HttpURLConnection) new URL(url).openConnection();
+ 278:             c.setRequestMethod(method);
+ 279:             c.setConnectTimeout(TIMEOUT);
+ 280:             c.setReadTimeout(TIMEOUT);
+ 281:             c.setRequestProperty("Authorization", "Bearer " + token);
+ 282:             c.setRequestProperty("Accept", "application/vnd.github+json");
+ 283:             c.setRequestProperty("User-Agent", "zsb-app");
+ 284:             c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+ 285:             c.setUseCaches(false);
+ 286: 
+ 287:             if (body != null) {
+ 288:                 c.setDoOutput(true);
+ 289:                 c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+ 290:                 OutputStream os = c.getOutputStream();
+ 291:                 try {
+ 292:                     os.write(body.getBytes("UTF-8"));
+ 293:                     os.flush();
+ 294:                 } finally {
+ 295:                     os.close();
+ 296:                 }
+ 297:             }
+ 298: 
+ 299:             Resp r = new Resp();
+ 300:             r.code = c.getResponseCode();
+ 301:             InputStream in = null;
+ 302:             try {
+ 303:                 if (r.code >= 200 && r.code < 300) in = c.getInputStream();
+ 304:                 else in = c.getErrorStream();
+ 305:                 r.body = in == null ? "" : readAll(in);
+ 306:             } catch (IOException ignored) {
+ 307:                 // 错误响应偶发没有 body，保持空串即可
+ 308:             } finally {
+ 309:                 if (in != null) try { in.close(); } catch (IOException ignored) { }
+ 310:             }
+ 311:             return r;
+ 312:         } finally {
+ 313:             if (c != null) c.disconnect();
+ 314:         }
+ 315:     }
+ 316: 
+ 317:     private static String readAll(InputStream in) throws IOException {
+ 318:         ByteArrayOutputStream bo = new ByteArrayOutputStream();
+ 319:         byte[] buf = new byte[8192];
+ 320:         int n;
+ 321:         while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+ 322:         return new String(bo.toByteArray(), "UTF-8");
+ 323:     }
+ 324: 
+ 325:     /** 从响应里取 gist id。取不到返回 null。 */
+ 326:     private static String idOf(String body) {
+ 327:         if (body == null || body.isEmpty()) return null;
+ 328:         try {
+ 329:             JSONObject o = new JSONObject(body);
+ 330:             if (!o.has("id") || o.isNull("id")) return null;
+ 331:             return o.optString("id", null);
+ 332:         } catch (Throwable t) {
+ 333:             return null;
+ 334:         }
+ 335:     }
+ 336: 
+ 337:     /** 把 HTTP 状态码翻成人话，带上 GitHub 自己的 message 便于定位。 */
+ 338:     static String httpMsg(int code, String body) {
+ 339:         String detail = "";
+ 340:         if (body != null && !body.isEmpty()) {
+ 341:             try {
+ 342:                 JSONObject o = new JSONObject(body);
+ 343:                 if (o.has("message") && !o.isNull("message")) detail = o.optString("message", "");
+ 344:             } catch (Throwable ignored) {
+ 345:                 // 不是 JSON（多半是网关返回的 HTML），忽略
+ 346:             }
+ 347:             if (detail.length() > 120) detail = detail.substring(0, 120) + "…";
+ 348:         }
+ 349: 
+ 350:         String base;
+ 351:         if (code == 401) {
+ 352:             base = "Token 无效或已过期（401），去 GitHub 设置里重新生成一个带 gist 权限的 token";
+ 353:         } else if (code == 403) {
+ 354:             base = "GitHub 拒绝了请求（403）：token 缺 gist 权限，或请求太频繁被限流，稍再试";
+ 355:         } else if (code == 404) {
+ 356:             base = "找不到这个 Gist（404），检查 Gist ID 是否贴错";
+ 357:         } else if (code == 422) {
+ 358:             base = "云端不接受这次提交（422），进度内容可能过大或格式不对";
+ 359:         } else if (code >= 500) {
+ 360:             base = "GitHub 服务器出错（" + code + "），过一会儿再试";
+ 361:         } else {
+ 362:             base = "请求失败（HTTP " + code + "）";
+ 363:         }
+ 364:         return detail.isEmpty() ? base : base + "；" + detail;
+ 365:     }
+ 366: 
+ 367:     /** 网络层异常 → 中文。绝不把 token 拼进消息。 */
+ 368:     private static String netMsg(Throwable t) {
+ 369:         if (t instanceof SocketTimeoutException) {
+ 370:             return "连接超时（15 秒），网络不稳或 GitHub 暂时连不上，换个网络再试";
+ 371:         }
+ 372:         if (t instanceof UnknownHostException) {
+ 373:             return "域名解析失败，检查手机是否联网";
+ 374:         }
+ 375:         if (t instanceof javax.net.ssl.SSLException) {
+ 376:             return "HTTPS 连接失败（SSL），可能是系统时间不对或网络被劫持";
+ 377:         }
+ 378:         if (t instanceof IOException) {
+ 379:             String m = t.getMessage();
+ 380:             return "网络请求失败" + (m == null || m.isEmpty() ? "" : "：" + brief(t));
+ 381:         }
+ 382:         return "请求异常：" + brief(t);
+ 383:     }
+ 384: 
+ 385:     /** 异常摘要，只用类名+短消息，避免把 URL 里的查询串或 token 带出去。 */
+ 386:     private static String brief(Throwable t) {
+ 387:         if (t == null) return "未知错误";
+ 388:         String m = t.getMessage();
+ 389:         if (m == null) m = "";
+ 390:         if (m.length() > 80) m = m.substring(0, 80) + "…";
+ 391:         return t.getClass().getSimpleName() + (m.isEmpty() ? "" : "(" + m + ")");
+ 392:     }
+ 393: 
+ 394:     // ══════════════════════════════════════════════════════
+ 395:     //  合并策略
+ 396:     // ══════════════════════════════════════════════════════
+ 397:     /**
+ 398:      * 合并两端进度 JSON，返回合并后的 JSON 字符串。永不抛异常。
+ 399:      *
+ 400:      * 规则（按「宁可多记完成，不可丢进度」的原则）：
+ 401:      *   ① done / completed / star —— 勾选类，**并集**。任一端标记完成即视为完成。
+ 402:      *      这是整个策略的核心：设备 A 勾了、设备 B 没勾，合并后是勾上的。
+ 403:      *   ② hard / timing —— 数值类，**取较大值**。错题次数 n 取大；
+ 404:      *      计时 ms 也取大（严格说累计该相加，但双端都在累加同一段时间，
+ 405:      *      相加会把时长翻倍，取大更接近真实投入）。
+ 406:      *   ③ notes —— 文本类，哪端非空用哪端；两端都有内容且不同，**用本地**
+ 407:      *      （本地是用户刚敲的，远端多半是旧稿）。这条是唯一偏向本地的规则。
+ 408:      *   ④ wrong（错题本，若有）—— 按题目 id 对齐：n 取大、ts 取新、
+ 409:      *      学科/题干哪端非空用哪端。
+ 410:      *   ⑤ 其它未知字段 —— 本地有就留本地，本地没有再取远端，不丢字段。
+ 411:      *   ⑥ updatedAt 统一改写为合并时刻。
+ 412:      *
+ 413:      * 输入既可以是 StateLogic.exportJson() 那种 {_app,_version,state:{...}} 外层包装，
+ 414:      * 也可以是 StateLogic.serialize() 那种裸状态对象；两端形态不一致也能合。
+ 415:      * 输出形态跟随输入：任一端有包装就输出带包装的结构（跟 exportJson 一致）。
+ 416:      * 任一端为 null/空/坏 JSON 时，等价于只取另一端，不会返回 null。
+ 417:      */
+ 418:     public static String merge(String localJson, String remoteJson) {
+ 419:         JSONObject lo = parseObj(localJson);
+ 420:         JSONObject ro = parseObj(remoteJson);
+ 421: 
+ 422:         JSONObject ls = stateOf(lo);
+ 423:         JSONObject rs = stateOf(ro);
+ 424:         boolean wrapped = (lo != null && lo.optJSONObject("state") != null)
+ 425:                 || (ro != null && ro.optJSONObject("state") != null);
+ 426: 
+ 427:         JSONObject out;
+ 428:         if (ls == null && rs == null) {
+ 429:             out = new JSONObject();
+ 430:         } else if (ls == null) {
+ 431:             out = copy(rs);
+ 432:         } else if (rs == null) {
+ 433:             out = copy(ls);
+ 434:         } else {
+ 435:             out = mergeState(ls, rs);
+ 436:         }
+ 437: 
+ 438:         try {
+ 439:             if (!wrapped) return out.toString();
+ 440:             JSONObject root = new JSONObject();
+ 441:             root.put("_app", "zsb-plan");
+ 442:             root.put("_version", 1);
+ 443:             root.put("_exportedAt", nowIso());
+ 444:             root.put("state", out);
+ 445:             return root.toString();
+ 446:         } catch (Throwable t) {
+ 447:             return out.toString();
+ 448:         }
+ 449:     }
+ 450: 
+ 451:     /** 合并两个裸状态对象。 */
+ 452:     private static JSONObject mergeState(JSONObject a, JSONObject b) {
+ 453:         JSONObject out = new JSONObject();
+ 454: 
+ 455:         // ① 勾选类：并集
+ 456:         unionBool(out, "done", a, b);
+ 457:         unionBool(out, "completed", a, b);
+ 458:         unionBool(out, "star", a, b);
+ 459: 
+ 460:         // ② 数值类：取大
+ 461:         maxNum(out, "hard", a, b);
+ 462:         maxNum(out, "timing", a, b);
+ 463: 
+ 464:         // ③ 文本类
+ 465:         mergeText(out, "notes", a, b);
+ 466: 
+ 467:         // ④ 错题本条目
+ 468:         mergeWrong(out, "wrong", a, b);
+ 469: 
+ 470:         // ⑤ 其余字段：本地优先，本地没有再取远端
+ 471:         copyRest(out, a, b);
+ 472:         copyRest(out, b, a);
+ 473: 
+ 474:         try {
+ 475:             out.put("updatedAt", nowIso());
+ 476:         } catch (Throwable ignored) {
+ 477:             // 放不进去就算了，不影响合并结果
+ 478:         }
+ 479:         return out;
+ 480:     }
+ 481: 
+ 482:     /** 并集：任一端为 true 就是 true。 */
+ 483:     private static void unionBool(JSONObject out, String field, JSONObject a, JSONObject b) {
+ 484:         JSONObject ja = sub(a, field);
+ 485:         JSONObject jb = sub(b, field);
+ 486:         if (ja == null && jb == null) return;
+ 487:         JSONObject r = new JSONObject();
+ 488:         try {
+ 489:             if (ja != null) {
+ 490:                 for (Iterator<String> it = ja.keys(); it.hasNext(); ) {
+ 491:                     String k = it.next();
+ 492:                     if (ja.optBoolean(k, false)) r.put(k, true);
+ 493:                 }
+ 494:             }
+ 495:             if (jb != null) {
+ 496:                 for (Iterator<String> it = jb.keys(); it.hasNext(); ) {
+ 497:                     String k = it.next();
+ 498:                     if (jb.optBoolean(k, false)) r.put(k, true);
+ 499:                 }
+ 500:             }
+ 501:             out.put(field, r);
+ 502:         } catch (Throwable ignored) {
+ 503:             // 单字段失败不影响其它字段
+ 504:         }
+ 505:     }
+ 506: 
+ 507:     /** 取较大值：两端都有取 max，只有一端有就保留它。 */
+ 508:     private static void maxNum(JSONObject out, String field, JSONObject a, JSONObject b) {
+ 509:         JSONObject ja = sub(a, field);
+ 510:         JSONObject jb = sub(b, field);
+ 511:         if (ja == null && jb == null) return;
+ 512:         JSONObject r = new JSONObject();
+ 513:         try {
+ 514:             if (ja != null) {
+ 515:                 for (Iterator<String> it = ja.keys(); it.hasNext(); ) {
+ 516:                     String k = it.next();
+ 517:                     r.put(k, ja.optLong(k, 0L));
+ 518:                 }
+ 519:             }
+ 520:             if (jb != null) {
+ 521:                 for (Iterator<String> it = jb.keys(); it.hasNext(); ) {
+ 522:                     String k = it.next();
+ 523:                     long v = jb.optLong(k, 0L);
+ 524:                     if (!r.has(k) || v > r.optLong(k, 0L)) r.put(k, v);
+ 525:                 }
+ 526:             }
+ 527:             out.put(field, r);
+ 528:         } catch (Throwable ignored) {
+ 529:         }
+ 530:     }
+ 531: 
+ 532:     /** 文本：非空优先，两端都非空且不同则本地（a）优先。 */
+ 533:     private static void mergeText(JSONObject out, String field, JSONObject a, JSONObject b) {
+ 534:         JSONObject ja = sub(a, field);
+ 535:         JSONObject jb = sub(b, field);
+ 536:         if (ja == null && jb == null) return;
+ 537:         JSONObject r = new JSONObject();
+ 538:         try {
+ 539:             if (jb != null) {
+ 540:                 for (Iterator<String> it = jb.keys(); it.hasNext(); ) {
+ 541:                     String k = it.next();
+ 542:                     String v = strOf(jb, k);
+ 543:                     if (v != null && !v.isEmpty()) r.put(k, v);
+ 544:                 }
+ 545:             }
+ 546:             if (ja != null) {
+ 547:                 for (Iterator<String> it = ja.keys(); it.hasNext(); ) {
+ 548:                     String k = it.next();
+ 549:                     String v = strOf(ja, k);
+ 550:                     if (v == null) continue;
+ 551:                     String old = strOf(r, k);
+ 552:                     // 本地非空就覆盖；本地为空但云端也为空，留本地那个空值
+ 553:                     if (!v.isEmpty() || old == null) r.put(k, v);
+ 554:                     else if (old.isEmpty()) r.put(k, v);
+ 555:                 }
+ 556:             }
+ 557:             out.put(field, r);
+ 558:         } catch (Throwable ignored) {
+ 559:         }
+ 560:     }
+ 561: 
+ 562:     /**
+ 563:      * 错题本：按题目 id 对齐。
+ 564:      * n 取大（做错次数不因换设备而变少），ts 取新（最近一次做错时间），
+ 565:      * 学科/题干非空优先本地。
+ 566:      */
+ 567:     private static void mergeWrong(JSONObject out, String field, JSONObject a, JSONObject b) {
+ 568:         JSONObject ja = sub(a, field);
+ 569:         JSONObject jb = sub(b, field);
+ 570:         if (ja == null && jb == null) return;
+ 571:         JSONObject r = new JSONObject();
+ 572:         try {
+ 573:             java.util.HashSet<String> keys = new java.util.HashSet<>();
+ 574:             if (ja != null) for (Iterator<String> it = ja.keys(); it.hasNext(); ) keys.add(it.next());
+ 575:             if (jb != null) for (Iterator<String> it = jb.keys(); it.hasNext(); ) keys.add(it.next());
+ 576: 
+ 577:             for (String k : keys) {
+ 578:                 JSONObject ea = ja == null ? null : ja.optJSONObject(k);
+ 579:                 JSONObject eb = jb == null ? null : jb.optJSONObject(k);
+ 580:                 if (ea == null && eb == null) continue;
+ 581:                 JSONObject e = new JSONObject();
+ 582:                 // n / ts 取大
+ 583:                 long n = Math.max(ea == null ? 0 : ea.optLong("n", 0), eb == null ? 0 : eb.optLong("n", 0));
+ 584:                 long ts = Math.max(ea == null ? 0 : ea.optLong("ts", 0), eb == null ? 0 : eb.optLong("ts", 0));
+ 585:                 e.put("n", n <= 0 ? 1 : n);
+ 586:                 e.put("ts", ts);
+ 587:                 // 其余文本字段：本地非空优先
+ 588:                 e.put("s", firstNonEmpty(strOf(ea, "s"), strOf(eb, "s")));
+ 589:                 e.put("q", firstNonEmpty(strOf(ea, "q"), strOf(eb, "q")));
+ 590:                 r.put(k, e);
+ 591:             }
+ 592:             out.put(field, r);
+ 593:         } catch (Throwable ignored) {
+ 594:         }
+ 595:     }
+ 596: 
+ 597:     /** 把 primary 里 out 还没有的字段搬过来（a 是 prefer 端）。 */
+ 598:     private static void copyRest(JSONObject out, JSONObject prefer, JSONObject other) {
+ 599:         if (prefer == null) return;
+ 600:         for (Iterator<String> it = prefer.keys(); it.hasNext(); ) {
+ 601:             String k = it.next();
+ 602:             if (isKnown(k)) continue;
+ 603:             if (out.has(k)) continue;
+ 604:             try {
+ 605:                 out.put(k, prefer.opt(k));
+ 606:             } catch (Throwable ignored) {
+ 607:             }
+ 608:         }
+ 609:         if (other == null) return;
+ 610:         for (Iterator<String> it = other.keys(); it.hasNext(); ) {
+ 611:             String k = it.next();
+ 612:             if (isKnown(k)) continue;
+ 613:             if (out.has(k)) continue;
+ 614:             try {
+ 615:                 out.put(k, other.opt(k));
+ 616:             } catch (Throwable ignored) {
+ 617:             }
+ 618:         }
+ 619:     }
+ 620: 
+ 621:     private static boolean isKnown(String k) {
+ 622:         return "done".equals(k) || "completed".equals(k) || "star".equals(k)
+ 623:                 || "notes".equals(k) || "hard".equals(k) || "timing".equals(k)
+ 624:                 || "wrong".equals(k) || "updatedAt".equals(k)
+ 625:                 || "_app".equals(k) || "_version".equals(k) || "_exportedAt".equals(k)
+ 626:                 || "state".equals(k);
+ 627:     }
+ 628: 
+ 629:     // ── 合并用的小工具 ────────────────────────────────────
+ 630:     private static JSONObject parseObj(String s) {
+ 631:         if (s == null) return null;
+ 632:         String t = s.trim();
+ 633:         if (t.length() < 2 || t.charAt(0) != '{') return null;
+ 634:         try {
+ 635:             return new JSONObject(t);
+ 636:         } catch (Throwable e) {
+ 637:             return null;
+ 638:         }
+ 639:     }
+ 640: 
+ 641:     /** 取状态对象：有 state 包装就取里面，否则认为整个就是状态。 */
+ 642:     private static JSONObject stateOf(JSONObject root) {
+ 643:         if (root == null) return null;
+ 644:         JSONObject st = root.optJSONObject("state");
+ 645:         return st != null ? st : root;
+ 646:     }
+ 647: 
+ 648:     private static JSONObject sub(JSONObject o, String k) {
+ 649:         if (o == null || !o.has(k)) return null;
+ 650:         return o.optJSONObject(k);
+ 651:     }
+ 652: 
+ 653:     /** 安全取字符串：key 不存在返回 null（org.json 的 optString(k,null) 会 NPE）。 */
+ 654:     private static String strOf(JSONObject o, String k) {
+ 655:         if (o == null || !o.has(k)) return null;
+ 656:         try {
+ 657:             if (o.isNull(k)) return null;
+ 658:             return o.optString(k, "");
+ 659:         } catch (Throwable t) {
+ 660:             return null;
+ 661:         }
+ 662:     }
+ 663: 
+ 664:     private static String firstNonEmpty(String a, String b) {
+ 665:         if (a != null && !a.isEmpty()) return a;
+ 666:         if (b != null && !b.isEmpty()) return b;
+ 667:         return "";
+ 668:     }
+ 669: 
+ 670:     private static JSONObject copy(JSONObject o) {
+ 671:         if (o == null) return new JSONObject();
+ 672:         try {
+ 673:             return new JSONObject(o.toString());
+ 674:         } catch (Throwable t) {
+ 675:             return new JSONObject();
+ 676:         }
+ 677:     }
+ 678: 
+ 679:     private static String nowIso() {
+ 680:         return new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", java.util.Locale.CHINA)
+ 681:                 .format(new java.util.Date());
+ 682:     }
+ 683: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GModeView.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.content.Context;
+   4: import android.graphics.Typeface;
+   5: import android.graphics.drawable.GradientDrawable;
+   6: import android.util.TypedValue;
+   7: import android.view.Gravity;
+   8: import android.view.View;
+   9: import android.view.ViewGroup;
+  10: import android.widget.LinearLayout;
+  11: import android.widget.TextView;
+  12: 
+  13: import org.json.JSONArray;
+  14: 
+  15: import java.util.ArrayList;
+  16: import java.util.List;
+  17: import java.util.Random;
+  18: 
+  19: /**
+  20:  * 词汇塔模式主界面：地图 + 状态 + 进入战斗。
+  21:  *
+  22:  * 地图做成「一条路线一张卡」而不是画节点图，原因很实际：
+  23:  * 手机上画带分支的节点图要么太挤点不准，要么得引第三方控件；
+  24:  * 而 4 条路线、每条 10~12 个节点，用列表反而一眼能看完全局。
+  25:  */
+  26: public class GModeView extends LinearLayout {
+  27: 
+  28:     private static final int C_BG     = 0xFF14161C;
+  29:     private static final int C_BG2    = 0xFF1C1F27;
+  30:     private static final int C_BG3    = 0xFF262A34;
+  31:     private static final int C_LINE   = 0xFF2C313C;
+  32:     private static final int C_FG     = 0xFFE8EAF0;
+  33:     private static final int C_FG2    = 0xFFA8AEBC;
+  34:     private static final int C_FG3    = 0xFF6B7282;
+  35:     private static final int C_PURPLE = 0xFF7C6CF0;
+  36:     private static final int C_TEAL   = 0xFF2FA8A0;
+  37:     private static final int C_ORANGE = 0xFFE0873F;
+  38:     private static final int C_GREEN  = 0xFF4BBF8A;
+  39:     private static final int C_RED    = 0xFFE05B5B;
+  40:     private static final int C_AMBER  = 0xFFE0A94A;
+  41: 
+  42:     private final GStore store;
+  43:     private final GameData data;
+  44:     private final Random rnd = new Random();
+  45: 
+  46:     private LinearLayout body;
+  47:     private android.widget.ScrollView scroller;
+  48:     private GBattleView battleView;
+  49:     private Runnable onExit;
+  50: 
+  51: 
+  52:     public GModeView(Context c, GStore s) {
+  53:         super(c);
+  54:         store = s;
+  55:         data = GameData.get(c);
+  56:         setOrientation(VERTICAL);
+  57:         setBackgroundColor(C_BG);
+  58:         build();
+  59:     }
+  60: 
+  61:     public void setOnExit(Runnable r) { onExit = r; }
+  62: 
+  63:     private void build() {
+  64:         removeAllViews();
+  65: 
+  66:         // 顶栏
+  67:         LinearLayout head = new LinearLayout(getContext());
+  68:         head.setOrientation(HORIZONTAL);
+  69:         head.setGravity(Gravity.CENTER_VERTICAL);
+  70:         head.setPadding(dp(14), dp(12), dp(14), dp(8));
+  71: 
+  72:         TextView back = tv("← 返回", 13, C_FG3);
+  73:         back.setPadding(0, dp(4), dp(12), dp(4));
+  74:         back.setOnClickListener(v -> { if (onExit != null) onExit.run(); });
+  75:         head.addView(back);
+  76: 
+  77:         TextView title = tv("词汇塔", 17, C_FG);
+  78:         title.setTypeface(Typeface.DEFAULT_BOLD);
+  79:         head.addView(title);
+  80: 
+  81:         addView(head);
+  82: 
+  83:         // 状态信息单独占一行，不再挤在「返回 / 词汇塔」右边。
+  84:         //
+  85:         // 原来它和标题同一行、weight=1 抢剩余宽度，360dp 上只够写
+  86:         // 「第 14 层 · 第 2 张地图 · 特殊词 0 道」，
+  87:         // 后面的「具 0」被折到第二行，而且因为 gravity=RIGHT，
+  88:         // 折下来的那半截还靠右对齐 —— 读起来像乱码。
+  89:         // 给它整行宽度，一行放得下，也不用再靠折行。
+  90:         TextView info = tv("", 12, C_AMBER);
+  91:         info.setId(android.R.id.text1);
+  92:         LinearLayout infoWrap = new LinearLayout(getContext());
+  93:         infoWrap.setOrientation(HORIZONTAL);
+  94:         infoWrap.setPadding(dp(14), 0, dp(14), dp(9));
+  95:         infoWrap.addView(info, new LinearLayout.LayoutParams(
+  96:                 ViewGroup.LayoutParams.MATCH_PARENT,
+  97:                 ViewGroup.LayoutParams.WRAP_CONTENT));
+  98:         addView(infoWrap);
+  99: 
+ 100:         View line = new View(getContext());
+ 101:         line.setBackgroundColor(C_LINE);
+ 102:         addView(line, new LinearLayout.LayoutParams(
+ 103:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+ 104: 
+ 105:         body = new LinearLayout(getContext());
+ 106:         body.setOrientation(VERTICAL);
+ 107:         body.setPadding(dp(12), dp(10), dp(12), dp(24));
+ 108:         scroller = new android.widget.ScrollView(getContext());
+ 109:         scroller.setFillViewport(true);
+ 110:         scroller.addView(body);
+ 111:         scroller.setLayoutParams(new LinearLayout.LayoutParams(
+ 112:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+ 113:         addView(scroller);
+ 114:     }
+ 115: 
+ 116:     /**
+ 117:      * 从外部进入时调用。
+ 118:      *
+ 119:      * 关键：**战斗中切到别的 tab 再切回来，必须还在战斗里。**
+ 120:      * 原来的实现无条件 removeView(battleView) + renderMap()，
+ 121:      * 于是玩家去「错题库」看一眼再回来，整场战斗就没了，
+ 122:      * 地图回到起点 —— 因为 renderMap() 只读 store 的 node，
+ 123:      * 而战斗进度（血量/手牌/回合）只存在 GBattleView 实例里，
+ 124:      * 实例被丢掉就全丢了。
+ 125:      *
+ 126:      * 现在：battleView 还活着且没结束，就原样保留；
+ 127:      * 只有战斗真正结束（onFinish 把 battleView 置 null）才回地图。
+ 128:      */
+ 129:     public void show() {
+ 130:         if (battleView != null) {
+ 131:             // 战斗中：保持战斗界面，只把地图滚动区藏起来
+ 132:             if (scroller != null) scroller.setVisibility(View.GONE);
+ 133:             battleView.setVisibility(View.VISIBLE);
+ 134:             updateHead();
+ 135:             return;
+ 136:         }
+ 137:         if (scroller != null) scroller.setVisibility(View.VISIBLE);
+ 138:         restoreUnfinishedFight();
+ 139:         renderMap();
+ 140:     }
+ 141: 
+ 142:     /**
+ 143:      * 进程被杀后重进：把「打到一半」的那一格退回去重新打。
+ 144:      *
+ 145:      * 为什么要这么做：enterNode() 一开始就 setPos + markVisited，
+ 146:      * 于是「进入战斗」和「通过这一格」在存档里长得一模一样。
+ 147:      * 战斗状态又只活在 GBattleView 实例里，进程一死就全丢 ——
+ 148:      * 重进时程序认为这一格已经过了，玩家白拿一个节点，就是用户说的
+ 149:      * 「上一个怪就自动过关了」。
+ 150:      *
+ 151:      * 现在开战前把节点写进 store.battleNode()，只有在玩家点「继续」
+ 152:      * （advanceAfterBattle）时才清。重进时若 battleNode 还在，
+ 153:      * 就说明那一场没打完：位置退回该格、取消「已通过」标记，重新开战。
+ 154:      */
+ 155:     private void restoreUnfinishedFight() {
+ 156:         String raw = store.battleNode();
+ 157:         if (raw == null || raw.isEmpty()) return;
+ 158:         String[] parts = raw.split(",");
+ 159:         if (parts.length != 2) { store.clearBattleNode(); return; }
+ 160:         int r, c;
+ 161:         try {
+ 162:             r = Integer.parseInt(parts[0].trim());
+ 163:             c = Integer.parseInt(parts[1].trim());
+ 164:         } catch (NumberFormatException ex) {
+ 165:             store.clearBattleNode();
+ 166:             return;
+ 167:         }
+ 168:         GameData.RouteMap map = loadOrMakeMap();
+ 169:         if (map == null || r < 0 || r >= map.rows()) {
+ 170:             store.clearBattleNode();
+ 171:             return;
+ 172:         }
+ 173:         List<GameData.Node> layer = map.row(r);
+ 174:         if (layer == null || c < 0 || c >= layer.size()) {
+ 175:             store.clearBattleNode();
+ 176:             return;
+ 177:         }
+ 178:         int type = layer.get(c).type;
+ 179: 
+ 180:         // 位置退回这一格，并抹掉「已通过」—— 这一场要重打。
+ 181:         store.setPos(r, c);
+ 182:         store.unmarkVisited(r, c);
+ 183:         store.clearBattleNode();
+ 184:         setFightNode(r, c);
+ 185: 
+ 186:         // 非战斗节点不需要重打，直接按原网格状态交回地图让玩家重选。
+ 187:         if (type == GameData.N_CAMP || type == GameData.N_SHOP
+ 188:                 || type == GameData.N_CHEST) {
+ 189:             clearFightNode();
+ 190:             return;
+ 191:         }
+ 192:         GameData.Enemy e = data.pickEnemy(type, store.floorIndex(), rnd);
+ 193:         if (e == null) { clearFightNode(); return; }
+ 194:         startBattle(e);
+ 195:     }
+ 196: 
+ 197:     /** 战斗结束（胜/负都走这里），清掉战斗视图回到地图。 */
+ 198:     private void endBattle() {
+ 199:         if (battleView != null) {
+ 200:             removeView(battleView);
+ 201:             battleView = null;
+ 202:         }
+ 203:         if (scroller != null) scroller.setVisibility(View.VISIBLE);
+ 204:         renderMap();
+ 205:     }
+ 206: 
+ 207:     /**
+ 208:      * 顶栏信息。
+ 209:      *
+ 210:      * ── 必须显示生命 ────────────────────────────────────
+ 211:      * 以前只有金币/特殊词/道具/层数，血量只能在战斗中看到。
+ 212:      * 于是出现两种糟糕情况：
+ 213:      *   · 刚打完一场剩 12 血，地图上完全看不出自己快死了，
+ 214:      *     下一步该选篝火还是继续冲完全没有依据；
+ 215:      *   · 篝火「回复 30%」这种选项也无从判断值不值。
+ 216:      * 血量和金币一样是这一局的核心资源，必须常驻可见。
+ 217:      *
+ 218:      * 血量显示按「当前/上限」，上限来自存档（宝箱怪战败会把它砍半）。
+ 219:      * curHp() 为 -1 表示这一局还没打过战斗 —— 按满血显示，
+ 220:      * 和 GBattle 开局的处理保持一致。
+ 221:      */
+ 222:     private void updateHead() {
+ 223:         TextView info = findViewById(android.R.id.text1);
+ 224:         if (info == null) return;
+ 225:         int maxHp = store.curMaxHp() > 0 ? store.curMaxHp() : data.playerHp;
+ 226:         int hp = store.curHp();
+ 227:         if (hp < 0) hp = maxHp;
+ 228:         // 顶栏一行放完。三个设计决定：
+ 229:         //
+ 230:         //   ① 「层数」只认 store.floorIndex()。这里曾经和地图行号、
+ 231:         //      历史最高层三套口径并存，同一个「第 3 层」指的不是一回事。
+ 232:         //   ② 不显示 Lv. —— 等级直接等于层数，并排写是同一个数字写两遍。
+ 233:         //      加成（伤害 / 能量上限）照常生效，只是不给它单独的显示。
+ 234:         //   ③ 标签全部压短（「第几张地图」→「第2图」、「特殊词」→「特殊」）。
+ 235:         //      原来那版第二行末尾的「道具 0」会被折到第三行，而且因为
+ 236:         //      gravity=RIGHT，折下来的半截还靠右对齐，看着像乱码。
+ 237:         //      现在整行最坏情况（99/99 血、9999 金、99 层 99 图 99 特殊 99 道具）
+ 238:         //      实测 270px，可用宽度 332dp，留足余量。
+ 239:         info.setText("❤" + Math.min(hp, maxHp) + "/" + maxHp
+ 240:                 + "　✦" + store.gold()
+ 241:                 + "　第" + store.floorNo() + "层"
+ 242:                 + "　第" + (store.layer() + 1) + "图"
+ 243:                 + "　特殊" + store.specialCount()
+ 244:                 + "　道具" + store.itemCount());
+ 245:         // 残血提醒：整个顶栏染红，比只改一段数字更醒目
+ 246:         boolean low = hp * 100 < maxHp * 30;
+ 247:         info.setTextColor(low ? C_RED : (hp * 100 < maxHp * 60 ? C_AMBER : C_FG));
+ 248:     }
+ 249: 
+ 250:     // ── 地图 ─────────────────────────────────────────────
+ 251: 
+ 252:     /**
+ 253:      * 画地图。
+ 254:      *
+ 255:      * 自上而下一层层画，每层横排该层所有节点。**只有从玩家当前位置能走到的
+ 256:      * 节点才可点**，其余全部只展示 —— 这就是「自主选路」的来源。
+ 257:      */
+ 258:     private void renderMap() {
+ 259:         body.removeAllViews();
+ 260:         updateHead();
+ 261: 
+ 262:         GameData.RouteMap map = loadOrMakeMap();
+ 263:         if (map == null) {
+ 264:             LinearLayout intro = box();
+ 265:             intro.addView(title("开始一局"));
+ 266:             intro.addView(sub("树枝状地图：每层 1~3 个节点，走哪条由你决定。"));
+ 267:             intro.addView(sub("战斗 / 商店 / 篝火 / 宝箱 / 精英，五种格子各有用途。"));
+ 268:         intro.addView(sub("打赢精英必掉特殊词或道具 —— 想要更多被动就往精英走。"));
+ 269:             intro.addView(bigBtn("生成地图", C_PURPLE, this::newMap));
+ 270:             body.addView(intro);
+ 271:             return;
+ 272:         }
+ 273: 
+ 274:         int row = store.curRow();
+ 275:         int col = store.curCol();
+ 276:         if (row < 0 || row >= map.rows()) { row = 0; store.setPos(0, 0); col = 0; }
+ 277: 
+ 278:         List<GameData.Node> curLayer = map.row(row);
+ 279: 
+ 280:         // col == -1 表示「刚打完上一格的战斗，还没在这一层选格子」。
+ 281:         // 这种状态下**整层所有非末层节点都可选** —— 这正是分叉的意义：
+ 282:         // 打完一架，你站在岔路口，往左往右自己挑。
+ 283:         boolean forkPending = (col < 0 || col >= curLayer.size());
+ 284:         GameData.Node here = forkPending ? null : curLayer.get(col);
+ 285: 
+ 286:         // 玩家下一步能去的节点下标集合
+ 287:         java.util.Set<Integer> reachable = new java.util.HashSet<>();
+ 288:         if (forkPending) {
+ 289:             // 岔路口：这一层全部可选
+ 290:             for (int i = 0; i < curLayer.size(); i++) reachable.add(i);
+ 291:         } else {
+ 292:             for (int idx : here.next) reachable.add(idx);
+ 293:         }
+ 294: 
+ 295:         LinearLayout hdr = box();
+ 296:         // 标题原来写「第 row+1 / rows 层」，那是「这张图里的第几行」，
+ 297:         // 和顶栏的层数、排行榜的层数完全不是一个东西，玩家必然疑惑。
+ 298:         // 现在统一成：总第几层，并注明这是第几张图的第几行。
+ 299:         hdr.addView(title("第 " + store.floorNo() + " 层"));
+ 300:         hdr.addView(sub("第 " + (store.layer() + 1) + " 张图 · 第 "
+ 301:                 + (row + 1) + "/" + map.rows() + " 行"));
+ 302:         hdr.addView(sub("金币 " + store.gold() + "    答对 " + store.right()
+ 303:                 + " / 答错 " + store.wrong()));
+ 304:         body.addView(hdr);
+ 305: 
+ 306:         // 自上而下画。倒序？不 —— 从上往下画，玩家从上面往下走，
+ 307:         // 顶部是已走过的路，底部是还没去的，视线方向自然。
+ 308:         for (int r = 0; r < map.rows(); r++) {
+ 309:             List<GameData.Node> layer = map.row(r);
+ 310:             LinearLayout line = new LinearLayout(getContext());
+ 311:             line.setOrientation(HORIZONTAL);
+ 312:             line.setGravity(Gravity.CENTER);
+ 313:             line.setPadding(0, dp(4), 0, dp(4));
+ 314: 
+ 315:             for (int c = 0; c < layer.size(); c++) {
+ 316:                 final GameData.Node n = layer.get(c);
+ 317:                 final int myRow = r, myCol = c;
+ 318: 
+ 319:                 boolean isHere = (!forkPending && r == row && c == col);
+ 320:                 // forkPending：当前层可点（选路）；否则只能点下一层的可达格
+ 321:                 boolean canGo = forkPending
+ 322:                         ? (r == row)
+ 323:                         : (r == row + 1 && reachable.contains(c));
+ 324:                 boolean passed = store.isVisited(r, c);
+ 325: 
+ 326:                 TextView chip = nodeChip(n.type, isHere, canGo, passed);
+ 327:                 LinearLayout.LayoutParams lp =
+ 328:                         new LinearLayout.LayoutParams(dp(46), dp(46));
+ 329:                 lp.leftMargin = dp(7);
+ 330:                 lp.rightMargin = dp(7);
+ 331:                 chip.setLayoutParams(lp);
+ 332: 
+ 333:                 if (canGo) {
+ 334:                     chip.setOnClickListener(v -> enterNode(myRow, myCol, n.type));
+ 335:                 }
+ 336:                 line.addView(chip);
+ 337:             }
+ 338:             body.addView(line);
+ 339: 
+ 340:             // 层与层之间的连线提示（简单竖线，视觉上把树枝串起来）
+ 341:             if (r < map.rows() - 1) {
+ 342:                 View conn = new View(getContext());
+ 343:                 conn.setBackgroundColor(C_LINE);
+ 344:                 LinearLayout.LayoutParams cp =
+ 345:                         new LinearLayout.LayoutParams(dp(1), dp(10));
+ 346:                 conn.setLayoutParams(cp);
+ 347:                 LinearLayout wrap = new LinearLayout(getContext());
+ 348:                 wrap.setGravity(Gravity.CENTER);
+ 349:                 wrap.addView(conn);
+ 350:                 body.addView(wrap);
+ 351:             }
+ 352:         }
+ 353: 
+ 354:         // 图例
+ 355:         LinearLayout legend = box();
+ 356:         legend.addView(sub("战=战斗  精=精英  店=商店  火=篝火  箱=宝箱"));
+ 357:         legend.addView(sub("精=精英（必掉特殊词/道具）"));
+ 358:         legend.addView(sub("亮色描边 = 下一步可去，暗色 = 已走过或去不了"));
+ 359:         body.addView(legend);
+ 360: 
+ 361:         LinearLayout foot = box();
+ 362:         foot.addView(smallBtn("🎒 背包 / 我的特殊词与道具（看效果）", this::showBag));
+ 363:         foot.addView(smallBtn("重新生成地图（进度清零）", () -> {
+ 364:             store.resetRun();
+ 365:             store.clearBattleNode();   // 连同"打到一半"的记录一起清
+ 366:             clearFightNode();
+ 367:             if (battleView != null) { removeView(battleView); battleView = null; }
+ 368:             store.setMap("");
+ 369:             renderMap();
+ 370:         }));
+ 371:         body.addView(foot);
+ 372:     }
+ 373: 
+ 374:     /**
+ 375:      * 从存档还原地图；没有就现造一张。
+ 376:      *
+ 377:      * 邻接关系由 makeMap 现场重建 —— 但它依赖 Random，存档里没有种子，
+ 378:      * 所以必须**把生成的邻接表一起存下来**，否则读档后连通性全变了。
+ 379:      * 这里改用「按层节点数确定性重建」：只要每层节点数一致，makeMap 的
+ 380:      * 连边算法就是确定的？不是 —— 它用了 rnd。所以改成存完整拓扑。
+ 381:      *
+ 382:      * 实际做法：存档里把每层的节点类型存成 "0,2,1|2,4|..."（| 分层，, 分列），
+ 383:      * 连通性则存成 "0-1,0-2|1-0,1-2|..."（层内 h 连到下层 t）。
+ 384:      */
+ 385:     private GameData.RouteMap loadOrMakeMap() {
+ 386:         String raw = store.mapRaw();
+ 387:         if (raw == null || raw.isEmpty()) return null;
+ 388: 
+ 389:         try {
+ 390:             GameData.RouteMap m = new GameData.RouteMap();
+ 391:             String[] layerStrs = raw.split("\\|");
+ 392:             for (int r = 0; r < layerStrs.length; r++) {
+ 393:                 String ls = layerStrs[r];
+ 394:                 List<GameData.Node> layer = new ArrayList<>();
+ 395:                 if (!ls.isEmpty()) {
+ 396:                     String[] cols = ls.split(",");
+ 397:                     for (int c = 0; c < cols.length; c++) {
+ 398:                         int type = parseInt(cols[c]);
+ 399:                         layer.add(new GameData.Node(type, r, c));
+ 400:                     }
+ 401:                 }
+ 402:                 m.nodes.add(layer);
+ 403:             }
+ 404:             // 重建连通性：按 makeMap 同样的算法会不可复现，所以改用「按层节点数
+ 405:             // 均匀分配」的确定性规则 —— 与 makeMap 的"按比例映射"主边一致。
+ 406:             rebuildEdges(m);
+ 407:             return m;
+ 408:         } catch (Exception e) {
+ 409:             return null;
+ 410:         }
+ 411:     }
+ 412: 
+ 413:     /**
+ 414:      * 重建层间连边。规则与 makeMap 的主干边一致：上一层的第 i 个节点
+ 415:      * 按比例映射到下一层，再补齐所有下层节点的入边。
+ 416:      *
+ 417:      * 这样存档只需存「每层有几个节点、各是什么类型」，连通性完全确定，
+ 418:      * 读档不会走样。
+ 419:      */
+ 420:     private static void rebuildEdges(GameData.RouteMap m) {
+ 421:         for (int r = 0; r < m.rows() - 1; r++) {
+ 422:             List<GameData.Node> cur = m.row(r);
+ 423:             List<GameData.Node> nxt = m.row(r + 1);
+ 424:             int nc = nxt.size();
+ 425:             for (GameData.Node n : cur) n.next.clear();
+ 426:             for (int i = 0; i < cur.size(); i++) {
+ 427:                 int target = cur.size() == 1 ? 0
+ 428:                         : (int) Math.round((double) i * (nc - 1) / Math.max(1, cur.size() - 1));
+ 429:                 target = Math.max(0, Math.min(nc - 1, target));
+ 430:                 if (!cur.get(i).next.contains(target)) cur.get(i).next.add(target);
+ 431:             }
+ 432:             // 补齐入边
+ 433:             for (int j = 0; j < nc; j++) {
+ 434:                 boolean has = false;
+ 435:                 for (GameData.Node n : cur) if (n.next.contains(j)) has = true;
+ 436:                 if (has) continue;
+ 437:                 int src = cur.size() == 1 ? 0
+ 438:                         : Math.max(0, Math.min(cur.size() - 1,
+ 439:                             (int) Math.round((double) j * (cur.size() - 1) / Math.max(1, nc - 1))));
+ 440:                 cur.get(src).next.add(j);
+ 441:             }
+ 442:             for (GameData.Node n : cur) java.util.Collections.sort(n.next);
+ 443:         }
+ 444:     }
+ 445: 
+ 446:     /** 把 GameData.RouteMap 序列化成存档字符串。 */
+ 447:     private static String mapToRaw(GameData.RouteMap m) {
+ 448:         StringBuilder sb = new StringBuilder();
+ 449:         for (int r = 0; r < m.rows(); r++) {
+ 450:             if (r > 0) sb.append("|");
+ 451:             List<GameData.Node> layer = m.row(r);
+ 452:             for (int c = 0; c < layer.size(); c++) {
+ 453:                 if (c > 0) sb.append(",");
+ 454:                 sb.append(layer.get(c).type);
+ 455:             }
+ 456:         }
+ 457:         return sb.toString();
+ 458:     }
+ 459: 
+ 460:     /** 节点格子。 */
+ 461:     private TextView nodeChip(int type, boolean isHere, boolean canGo, boolean passed) {
+ 462:         String icon;
+ 463:         int color;
+ 464:         switch (type) {
+ 465:             case GameData.N_SHOP:  icon = "店"; color = C_AMBER; break;
+ 466:             case GameData.N_CAMP:  icon = "火"; color = C_ORANGE; break;
+ 467:             case GameData.N_CHEST: icon = "箱"; color = C_TEAL; break;
+ 468:             case GameData.N_ELITE: icon = "精"; color = C_RED; break;
+ 469:             default:               icon = "战"; color = C_FG2; break;
+ 470:         }
+ 471: 
+ 472:         TextView t = tv(icon, 13, isHere || canGo ? 0xFFFFFFFF : C_FG3);
+ 473:         t.setGravity(Gravity.CENTER);
+ 474:         GradientDrawable g = new GradientDrawable();
+ 475:         g.setCornerRadius(dp(10));
+ 476: 
+ 477:         if (isHere) {
+ 478:             // 当前位置：实心高亮
+ 479:             g.setColor(color);
+ 480:             g.setStroke(dp(2), 0xFFFFFFFF);
+ 481:         } else if (canGo) {
+ 482:             // 可去：描边发亮
+ 483:             g.setColor(C_BG3);
+ 484:             g.setStroke(dp(2), color);
+ 485:         } else if (passed) {
+ 486:             // 走过：压暗
+ 487:             g.setColor(0xFF191C22);
+ 488:             g.setStroke(dp(1), C_LINE);
+ 489:         } else {
+ 490:             // 还没到 / 去不了的未来节点
+ 491:             g.setColor(C_BG2);
+ 492:             g.setStroke(dp(1), C_LINE);
+ 493:         }
+ 494:         t.setBackground(g);
+ 495:         t.setAlpha(isHere || canGo || passed ? 1f : 0.45f);
+ 496:         return t;
+ 497:     }
+ 498: 
+ 499:     /**
+ 500:      * 抽一张新地图。
+ 501:      *
+ 502:      * 起点（第 0 层）是普通战斗，但**不该让玩家先点一个「战」格子**才开始 ——
+ 503:      * 那一步没有任何选择。所以直接把第 0 层标记为已走过，位置落到「岔路口」
+ 504:      * 状态，玩家一进来就在第 1 层挑路。
+ 505:      */
+ 506:     private void newMap() {
+ 507:         GameData.RouteMap m = GameData.makeMap(rnd);
+ 508:         store.setMap(mapToRaw(m));
+ 509:         store.setVisitedClear();
+ 510:         store.markVisited(0, 0);
+ 511:         // row=0 且 col=-1：站在第 0 层但还没选格子 → 第 0 层全部可选
+ 512:         store.setPos(0, -1);
+ 513:         renderMap();
+ 514:     }
+ 515: 
+ 516:     /**
+ 517:      * 进入一个节点。
+ 518:      *
+ 519:      * ── 这里修的是最严重的逻辑 bug ─────────────────────────
+ 520:      * 旧代码把五种类型全塞进 startBattle：
+ 521:      *     if (type == N_BATTLE || type == N_ELITE || type == N_SHOP
+ 522:      *             || type == N_CAMP || type == N_CHEST) { startBattle(...); }
+ 523:      * 所以选篝火、进商店、开宝箱，全都是打一场怪 ——
+ 524:      * 玩家反馈的「选择火也是进入怪物战」就是这一行。
+ 525:      *
+ 526:      * 现在每种节点走各自的流程：
+ 527:      *   战斗 / 精英 → 开战
+ 528:      *   篝火       → 回复生命（补给点）
+ 529:      *   商店       → 花金币买特殊词 / 治疗
+ 530:      *   宝箱       → 直接拿金币
+ 531:      */
+ 532:     private void enterNode(int row, int col, int type) {
+ 533:         store.setPos(row, col);
+ 534:         store.markVisited(row, col);
+ 535: 
+ 536:         switch (type) {
+ 537:             case GameData.N_CAMP:
+ 538:                 showCamp();
+ 539:                 return;
+ 540:             case GameData.N_SHOP:
+ 541:                 showShop();
+ 542:                 return;
+ 543:             case GameData.N_CHEST:
+ 544:                 openChest();
+ 545:                 return;
+ 546:             default: {
+ 547:                 GameData.Enemy e = data.pickEnemy(type, store.floorIndex(), rnd);
+ 548:                 if (e == null) { advanceAfterNode(); return; }
+ 549:                 setFightNode(row, col);
+ 550:                 store.setBattleNode(row, col);
+ 551:                 startBattle(e);
+ 552:             }
+ 553:         }
+ 554:     }
+ 555: 
+ 556:     /** 篝火：回血。是补给点，不是战斗。 */
+ 557:     private void showCamp() {

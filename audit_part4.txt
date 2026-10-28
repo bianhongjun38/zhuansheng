@@ -1,0 +1,3200 @@
+﻿ 558:         body.removeAllViews();
+ 559:         updateHead();
+ 560: 
+ 561:         int maxHp = data.playerHp;
+ 562:         int heal = Math.max(10, Math.round(maxHp * 0.3f));
+ 563: 
+ 564:         LinearLayout card = box();
+ 565:         card.addView(title("🔥 篝火"));
+ 566:         card.addView(sub("你在火堆边坐下休息。"));
+ 567:         card.addView(sub("生命上限 " + maxHp + "，这次休息可回复 " + heal + " 点。"));
+ 568:         body.addView(card);
+ 569: 
+ 570:         LinearLayout acts = box();
+ 571:         acts.addView(bigBtn("休息 · 回复 " + heal + " 生命", C_ORANGE, () -> {
+ 572:             store.addCampHeal(heal);
+ 573:             flashThen("🔥 已休息：下一场战斗 +" + heal + " 生命", this::advanceAfterNode);
+ 574:         }));
+ 575:         acts.addView(smallBtn("不休息，直接前进", this::advanceAfterNode));
+ 576:         body.addView(acts);
+ 577:     }
+ 578: 
+ 579:     /**
+ 580:      * 商店：花金币买特殊词 / 道具 / 治疗。
+ 581:      *
+ 582:      * ── 为什么必须把效果写出来 ─────────────────────────────
+ 583:      * 原来这里只有一行「随机特殊词  ¥70」，玩家花 70 金币买回来，
+ 584:      * 顶栏「特殊词 1」加了 1，战斗里却毫无变化 ——
+ 585:      * 因为 cards.json 的 effect 字段当时根本没有代码读取。
+ 586:      * 看不见效果、也没有说明，买了当然不知道有什么用。
+ 587:      *
+ 588:      * 现在：每个商品下面直接列出它的效果原文（来自 cards.json），
+ 589:      * 道具同样标价、标效果；买到的特殊词会在「特殊词」清单里常驻显示。
+ 590:      */
+ 591:     private void showShop() {
+ 592:         body.removeAllViews();
+ 593:         updateHead();
+ 594: 
+ 595:         // Premier: shop prices -30%
+ 596:         boolean premier = store.hasSpecial("premier");
+ 597:         double priceMul = premier ? 0.7 : 1.0;
+ 598: 
+ 599:         LinearLayout card = box();
+ 600:         card.addView(title("🏪 商店"));
+ 601:         card.addView(sub("当前金币 " + store.gold()
+ 602:                 + (premier ? "　（Premier 价格 −30%）" : "")));
+ 603:         body.addView(card);
+ 604: 
+ 605:         LinearLayout acts = box();
+ 606:         int base = 30 + store.floorIndex() * 10;
+ 607: 
+ 608:         // ── Specials:永久被动 ──
+ 609:         GameData.Special pick = data.randomUnownedSpecial(store, rnd);
+ 610:         final GameData.Special sp = pick;
+ 611:         int spPrice = (int) Math.round((base + 40) * priceMul);
+ 612:         if (sp != null) {
+ 613:             acts.addView(buyRow("特殊词 · " + sp.nameEn, spPrice, () -> {
+ 614:                 store.addSpecial(sp.id);
+ 615:                 flashThen("🏪 买到特殊词【" + sp.nameEn + "】\n效果：" + sp.effect
+ 616:                         + "\n（永久生效，可在背包查看）", this::advanceAfterNode);
+ 617:             }));
+ 618:             acts.addView(sub("　效果：" + sp.effect));
+ 619:             acts.addView(sub("　（永久被动，买了立刻生效）"));
+ 620:         } else {
+ 621:             acts.addView(sub("特殊词已集齐，没得卖了。"));
+ 622:         }
+ 623: 
+ 624:         // ── Items：一次性 ──
+ 625:         acts.addView(sub("──────── 道具（一次性，战斗中手动使用）────────"));
+ 626:         int shown = 0;
+ 627:         for (GameData.Item it : data.items) {
+ 628:             // 精英专属道具（price=0）不在商店卖 —— 它们只能靠打精英拿到，
+ 629:             // 否则「去精英拿装备」这条动线又会被商店替代掉。
+ 630:             if (it.price <= 0) continue;
+ 631:             if (shown >= 2) break;
+ 632:             final GameData.Item item = it;
+ 633:             int ip = (int) Math.round(item.price * priceMul);
+ 634:             acts.addView(buyRow("道具 · " + item.nameEn + "（" + item.en + "）", ip, () -> {
+ 635:                 store.addItem(item.id);
+ 636:                 flashThen("🏪 买到道具【" + item.nameEn + "】\n效果：" + item.desc
+ 637:                         + "\n（一次性，战斗里点道具使用）", this::advanceAfterNode);
+ 638:             }));
+ 639:             acts.addView(sub("　效果：" + item.desc));
+ 640:             shown++;
+ 641:         }
+ 642: 
+ 643:         // ── Healing ──
+ 644:         acts.addView(sub("──────── 补给 ────────"));
+ 645:         int healPrice = (int) Math.round(base * priceMul);
+ 646:         acts.addView(buyRow("回复 25 生命", healPrice, () -> {
+ 647:             store.addCampHeal(25);
+ 648:             flashThen("🏪 已购买治疗：下一场战斗 +25 生命", this::advanceAfterNode);
+ 649:         }));
+ 650: 
+ 651:         acts.addView(smallBtn("离开商店", this::advanceAfterNode));
+ 652:         body.addView(acts);
+ 653: 
+ 654:         showOwnedSpecials();
+ 655:     }
+ 656: 
+ 657:     /** 已买到的特殊词清单：名字 + 效果，让玩家随时能查。 */
+ 658:     private void showOwnedSpecials() {
+ 659:         org.json.JSONArray ids = store.specials();
+ 660:         if (ids.length() == 0) return;
+ 661:         LinearLayout card = box();
+ 662:         card.addView(title("✦ 已拥有的特殊词（" + ids.length() + "）"));
+ 663:         for (int i = 0; i < ids.length(); i++) {
+ 664:             String id = ids.optString(i);
+ 665:             GameData.Special s = null;
+ 666:             for (GameData.Special x : data.specials) {
+ 667:                 if (x.id.equals(id)) { s = x; break; }
+ 668:             }
+ 669:             if (s == null) continue;
+ 670:             card.addView(sub("✦ " + s.nameEn + "　" + s.effect));
+ 671:         }
+ 672:         body.addView(card);
+ 673:     }
+ 674: 
+ 675:     /** 商店一行商品：名字 + 价格 + 按钮。 */
+ 676:     private View buyRow(String name, int price, Runnable onBuy) {
+ 677:         LinearLayout row = new LinearLayout(getContext());
+ 678:         row.setOrientation(HORIZONTAL);
+ 679:         row.setGravity(Gravity.CENTER_VERTICAL);
+ 680:         row.setPadding(0, dp(6), 0, dp(6));
+ 681: 
+ 682:         boolean afford = store.gold() >= price;
+ 683: 
+ 684:         TextView nm = tv(name + "　" + price + " 金", 13, C_FG);
+ 685:         nm.setLayoutParams(new LinearLayout.LayoutParams(0,
+ 686:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 687:         row.addView(nm);
+ 688: 
+ 689:         TextView btn = tv(afford ? "Buy" : "Not enough gold", 12, afford ? C_AMBER : C_FG3);
+ 690:         btn.setPadding(dp(14), dp(7), dp(14), dp(7));
+ 691:         GradientDrawable g = new GradientDrawable();
+ 692:         g.setCornerRadius(dp(8));
+ 693:         g.setColor(C_BG3);
+ 694:         g.setStroke(dp(1), afford ? C_AMBER : C_LINE);
+ 695:         btn.setBackground(g);
+ 696:         if (afford) {
+ 697:             btn.setOnClickListener(v -> {
+ 698:                 if (store.spend(price)) onBuy.run();
+ 699:                 else toast("金币不足");
+ 700:             });
+ 701:         }
+ 702:         row.addView(btn);
+ 703:         return row;
+ 704:     }
+ 705: 
+ 706:     /**
+ 707:      * 背包：把玩家已经买到的东西**连同效果原文**一起列出来。
+ 708:      *
+ 709:      * 为什么单独做一屏：特殊词是永久被动，玩家在商店里看了说明、
+ 710:      * 买了、走了，之后想确认「我刚才买的那个『至关重要的』到底是干嘛的」
+ 711:      * 就再也找不到地方看了 —— 顶栏只有一个「特殊词 1」的数字。
+ 712:      * 效果必须随时可查，否则买了和没买的差别只在血量上，
+ 713:      * 玩家根本建立不了「这个道具值这个价」的认知。
+ 714:      */
+ 715:     private void showBag() {
+ 716:         body.removeAllViews();
+ 717:         updateHead();
+ 718: 
+ 719:         LinearLayout head = box();
+ 720:         head.addView(title("🎒 背包"));
+ 721:         head.addView(sub("金币 " + store.gold() + "　特殊词 " + store.specialCount()
+ 722:                 + "　道具 " + store.itemCount()));
+ 723:         body.addView(head);
+ 724: 
+ 725:         // ── Specials: permanent passives ──
+ 726:         LinearLayout sp = box();
+ 727:         sp.addView(title("✦ 特殊词（永久被动，买了就一直在）"));
+ 728:         sp.addView(sub("两种拿法：商店花金币买；打赢精英怪必掉一件。"));
+ 729:         org.json.JSONArray ids = store.specials();
+ 730:         if (ids.length() == 0) {
+ 731:             sp.addView(sub("还没有特殊词。"));
+ 732:         } else {
+ 733:             for (int i = 0; i < ids.length(); i++) {
+ 734:                 String id = ids.optString(i);
+ 735:                 GameData.Special f = null;
+ 736:                 for (GameData.Special x : data.specials) {
+ 737:                     if (x.id.equals(id)) { f = x; break; }
+ 738:                 }
+ 739:                 if (f == null) continue;
+ 740:                 sp.addView(sub("✦ " + f.nameEn + "（" + f.id + "）"));
+ 741:                 sp.addView(sub("　　效果：" + f.effect));
+ 742:             }
+ 743:         }
+ 744:         body.addView(sp);
+ 745: 
+ 746:         // ── Items: one use each ──
+ 747:         LinearLayout it = box();
+ 748:         it.addView(title("🎒 道具（一次性，战斗里手动点用）"));
+ 749:         it.addView(sub("用掉就消失，战斗里点道具那一行使用。精英怪也会掉。"));
+ 750:         org.json.JSONArray iids = store.items();
+ 751:         if (iids.length() == 0) {
+ 752:             it.addView(sub("还没有道具。"));
+ 753:         } else {
+ 754:             for (int i = 0; i < iids.length(); i++) {
+ 755:                 String id = iids.optString(i);
+ 756:                 GameData.Item f = null;
+ 757:                 for (GameData.Item x : data.items) {
+ 758:                     if (x.id.equals(id)) { f = x; break; }
+ 759:                 }
+ 760:                 if (f == null) continue;
+ 761:                 String src = f.price > 0 ? "　售价 " + f.price + " 金" : "　精英掉落";
+ 762:                 it.addView(sub("🎒 " + f.nameEn + "（" + f.en + "）" + src));
+ 763:                 it.addView(sub("　　效果：" + f.desc));
+ 764:             }
+ 765:         }
+ 766:         body.addView(it);
+ 767: 
+ 768:         LinearLayout back = box();
+ 769:         back.addView(smallBtn("← 返回地图", this::renderMap));
+ 770:         body.addView(back);
+ 771:     }
+ 772: 
+ 773:     /**
+ 774:      * 宝箱：多数时候是金币，但可能是宝箱怪。
+ 775:      *
+ 776:      * ── 为什么要加宝箱怪 ────────────────────────────────
+ 777:      *
+ 778:      * 宝箱原本是地图上唯一「无风险纯收益」的格子，于是最优解变成了
+ 779:      * 「见箱就开」—— 一个不需要任何判断的选择。加入宝箱怪后，开箱
+ 780:      * 变成一次小赌：绝大多数情况白拿金币，少数情况要先打一场。
+ 781:      *
+ 782:      * 判定放在**点开箱的那一刻**，不是进格子时 —— 玩家看到的永远是
+ 783:      * 一个普通宝箱，才有「被骗」的意外感。同时「不打开」这个选项
+ 784:      * 也才真的有意义。
+ 785:      *
+ 786:      * 打不过怎么办：宝箱怪是普通强度（hp 80 / atk 8），不是精英；
+ 787:      * 万一输了就走正常的战败流程（这一局结束），不额外惩罚。
+ 788:      */
+ 789:     private void openChest() {
+ 790:         body.removeAllViews();
+ 791:         updateHead();
+ 792: 
+ 793:         int gold = 20 + rnd.nextInt(30) + store.layer() * 5;
+ 794: 
+ 795:         LinearLayout card = box();
+ 796:         card.addView(title("📦 宝箱"));
+ 797:         card.addView(sub("闪闪发光的箱子。打开可获得 " + gold + " 金币。"));
+ 798:         body.addView(card);
+ 799: 
+ 800:         LinearLayout acts = box();
+ 801:         acts.addView(bigBtn("打开 · 拿 " + gold + " 金币", C_TEAL, () -> {
+ 802:             // 判定在这里：点下去才知道箱子里是不是有东西在等你
+ 803:             if (data.rollMimic(rnd)) {
+ 804:                 startMimicFight(gold);
+ 805:                 return;
+ 806:             }
+ 807:             store.addGold(gold);
+ 808:             flashThen("📦 获得 " + gold + " 金币", this::advanceAfterNode);
+ 809:         }));
+ 810:         acts.addView(smallBtn("不打开，直接前进", this::advanceAfterNode));
+ 811:         body.addView(acts);
+ 812:     }
+ 813: 
+ 814:     /**
+ 815:      * 宝箱怪战。
+ 816:      *
+ 817:      * 奖励用「这场战斗该给的金币」而不是开箱的 gold —— 打了一场怪，
+ 818:      * 收益应该按战斗算（和普通战斗同档），否则宝箱怪战会比普通战斗
+ 819:      * 更亏，玩家会觉得被骗了还被罚。
+ 820:      *
+ 821:      * pendingChestGold 记下宝箱原本的金额，打赢后按两者取高，
+ 822:      * 保证「开了箱子还打赢了」永远不亏。
+ 823:      */
+ 824:     private void startMimicFight(int chestGold) {
+ 825:         GameData.Enemy e = data.enemyById("mimic");
+ 826:         if (e == null) {   // 数据缺失时退回普通开箱，不给玩家卡死
+ 827:             store.addGold(chestGold);
+ 828:             flashThen("📦 获得 " + chestGold + " 金币", this::advanceAfterNode);
+ 829:             return;
+ 830:         }
+ 831:         pendingChestGold = chestGold;
+ 832:         startBattle(e);
+ 833:         if (battleView == null) return;
+ 834:         battleView.setMimicFight(true);
+ 835:         // 宝箱怪战败：不掉整局，只砍半生命上限，然后继续前进。
+ 836:         battleView.setOnDefeatSoft(() -> {
+ 837:             pendingChestGold = -1;
+ 838:             clearFightNode();
+ 839:             store.clearBattleNode();
+ 840:             endBattle();
+ 841:             advanceStep();
+ 842:             renderMap();
+ 843:         });
+ 844:     }
+ 845: 
+ 846:     /** 宝箱怪战里那个宝箱原本值多少金币。-1 表示不是宝箱怪战。 */
+ 847:     private int pendingChestGold = -1;
+ 848: 
+ 849:     /** 显示一句结果，等玩家点继续。 */
+ 850:     private void flashThen(String msg, Runnable next) {
+ 851:         body.removeAllViews();
+ 852:         updateHead();
+ 853:         LinearLayout card = box();
+ 854:         card.addView(title(msg));
+ 855:         body.addView(card);
+ 856:         body.addView(bigBtn("继续", C_PURPLE, next));
+ 857:     }
+ 858: 
+ 859:     /** 非战斗节点处理完，推进到下一步。 */
+ 860:     private void advanceAfterNode() {
+ 861:         advanceStep();
+ 862:         renderMap();
+ 863:     }
+ 864: 
+ 865:     /**
+ 866:      * 当前正在打的节点（row/col）。-1 表示没有进行中的战斗。
+ 867:      *
+ 868:      * 存在的理由：Win 之后 advanceStep() 会把 store 的 curRow 推到下一层，
+ 869:      * 但只有玩家点「继续」才会真的推进。如果进程在中间被杀（返回桌面、
+ 870:      * 切后台被系统回收），重进时 store 已经在下一层了 —— 上一场看起来
+ 871:      * 「自动过关」，玩家白拿了一个节点。
+ 872:      * 记下开战时的位置，重进时若发现战斗没了又没点过继续，就把位置退回去。
+ 873:      */
+ 874:     private int fightRow = -1;
+ 875:     private int fightCol = -1;
+ 876: 
+ 877:     public void setFightNode(int row, int col) { fightRow = row; fightCol = col; }
+ 878: 
+ 879:     /** 是否正处在没打完的战斗里。用于拦截系统返回键。 */
+ 880:     public boolean inBattle() { return battleView != null; }
+ 881:     public int getFightRow() { return fightRow; }
+ 882:     public int getFightCol() { return fightCol; }
+ 883:     public void clearFightNode() { fightRow = -1; fightCol = -1; }
+ 884: 
+ 885:     private void startBattle(GameData.Enemy e) {
+ 886:         body.removeAllViews();
+ 887:         if (battleView != null) { removeView(battleView); battleView = null; }
+ 888:         // 战斗时整块替换掉地图滚动区，否则两者抢高度、战斗界面被压扁
+ 889:         if (scroller != null) scroller.setVisibility(View.GONE);
+ 890:         battleView = new GBattleView(getContext(), store);
+ 891:         battleView.setOnFinish(this::advanceAfterBattle);
+ 892:         battleView.setLayoutParams(new LinearLayout.LayoutParams(
+ 893:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+ 894:         addView(battleView);
+ 895:         battleView.start(e);
+ 896:     }
+ 897: 
+ 898:     /**
+ 899:      * 一场战斗结束后推进地图。
+ 900:      *
+ 901:      * 这里修的是两个老 bug：
+ 902:      *   1. 原来是 raiseFloor(store.layer()) —— 参数就是自己，恒等于 0，
+ 903:      *      于是 bestFloor 永远是 0、顶栏永远显示 Lv.1。
+ 904:      *   2. 原来只做 node+1，没有任何翻层逻辑。node 走到路线最后一个节点后，
+ 905:      *      routeCard 只给 i == curNode 的节点绑定点击，而 i 最大就是 len-1，
+ 906:      *      于是节点越界、地图上一个能点的格子都没有 —— 玩家被卡死在层末。
+ 907:      */
+ 908:     private void advanceAfterBattle() {
+ 909:         // 宝箱怪打赢了：把开箱该拿的金币补上（战斗本身另有一份金币奖励，
+ 910:         // 见 GBattleView.showEnd）。两个都给，才对得起「开了箱子还打了一场」。
+ 911:         if (pendingChestGold > 0) {
+ 912:             store.addGold(pendingChestGold);
+ 913:             pendingChestGold = -1;
+ 914:         }
+ 915:         clearFightNode();        // 玩家确认过了，这一格才算真正走完
+ 916:         store.clearBattleNode();
+ 917:         advanceStep();
+ 918:         endBattle();
+ 919:     }
+ 920: 
+ 921:     /**
+ 922:      * 推进到地图上的下一步。
+ 923:      *
+ 924:      * 分叉地图没有「路线长度」概念了 —— 玩家站在 (row,col)，下一步是他
+ 925:      * 在那个节点上选的。但战斗结束后玩家还没选，所以流程是：
+ 926:      *   打完 → row+1（先落到下一层），下一层具体哪个格子等他点。
+ 927:      *
+ 928:      * 这里只负责「层数往上走 + 刷新 Lv. + 到底了翻新地图」；
+ 929:      * 具体站在下一层的哪一格，由玩家点哪个可达节点决定（enterNode 里 setPos）。
+ 930:      */
+ 931:     private void advanceStep() {
+ 932:         GameData.RouteMap map = loadOrMakeMap();
+ 933:         if (map == null) { renderMap(); return; }
+ 934: 
+ 935:         int row = store.curRow();
+ 936:         int nextRow = row + 1;
+ 937: 
+ 938:         if (nextRow >= map.rows()) {
+ 939:             // 走到底了：进新一层，整张地图重抽
+ 940:             store.setLayer(store.layer() + 1);
+ 941:             GameData.RouteMap nm = GameData.makeMap(rnd);
+ 942:             store.setMap(mapToRaw(nm));
+ 943:             store.setVisitedClear();
+ 944:             store.markVisited(0, 0);
+ 945:             store.setPos(0, -1);   // 新一层同样从岔路口开始
+ 946:         } else {
+ 947:             // 还没到底：位置先落在这一层，等玩家点可达格。
+ 948:             // 用 -1 表示"在层间过渡，尚未选定格子"。
+ 949:             store.setPos(nextRow, -1);
+ 950:         }
+ 951:         // 原来传 store.layer() —— 参数就是自己，bestFloor 永远停在 0。
+ 952:         // 现在 bestFloor 记录真实到达过的最高层（floorIndex 口径）。
+ 953:         store.raiseFloor(store.floorIndex());
+ 954: 
+ 955:         // 往下一层 = 变强一级。不显示 Lv. 数字，但变化本身要让玩家知道，
+ 956:         // 否则「越爬越强」这件事在界面上完全不可见。
+ 957:         // 提升封顶后就不再刷提示，免得每层都弹一句废话。
+ 958:         int eff = Math.min(store.floorIndex(), GBattle.LEVEL_BONUS_CAP);
+ 959:         if (eff >= 2) {
+ 960:             String extra = (eff == 2 || eff == 5) ? "，能量上限 +1" : "";
+ 961:             toast("⚡ 你变强了：伤害 +" + ((eff - 1) * 8) + "%" + extra);
+ 962:         }
+ 963:     }
+ 964: 
+ 965:     // ── 控件 ─────────────────────────────────────────────
+ 966: 
+ 967:     private void toast(String s) {
+ 968:         android.widget.Toast.makeText(getContext(), s,
+ 969:                 android.widget.Toast.LENGTH_SHORT).show();
+ 970:     }
+ 971: 
+ 972:     private LinearLayout box() {
+ 973:         LinearLayout b = new LinearLayout(getContext());
+ 974:         b.setOrientation(VERTICAL);
+ 975:         b.setBackground(round(C_BG2, 14, C_LINE));
+ 976:         b.setPadding(dp(14), dp(13), dp(14), dp(13));
+ 977:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 978:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 979:         lp.bottomMargin = dp(11);
+ 980:         b.setLayoutParams(lp);
+ 981:         return b;
+ 982:     }
+ 983: 
+ 984:     private TextView title(String s) {
+ 985:         TextView t = tv(s, 15.5f, C_FG);
+ 986:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 987:         return t;
+ 988:     }
+ 989: 
+ 990:     private TextView sub(String s) {
+ 991:         TextView t = tv(s, 12, C_FG3);
+ 992:         t.setPadding(0, dp(4), 0, 0);
+ 993:         return t;
+ 994:     }
+ 995: 
+ 996:     private TextView bigBtn(String s, int color, Runnable r) {
+ 997:         TextView t = tv(s, 15, 0xFFFFFFFF);
+ 998:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 999:         t.setGravity(Gravity.CENTER);
+1000:         t.setPadding(0, dp(12), 0, dp(12));
+1001:         GradientDrawable g = new GradientDrawable();
+1002:         g.setCornerRadius(dp(11));
+1003:         g.setColor(color);
+1004:         t.setBackground(g);
+1005:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1006:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1007:         lp.topMargin = dp(10);
+1008:         t.setLayoutParams(lp);
+1009:         t.setOnClickListener(v -> r.run());
+1010:         return t;
+1011:     }
+1012: 
+1013:     private TextView smallBtn(String s, Runnable r) {
+1014:         TextView t = tv(s, 12.5f, C_FG2);
+1015:         t.setGravity(Gravity.CENTER);
+1016:         t.setPadding(0, dp(10), 0, dp(10));
+1017:         GradientDrawable g = new GradientDrawable();
+1018:         g.setCornerRadius(dp(9));
+1019:         g.setColor(C_BG3);
+1020:         t.setBackground(g);
+1021:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1022:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1023:         lp.topMargin = dp(8);
+1024:         t.setLayoutParams(lp);
+1025:         t.setOnClickListener(v -> r.run());
+1026:         return t;
+1027:     }
+1028: 
+1029:     private GradientDrawable round(int fill, float radius, int stroke) {
+1030:         GradientDrawable g = new GradientDrawable();
+1031:         g.setColor(fill);
+1032:         g.setCornerRadius(radius);
+1033:         if (stroke != 0) g.setStroke(dp(1), stroke);
+1034:         return g;
+1035:     }
+1036: 
+1037:     private TextView tv(String s, float size, int color) {
+1038:         TextView t = new TextView(getContext());
+1039:         t.setText(s);
+1040:         t.setTextSize(size);
+1041:         t.setTextColor(color);
+1042:         return t;
+1043:     }
+1044: 
+1045:     private int dp(float v) {
+1046:         return Math.round(TypedValue.applyDimension(
+1047:                 TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+1048:     }
+1049: 
+1050:     private static int parseInt(String s) {
+1051:         try { return Integer.parseInt(s); } catch (Exception e) { return 0; }
+1052:     }
+1053: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GQuiz.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import java.util.ArrayList;
+   4: import java.util.Collections;
+   5: import java.util.HashSet;
+   6: import java.util.List;
+   7: import java.util.Random;
+   8: import java.util.Set;
+   9: 
+  10: /**
+  11:  * 出题器 —— 敌人出题，玩家从**手牌里**挑出对应的那张牌作答。
+  12:  *
+  13:  * ── 为什么要改成这个方向 ────────────────────────────────────
+  14:  *
+  15:  * 旧版是「玩家先挑牌，系统考这张牌」。这样有两个致命问题：
+  16:  *
+  17:  *   1. 挑牌本来就是选自己认识的，等于玩家自己给自己出题 ——
+  18:  *      只挑会的，永远不会被考到不会的，学习目的直接失效。
+  19:  *   2. 中译英时手牌一直显示在屏幕上，而正确答案就是刚点的那张牌上的英文，
+  20:  *      答案明写在牌面上。
+  21:  *
+  22:  * 现在改成：**敌人出题，答案藏在 5 张手牌里**。
+  23:  *   题面用中文释义或英文例句，玩家必须读懂题面才能从手里挑对那张牌。
+  24:  *   挑错就把那张牌弃掉 —— 牌是你自己选的，认错了代价自己承担。
+  25:  *
+  26:  * ── 四种题型 ────────────────────────────────────────────────
+  27:  *
+  28:  *   0 释义题   题面「abandon 放弃，抛弃」→ 选 abandon（答案就在手牌里）
+  29:  *   1 例句题   题面「The captain gave the order to ___ ship.」→ 选 abandon
+  30:  *   2 英文听辨 题面给中文释义 → 选对应的英文牌
+  31:  *   3 释义辨析 题面给中文释义 + 四个英文词作选项，其中只有一个是手牌里的正确项
+  32:  *
+  33:  * 所有题型的共同铁律：**正确答案必须是手牌里的一张**，
+  34:  * 且干扰项一律不能是手牌里的其它牌（否则会出现两个正确答案）。
+  35:  */
+  36: public class GQuiz {
+  37: 
+  38:     public static class Q {
+  39:         public String prompt = "";
+  40:         public String sub = "";
+  41:         public String[] options;
+  42:         public int answer = -1;
+  43:         public String explain = "";
+  44:         public GCard card;          // 正确答案那张牌
+  45:         public int mode;            // 题型，见类注释
+  46:         /** 仅 mode==4（僻义过载）有效：本次考的是第几个义项。 */
+  47:         public int senseIndex = -1;
+  48:     }
+  49: 
+  50:     private final GameData G;
+  51:     private final Random rnd;
+  52: 
+  53:     public GQuiz(GameData g, Random r) { G = g; rnd = r; }
+  54: 
+  55:     /** 释义净化：只取第一个义项，避免选项框被撑成三行、以及同义串重复。 */
+  56:     private static String firstSense(String cn) {
+  57:         if (cn == null) return "";
+  58:         String s = cn.trim();
+  59:         for (String sep : new String[]{"；", ";", "，", ",", "、", "/"}) {
+  60:             int i = s.indexOf(sep);
+  61:             if (i > 0) s = s.substring(0, i).trim();
+  62:         }
+  63:         return s;
+  64:     }
+  65: 
+  66:     private static String key(String cn) { return firstSense(cn); }
+  67: 
+  68:     /**
+  69:      * 把一个义项串按内部分号拆成单义。
+  70:      *
+  71:      * vocab.json 的 senses[i].cn 常常塞了多个近义说法：
+  72:      *   charge → {"v", "收费;控告;掌管;电荷"}
+  73:      * 整个当成一个选项，玩家看到「收费;控告;掌管;电荷」这种四合一，
+  74:      * 既不像选项也不像释义。拆开后才是一道正常的四选一。
+  75:      */
+  76:     private static List<String> splitSenses(String cn) {
+  77:         List<String> out = new ArrayList<>();
+  78:         if (cn == null) return out;
+  79:         for (String part : cn.split("[;；]")) {
+  80:             String t = part.trim();
+  81:             if (!t.isEmpty()) out.add(t);
+  82:         }
+  83:         return out;
+  84:     }
+  85: 
+  86:     /**
+  87:      * 义项归一化：只留中文骨架，用于判断两个选项是不是「同一个意思」。
+  88:      *
+  89:      * 为什么必须做这件事：中文释义里同一概念常有多种写法，
+  90:      *   · 词性前缀（v. / n.）不该影响判重；
+  91:      *   · 「部⻔ / 部门」（⻔ 是兼容区汉字）看起来不同其实是同一个词；
+  92:      *   · 「收费 / 费用」「进步 / 进展」这种，玩家选哪个都说得通。
+  93:      * 只要两条释义归一化后互相包含，就当同一个意思处理 ——
+  94:      * 绝不能把两个都能算对的选项同时摆出来。
+  95:      */
+  96:     private static String senseKey(String t) {
+  97:         if (t == null) return "";
+  98:         String s = t.trim().toLowerCase();
+  99:         // 去掉词性前缀，如 "v." "n." "adj."
+ 100:         s = s.replaceAll("^[a-z]+\\.\\s*", "");
+ 101:         // 去掉标点、空白、括号、省略号
+ 102:         s = s.replaceAll("[\\s（）()【】\\[\\]、，,。.·…\\-—/]", "");
+ 103:         return s;
+ 104:     }
+ 105: 
+ 106:     /** 供判题层调用：两个释义是否算同一个意思。 */
+ 107:     public static boolean sameSensePublic(String a, String b) {
+ 108:         return sameSense(a, b);
+ 109:     }
+ 110: 
+ 111:     /** 两个释义是否算「同一个意思」（归一化后相等或互相包含）。 */
+ 112:     private static boolean sameSense(String a, String b) {
+ 113:         String x = senseKey(a), y = senseKey(b);
+ 114:         if (x.isEmpty() || y.isEmpty()) return false;
+ 115:         if (x.equals(y)) return true;
+ 116:         // 互相包含也要算：'收费' vs '费用' 不算，但 '信用' vs '信用贷款' 算
+ 117:         return x.contains(y) || y.contains(x);
+ 118:     }
+ 119: 
+ 120:     /** 一组释义里是否已经存在和 t 同义的项。 */
+ 121:     private static boolean hasSame(List<String> list, String t) {
+ 122:         for (String s : list) if (sameSense(s, t)) return true;
+ 123:         return false;
+ 124:     }
+ 125: 
+ 126:     /**
+ 127:      * 供界面取「首个义项」。
+ 128:      *
+ 129:      * 战斗里怪物答对后的台词要用它（把词义复述一遍）。
+ 130:      * 不去 GBattleView 里复制一份切分逻辑 —— 两处各写一份，
+ 131:      * 迟早会一边改了另一边没改，题目和台词对不上。
+ 132:      */
+ 133:     public static String firstSensePublic(String cn) { return firstSense(cn); }
+ 134: 
+ 135:     /** 随机挑一种题型。例句题要求有例句，所以在出题时再校验。 */
+ 136:     public int randomMode() {
+ 137:         int r = rnd.nextInt(100);
+ 138:         if (r < 40) return 0;   // 释义题
+ 139:         if (r < 70) return 1;   // 例句题
+ 140:         if (r < 85) return 2;   // 中译英
+ 141:         return 3;               // 释义辨析
+ 142:     }
+ 143: 
+ 144:     /**
+ 145:      * 敌人出题。
+ 146:      *
+ 147:      * @param hand 玩家当前手牌 —— 正确答案必须从这里面挑
+ 148:      * @param mode 期望题型；凑不出就自动退化
+ 149:      * @return 题目；手牌全是用不了的牌时返回 null（界面据此给出提示）
+ 150:      */
+ 151:     public Q make(List<GCard> hand, int mode) {
+ 152:         if (hand == null || hand.isEmpty()) return null;
+ 153: 
+ 154:         // 只拿「词牌」出题。副词是机制牌，考释义没有意义。
+ 155:         List<GCard> pool = new ArrayList<>();
+ 156:         for (GCard c : hand) {
+ 157:             if (c != null && c.isWord() && !firstSense(c.cn).isEmpty()) pool.add(c);
+ 158:         }
+ 159:         if (pool.isEmpty()) return null;
+ 160: 
+ 161:         GCard target = pool.get(rnd.nextInt(pool.size()));
+ 162: 
+ 163:         switch (mode) {
+ 164:             case 1:  {
+ 165:                 // 例句题最容易撞（两个词都能填空），撞了就换一个能答的目标，
+ 166:                 // 都不行再退到释义题。
+ 167:                 List<GCard> shuffled = new ArrayList<>(pool);
+ 168:                 Collections.shuffle(shuffled, rnd);
+ 169:                 for (GCard cand : shuffled) {
+ 170:                     Q q = exampleQ(cand, hand);
+ 171:                     if (q != null) return q;
+ 172:                 }
+ 173:                 break;
+ 174:             }
+ 175:             case 2:  { Q q = cnToEnQ(target);   if (q != null) return q; break; }
+ 176:             case 3:  { Q q = discriminateQ(target, hand); if (q != null) return q; break; }
+ 177:             default: break;
+ 178:         }
+ 179:         return meaningQ(target);
+ 180:     }
+ 181: 
+ 182:     // ── 题型 0：释义题 ────────────────────────────────────
+ 183:     // 题面是「英文 + 中文释义」，但**把英文挖掉**，只给中文，让玩家从手里找。
+ 184:     // 若直接把英文写在题面上，答案就等于写在题面上了。
+ 185:     private Q meaningQ(GCard c) {
+ 186:         Q q = new Q();
+ 187:         q.card = c;
+ 188:         q.mode = 0;
+ 189:         q.prompt = firstSense(c.cn);
+ 190:         q.sub = "选出对应的单词" + (c.pos.isEmpty() ? "" : "（" + c.pos + "）");
+ 191:         q.explain = c.en + " = " + c.cn;
+ 192:         return q;   // 选项由界面用「手牌本身」渲染，不用 options
+ 193:     }
+ 194: 
+ 195:     // ── 题型 1：例句题 ────────────────────────────────────
+ 196:     // 例句里把这个词挖成 ___，玩家读句子猜该填哪个。这题真正考理解。
+ 197:     //
+ 198:     // ⚠ 必须检查「手牌里有没有第二个词也能填这个空」。实测 0.9% 的句子会撞：
+ 199:     //    目标 ignore，但手牌里的 time 也能匹配进 "in a short period of time" ——
+ 200:     //    这时玩家选 time 逻辑上完全正确，却被判答错并弃牌，是冤枉的。
+ 201:     //    撞了就放弃这道题，由上层换题型。
+ 202:     private Q exampleQ(GCard c, List<GCard> hand) {
+ 203:         String ex = c.ex == null ? "" : c.ex.trim();
+ 204:         if (ex.isEmpty()) return null;
+ 205: 
+ 206:         String blanked = blankOut(ex, c.en);
+ 207:         if (blanked == null) return null;    // 例句里找不到这个词，出不了题
+ 208: 
+ 209:         for (GCard o : hand) {
+ 210:             if (o == null || o == c || !o.isWord()) continue;
+ 211:             if (blankOut(ex, o.en) != null) return null;   // 有第二个正确答案
+ 212:         }
+ 213: 
+ 214:         Q q = new Q();
+ 215:         q.card = c;
+ 216:         q.mode = 1;
+ 217:         q.prompt = blanked;
+ 218:         q.sub = "选出能填进空格的单词";
+ 219:         q.explain = c.en + " = " + c.cn + "　例：" + ex;
+ 220:         return q;
+ 221:     }
+ 222: 
+ 223:     /**
+ 224:      * 把例句里的目标词替换成 ___。
+ 225:      *
+ 226:      * words.json 的例句有 79% 含本词，但词形会变形（abandon → abandoned、
+ 227:      * ability → abilities），所以按「原形 → 去 e 加 ing/ed → 词干」的顺序试，
+ 228:      * 找不到就返回 null 让上层换题型 —— 宁可换题，也不能出一个空格对不上
+ 229:      * 任何手牌词的错题（那样玩家永远答不对）。
+ 230:      */
+ 231:     private static String blankOut(String ex, String word) {
+ 232:         if (word == null || word.isEmpty()) return null;
+ 233:         String lower = ex.toLowerCase();
+ 234:         String w = word.toLowerCase();
+ 235: 
+ 236:         // 候选词形，长的先试，避免 "able" 先把 "abilities" 切错
+ 237:         List<String> forms = new ArrayList<>();
+ 238:         forms.add(w);
+ 239:         forms.add(w + "s");
+ 240:         forms.add(w + "es");
+ 241:         forms.add(w + "ed");
+ 242:         forms.add(w + "d");
+ 243:         forms.add(w + "ing");
+ 244:         if (w.endsWith("e")) forms.add(w.substring(0, w.length() - 1) + "ing");
+ 245:         if (w.endsWith("y")) forms.add(w.substring(0, w.length() - 1) + "ies");
+ 246:         if (w.length() > 3) forms.add(w.substring(0, w.length() - 1));   // 粗略词干
+ 247: 
+ 248:         String best = null;
+ 249:         for (String f : forms) {
+ 250:             // 整词匹配：两侧不能是字母，否则 "a" 会命中 "ability" 里的 a
+ 251:             int i = indexWord(lower, f);
+ 252:             if (i >= 0) { best = f; break; }
+ 253:         }
+ 254:         if (best == null) return null;
+ 255: 
+ 256:         int i = indexWord(lower, best);
+ 257:         if (i < 0) return null;
+ 258:         return ex.substring(0, i) + "＿＿＿" + ex.substring(i + best.length());
+ 259:     }
+ 260: 
+ 261:     /** 找整词出现位置：前后都不是字母。 */
+ 262:     private static int indexWord(String hay, String needle) {
+ 263:         int from = 0;
+ 264:         while (true) {
+ 265:             int i = hay.indexOf(needle, from);
+ 266:             if (i < 0) return -1;
+ 267:             boolean leftOk = i == 0 || !Character.isLetter(hay.charAt(i - 1));
+ 268:             int end = i + needle.length();
+ 269:             boolean rightOk = end >= hay.length() || !Character.isLetter(hay.charAt(end));
+ 270:             if (leftOk && rightOk) return i;
+ 271:             from = i + 1;
+ 272:         }
+ 273:     }
+ 274: 
+ 275:     // ── 题型 2：中译英 ────────────────────────────────────
+ 276:     // 与题型 0 的区别：题面额外给出词性，且干扰项是「其他手牌」——
+ 277:     // 玩家必须在几张牌之间比对，而不是一眼认出。
+ 278:     private Q cnToEnQ(GCard c) {
+ 279:         Q q = new Q();
+ 280:         q.card = c;
+ 281:         q.mode = 2;
+ 282:         q.prompt = firstSense(c.cn);
+ 283:         q.sub = (c.pos.isEmpty() ? "" : c.pos + "　") + "从手牌中选出正确的词";
+ 284:         q.explain = c.cn + " = " + c.en;
+ 285:         return q;
+ 286:     }
+ 287: 
+ 288:     // ── 题型 4：僻义过载 ──────────────────────────────────
+ 289:     /**
+ 290:      * 只用「第二个及以后的义项」出题。
+ 291:      *
+ 292:      * 为什么单独一个入口：常规出题永远考 firstSense（最常见义），
+ 293:      * 玩家背熟了主义就能一路平推，而考试里真正拉分的是熟词僻义
+ 294:      * （charge 考「充电」不考「收费」）。过载模式把 senses[1..] 拿出来考，
+ 295:      * 答对了给 2.2 倍真实伤害，等于用「敢赌僻义」换输出。
+ 296:      *
+ 297:      * @param c 目标牌，必须是 canOverload() 的牌
+ 298:      * @return 题目；这张牌没有僻义时返回 null
+ 299:      */
+ 300:     public Q makeOverload(GCard c) {
+ 301:         if (c == null || !c.canOverload()) return null;
+ 302: 
+ 303:         // 从第 1 个义项开始随机挑（senses[0] 是常见义，不能用来过载）
+ 304:         List<Integer> idx = new ArrayList<>();
+ 305:         for (int i = 1; i < c.senseCount(); i++) {
+ 306:             if (!c.senseText(i).isEmpty()) idx.add(i);
+ 307:         }
+ 308:         if (idx.isEmpty()) return null;
+ 309: 
+ 310:         // 常见义用来当「已知条件」写进题面，所以第 0 个义项的所有说法
+ 311:         // 都要先收集起来：被判为「和常见义同义」的义项不能拿来出题 ——
+ 312:         // 那样所谓的「生僻义」其实就是常见义的另一种写法，
+ 313:         // 玩家答常见义被判错，纯属题目自身有歧义。
+ 314:         List<String> common0 = splitSenses(c.senseText(0));
+ 315: 
+ 316:         // 只剩与常见义都不同义的义项才能当正确答案
+ 317:         List<Integer> pickable = new ArrayList<>();
+ 318:         for (int i : idx) {
+ 319:             boolean dup = false;
+ 320:             for (String t : splitSenses(c.senseText(i))) {
+ 321:                 if (hasSame(common0, t)) { dup = true; break; }
+ 322:             }
+ 323:             if (!dup) pickable.add(i);
+ 324:         }
+ 325:         if (pickable.isEmpty()) return null;   // 没有真正的僻义，别出这题
+ 326:         int pick = pickable.get(rnd.nextInt(pickable.size()));
+ 327: 
+ 328:         // 正确答案按内部分号拆开，只取一个说法。
+ 329:         // 原来整个 "收费;控告;掌管;电荷" 当成一个选项，玩家看到的是
+ 330:         // 四合一的长串，既不像选项也不像释义；拆开才是正常四选一。
+ 331:         List<String> rightList = splitSenses(c.senseText(pick));
+ 332:         if (rightList.isEmpty()) return null;
+ 333:         String right = rightList.get(rnd.nextInt(rightList.size()));
+ 334: 
+ 335:         // ── 题面必须交代「常见义是什么」 ──────────────────────
+ 336:         //
+ 337:         // 原来的题面只有英文单词，然后让玩家「选出生僻义」。
+ 338:         // 问题是四选一里同时摆着常见义和僻义，两者都是这个词的正确翻译，
+ 339:         // 玩家没有任何依据知道该排除哪个 —— 选常见义被判错，
+ 340:         // 感觉就是「明明对了却算我错」。
+ 341:         //
+ 342:         // 现在把常见义直接写在题面上（「charge（常见义：收费）」），
+ 343:         // 问题变成「除了收费，它还有什么意思」，排除项一目了然，
+ 344:         // 选常见义才算真的答错，而不是被暗算。
+ 345:         List<String> commonList = common0;
+ 346: 
+ 347:         // ── 题型必须是「给词选义」，不能是「给义选牌」 ──
+ 348:         //
+ 349:         // 手牌上已经印着「◆僻义2」，玩家一眼就知道哪张有多义项。
+ 350:         // 如果题面给中文、让玩家点手牌，那张带 ◆ 的牌本身就是答案提示 ——
+ 351:         // 等于答案摆在台面上。所以这里反过来出题：正面给单词，
+ 352:         // 四个释义里挑它的僻义。手牌标记这时不再是提示，因为
+ 353:         // 玩家已经知道考的就是这张，要选的是「哪个意思」。
+ 354:         Q q = new Q();
+ 355:         q.card = c;
+ 356:         q.mode = 4;
+ 357:         q.senseIndex = pick;
+ 358:         // 题面带上常见义，把「选哪个」变成可判定的问题。
+ 359:         // 只给单词时，常见义和僻义都是这个词的正确翻译，
+ 360:         // 玩家选常见义被判错会觉得冤枉 —— 题目本身有歧义。
+ 361:         // 写成「charge ─ 常见义：收费」之后，要排除什么一目了然。
+ 362:         q.prompt = c.en + (commonList.isEmpty()
+ 363:                 ? "" : "　─ 常见义：" + String.join(" / ", commonList));
+ 364: 
+ 365:         // ── 干扰项构造：绝不能出现「两个都对」的选项 ──────────
+ 366:         //
+ 367:         // 原来的写法是把这张牌其它义项直接塞进来当干扰，包括常见义。
+ 368:         // 但它没做语义去重，于是出现你遇到的这个问题：
+ 369:         //   · 义项内部带分号（"收费;控告;掌管"）时，
+ 370:         //     和正确答案里的某个说法重了，"收费" 和 "收费;控告" 同时出现；
+ 371:         //   · 「进步 / 进展」「费用 / 收费」这种近义写法，
+ 372:         //     玩家选哪个都说得通，却只有一个被判对 —— 冤枉。
+ 373:         //   · 更要命的是 q.answer = opts.indexOf(right)：
+ 374:         //     一旦有两个字面相同的选项，indexOf 只返回第一个下标，
+ 375:         //     玩家点第二个同样的文字，判题时下标不等，直接算错。
+ 376:         //
+ 377:         // 所以这里每加一个干扰项都必须先过 sameSense：同义的直接丢弃。
+ 378:         List<String> opts = new ArrayList<>();
+ 379:         opts.add(right);
+ 380: 
+ 381:         // ① 这张牌自己的其它义项优先当干扰 —— 最有意义：玩家必须分清
+ 382:         //    「收费 / 看待 / 掌管」到底哪一个是这次问的那个。
+ 383:         //    但与常见义同义的项要跳过：常见义已经写在题面上，
+ 384:         //    再把它摆成选项等于白送一个错误答案，还挤掉了有效干扰项。
+ 385:         for (int i = 0; i < c.senseCount() && opts.size() < 4; i++) {
+ 386:             if (i == pick) continue;
+ 387:             for (String t : splitSenses(c.senseText(i))) {
+ 388:                 if (opts.size() >= 4) break;
+ 389:                 if (!hasSame(opts, t) && !hasSame(commonList, t)) opts.add(t);
+ 390:             }
+ 391:         }
+ 392:         // ② 还不够，从词库补其它词的义项。同样逐个过同义过滤。
+ 393:         if (opts.size() < 4) {
+ 394:             String wantPos = c.sensePos(pick);
+ 395:             List<String> sameP = new ArrayList<>();   // 同词性优先
+ 396:             List<String> anyP  = new ArrayList<>();    // 兜底
+ 397:             for (GCard o : G.words) {
+ 398:                 if (o == null || o == c) continue;
+ 399:                 for (int i = 0; i < o.senseCount(); i++) {
+ 400:                     for (String t : splitSenses(o.senseText(i))) {
+ 401:                         if (hasSame(opts, t)) continue;
+ 402:                         // 常见义已经写在题面上，不能又被当成干扰项摆回来。
+ 403:                         // 漏这一条时出现过：equivalent 的常见义「相等的」
+ 404:                         // 拆出的「相等」从别的词补进选项里，等于白送一个错项。
+ 405:                         if (hasSame(commonList, t)) continue;
+ 406:                         if (!wantPos.isEmpty() && o.sensePos(i).equals(wantPos)) {
+ 407:                             if (!hasSame(sameP, t)) sameP.add(t);
+ 408:                         } else if (!hasSame(anyP, t)) {
+ 409:                             anyP.add(t);
+ 410:                         }
+ 411:                     }
+ 412:                 }
+ 413:             }
+ 414:             java.util.Collections.shuffle(sameP, rnd);
+ 415:             java.util.Collections.shuffle(anyP, rnd);
+ 416:             for (String t : sameP) { if (opts.size() >= 4) break;
+ 417:                                      if (!hasSame(opts, t)) opts.add(t); }
+ 418:             for (String t : anyP)  { if (opts.size() >= 4) break;
+ 419:                                      if (!hasSame(opts, t)) opts.add(t); }
+ 420:         }
+ 421:         // 凑不齐四个就别出这道题 —— 两个选项的选择题纯属送分，
+ 422:         // 而且在只有 2 项时「答对」的运气成分太高。
+ 423:         if (opts.size() < 3) return null;
+ 424: 
+ 425:         java.util.Collections.shuffle(opts, rnd);
+ 426: 
+ 427:         q.options = opts.toArray(new String[0]);
+ 428:         // 用 indexOf 定位正确答案：right 一定在 opts 里，且 hasSame 保证
+ 429:         // 不会有两个同义项共存，所以这里拿到的下标是唯一的。
+ 430:         q.answer = opts.indexOf(right);
+ 431:         if (q.answer < 0) return null;
+ 432:         String sp = c.sensePos(pick);
+ 433:         q.sub = (sp.isEmpty() ? "" : sp + "　")
+ 434:                 + "选出常见义之外的义项 · 答对 2.2 倍真实伤害，答错自伤 "
+ 435:                 + GBattle.overloadWrongSelfDamage;
+ 436:         q.explain = c.en + " = " + right
+ 437:                 + (c.cn.isEmpty() ? "" : "（常见义：" + c.cn + "）");
+ 438:         return q;
+ 439:     }
+ 440: 
+ 441:     // ── 题型 3：释义辨析 ──────────────────────────────────
+ 442:     // 给 4 个英文词作选项：1 个是手牌里的正确项，其余从词典里取不同义的。
+ 443:     // 屏幕上同时显示手牌，所以干扰项绝不能是手里别的牌，否则两个都「对」。
+ 444:     private Q discriminateQ(GCard c, List<GCard> hand) {
+ 445:         Set<String> handEn = new HashSet<>();
+ 446:         for (GCard h : hand) {
+ 447:             if (h != null && h.en != null) handEn.add(h.en.toLowerCase());
+ 448:         }
+ 449: 
+ 450:         List<String> opts = new ArrayList<>();
+ 451:         opts.add(c.en);
+ 452: 
+ 453:         List<GCard> cand = new ArrayList<>();
+ 454:         for (GCard o : G.words) {
+ 455:             if (o.id.equals(c.id)) continue;
+ 456:             if (handEn.contains(o.en.toLowerCase())) continue;   // 不能是别的牌
+ 457:             if (key(o.cn).equals(key(c.cn))) continue;           // 同义不作干扰
+ 458:             if (!o.pos.equals(c.pos)) continue;                  // 词性不同白送分
+ 459:             cand.add(o);
+ 460:         }
+ 461:         Collections.shuffle(cand, rnd);
+ 462:         for (GCard o : cand) {
+ 463:             if (opts.size() >= 4) break;
+ 464:             if (!opts.contains(o.en)) opts.add(o.en);
+ 465:         }
+ 466:         if (opts.size() < 2) return null;
+ 467: 
+ 468:         Collections.shuffle(opts, rnd);
+ 469: 
+ 470:         Q q = new Q();
+ 471:         q.card = c;
+ 472:         q.mode = 3;
+ 473:         q.prompt = firstSense(c.cn);
+ 474:         q.sub = "选出正确的单词";
+ 475:         q.options = opts.toArray(new String[0]);
+ 476:         q.answer = opts.indexOf(c.en);
+ 477:         q.explain = c.cn + " = " + c.en;
+ 478:         return q;
+ 479:     }
+ 480: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GSprite.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.content.Context;
+   4: import android.graphics.Bitmap;
+   5: import android.graphics.BitmapFactory;
+   6: import android.graphics.Canvas;
+   7: import android.graphics.Paint;
+   8: import android.graphics.Rect;
+   9: import android.os.Handler;
+  10: import android.os.Looper;
+  11: import android.view.View;
+  12: 
+  13: import org.json.JSONObject;
+  14: 
+  15: import java.io.InputStream;
+  16: import java.util.HashMap;
+  17: import java.util.Map;
+  18: 
+  19: /**
+  20:  * 精灵动画视图。直接读 assets/game/sprites/ 下的图集与 JSON。
+  21:  *
+  22:  * 图集规格（由 pack_sprites_final.py 生成）：
+  23:  *   · 每帧 128×128，按 cols 排布，第 i 帧位置 = (i%cols, i/cols)
+  24:  *   · actions 里给每个动作的起始帧、帧数与 durationMs
+  25:  *
+  26:  * 为什么不逐帧存 PNG：810 张碎图在 APK 里会产生大量 zip 条目，
+  27:  * 安装时解压开销大；打成图集后只有 12 个文件，2.35MB。
+  28:  *
+  29:  * 这一版修掉三个实际 bug：
+  30:  * 1. 非循环动作播完卡在最后一帧，不回待机 —— 表现就是怪物打一下之后
+  31:  *    再也不动，看起来"只有一个待机动作"。
+  32:  * 2. 帧间隔写死 12fps，JSON 里的 durationMs 完全没用上。attack 设计
+  33:  *    900ms、hurt 设计 420ms，实播都是 83ms/帧，节奏全错。
+  34:  * 3. tick() 里 actionCount<=1 就不启动定时器，单帧动作永远停住。
+  35:  */
+  36: public class GSprite extends View {
+  37: 
+  38:     private static final Map<String, Bitmap> CACHE = new HashMap<>();
+  39:     /** sprites.json 解析结果缓存。原实现每次 load 都重新读文件并解析，
+  40:      *  进战斗时会有一次明显卡顿（JSON 5.5KB + 两次 IO）。 */
+  41:     private static org.json.JSONObject INDEX;
+  42: 
+  43:     private Bitmap sheet;
+  44:     private int canvas = 128, cols = 10, frame = 0, total = 0;
+  45:     private JSONObject actions;
+  46: 
+  47:     /** 当前动作。 */
+  48:     private String action = "idle";
+  49:     /** 非循环动作播完后回到哪个动作；null 表示停在最后一帧（死亡）。 */
+  50:     private String fallback = "idle";
+  51:     private int actionStart = 0, actionCount = 0;
+  52:     private boolean loop = true;
+  53:     /** 当前动作每帧停留毫秒，由 durationMs / count 算出。 */
+  54:     private long frameMs = 1000L / 12;
+  55: 
+  56:     private final Handler h = new Handler(Looper.getMainLooper());
+  57:     private final Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG | Paint.ANTI_ALIAS_FLAG);
+  58:     private final Rect srcR = new Rect(), dstR = new Rect();
+  59: 
+  60:     public GSprite(Context c) {
+  61:         super(c);
+  62:         setLayerType(LAYER_TYPE_HARDWARE, null);
+  63:     }
+  64: 
+  65:     /** 加载一个角色。name 是 sprites.json 里的键（hero / mists …）。 */
+  66:     public void load(String name) {
+  67:         if (name == null || name.isEmpty()) return;
+  68:         String key = "sheet:" + name;
+  69:         Bitmap b = CACHE.get(key);
+  70:         if (b == null) {
+  71:             try {
+  72:                 InputStream is = getContext().getAssets()
+  73:                         .open("game/sprites/" + name + ".png");
+  74:                 b = BitmapFactory.decodeStream(is, null, opts());
+  75:                 is.close();
+  76:                 if (b != null) CACHE.put(key, b);
+  77:             } catch (Exception e) {
+  78:                 android.util.Log.e("GSprite", "读不到 " + name, e);
+  79:             }
+  80:         }
+  81:         sheet = b;
+  82: 
+  83:         try {
+  84:             if (INDEX == null) {
+  85:                 INDEX = new JSONObject(GameData.read(getContext(), "game/sprites/sprites.json"));
+  86:             }
+  87:             JSONObject one = INDEX.optJSONObject(name);
+  88:             if (one != null) {
+  89:                 canvas = one.optInt("canvas", 128);
+  90:                 cols = one.optInt("cols", 10);
+  91:                 total = one.optInt("total", 1);
+  92:                 actions = one.optJSONObject("actions");
+  93:             }
+  94:         } catch (Exception e) {
+  95:             android.util.Log.e("GSprite", "sprites.json 读取失败", e);
+  96:         }
+  97:         play("idle");
+  98:     }
+  99: 
+ 100:     private static BitmapFactory.Options opts() {
+ 101:         BitmapFactory.Options o = new BitmapFactory.Options();
+ 102:         // 图集本身已经缩到 128，不需要再降采样；用低内存格式
+ 103:         o.inPreferredConfig = Bitmap.Config.ARGB_8888;
+ 104:         o.inScaled = false;
+ 105:         return o;
+ 106:     }
+ 107: 
+ 108:     /** 播放某个动作，播完自动回待机。 */
+ 109:     public void play(String a) {
+ 110:         play(a, "idle");
+ 111:     }
+ 112: 
+ 113:     /**
+ 114:      * 播放某个动作，非循环动作播完后回到 ret。
+ 115:      *
+ 116:      * ret 传 null 表示停在最后一帧 —— 死亡就这么用，不回到待机。
+ 117:      */
+ 118:     public void play(String a, String ret) {
+ 119:         if (a == null || a.isEmpty()) a = "idle";
+ 120:         action = a;
+ 121:         fallback = ret;
+ 122:         frame = 0;
+ 123:         actionStart = 0;
+ 124:         actionCount = 0;
+ 125:         loop = true;
+ 126:         frameMs = 1000L / 12;
+ 127: 
+ 128:         if (actions != null) {
+ 129:             JSONObject o = actions.optJSONObject(a);
+ 130:             if (o != null) {
+ 131:                 actionStart = o.optInt("start", 0);
+ 132:                 actionCount = o.optInt("count", 0);
+ 133:                 loop = o.optBoolean("loop", false);
+ 134:                 int dur = o.optInt("durationMs", 0);
+ 135:                 // durationMs 是整段动作的总时长，不是单帧。
+ 136:                 if (dur > 0 && actionCount > 0) {
+ 137:                     frameMs = Math.max(16, dur / actionCount);
+ 138:                 }
+ 139:             }
+ 140:         }
+ 141:         if (actionCount <= 0) { actionStart = 0; actionCount = total; }
+ 142: 
+ 143:         invalidate();
+ 144:         restartTicker();
+ 145:     }
+ 146: 
+ 147:     /** 当前动作名。 */
+ 148:     public String current() { return action; }
+ 149: 
+ 150:     /** 是否正在播非循环动作（攻击/受伤/施法/死亡）。 */
+ 151:     public boolean busy() { return !loop; }
+ 152: 
+ 153:     private final Runnable ticker = new Runnable() {
+ 154:         @Override public void run() {
+ 155:             if (actionCount <= 0) return;
+ 156:             frame++;
+ 157:             if (frame >= actionCount) {
+ 158:                 if (loop) {
+ 159:                     frame = 0;
+ 160:                 } else {
+ 161:                     frame = actionCount - 1;
+ 162:                     invalidate();
+ 163:                     // 播完回待机；fallback 为 null 就停在最后一帧（死亡）
+ 164:                     if (fallback != null && !fallback.equals(action)) {
+ 165:                         play(fallback);
+ 166:                     }
+ 167:                     return;
+ 168:                 }
+ 169:             }
+ 170:             invalidate();
+ 171:             h.postDelayed(this, frameMs);
+ 172:         }
+ 173:     };
+ 174: 
+ 175:     private void restartTicker() {
+ 176:         h.removeCallbacks(ticker);
+ 177:         if (actionCount > 1) h.postDelayed(ticker, frameMs);
+ 178:     }
+ 179: 
+ 180:     @Override
+ 181:     protected void onDraw(Canvas cv) {
+ 182:         if (sheet == null || sheet.isRecycled()) return;
+ 183:         int idx = actionStart + frame;
+ 184:         if (idx < 0) idx = 0;
+ 185:         if (idx >= total && total > 0) idx = total - 1;
+ 186: 
+ 187:         int sx = (idx % cols) * canvas;
+ 188:         int sy = (idx / cols) * canvas;
+ 189:         srcR.set(sx, sy, sx + canvas, sy + canvas);
+ 190: 
+ 191:         // 等比铺满控件，底边对齐
+ 192:         int vw = getWidth(), vh = getHeight();
+ 193:         if (vw <= 0 || vh <= 0) return;
+ 194:         float s = Math.min(vw / (float) canvas, vh / (float) canvas);
+ 195:         int w = Math.round(canvas * s), hh = Math.round(canvas * s);
+ 196:         int left = (vw - w) / 2;
+ 197:         int top = vh - hh;
+ 198:         dstR.set(left, top, left + w, top + hh);
+ 199: 
+ 200:         cv.drawBitmap(sheet, srcR, dstR, paint);
+ 201:     }
+ 202: 
+ 203:     @Override
+ 204:     protected void onDetachedFromWindow() {
+ 205:         super.onDetachedFromWindow();
+ 206:         h.removeCallbacks(ticker);
+ 207:     }
+ 208: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\GStore.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.content.Context;
+   4: import android.content.SharedPreferences;
+   5: 
+   6: import org.json.JSONArray;
+   7: import org.json.JSONObject;
+   8: 
+   9: /**
+  10:  * 游戏存档。用 SharedPreferences 存一份 JSON，和项目其它模块一致。
+  11:  *
+  12:  * 存的东西刻意很少：金币、已获得的特殊词、打的第几层、累计答对/答错。
+  13:  * 牌库不存 —— 每场战斗现抽，避免存档膨胀，也让「这局拿到什么牌」
+  14:  * 变成纯粹的临场决策而不是读档优化。
+  15:  */
+  16: public class GStore {
+  17: 
+  18:     private static final String SP = "zsb_game";
+  19:     private final SharedPreferences sp;
+  20: 
+  21:     public GStore(Context c) {
+  22:         sp = c.getSharedPreferences(SP, Context.MODE_PRIVATE);
+  23:     }
+  24: 
+  25:     // ── 基础数值 ─────────────────────────────────────────
+  26: 
+  27:     public int gold()      { return sp.getInt("gold", 0); }
+  28:     public void addGold(int g) { sp.edit().putInt("gold", Math.max(0, gold() + g)).apply(); }
+  29:     public boolean spend(int g) {
+  30:         if (gold() < g) return false;
+  31:         sp.edit().putInt("gold", gold() - g).apply();
+  32:         return true;
+  33:     }
+  34: 
+  35:     public int layer()     { return sp.getInt("layer", 0); }
+  36:     public void setLayer(int l) { sp.edit().putInt("layer", l).apply(); }
+  37: 
+  38:     /**
+  39:      * 当前这一局的「爬塔层数」，从 1 开始，**唯一权威口径**。
+  40:      *
+  41:      * 原来有三套互相打架的层数，界面上根本说不清「第 3 层」是什么意思：
+  42:      *   · layer()       —— 第几张地图（走完一整张才 +1，长期是 0）
+  43:      *   · curRow()      —— 地图内第几行（0 起）
+  44:      *   · bestFloor()   —— 历史最高层（跨局不清，和这一局的进度无关）
+  45:      *
+  46:      * 而且敌人强度、商店价格用的是 layer()，顶栏 Lv. 用的是 bestFloor()，
+  47:      * 地图标题用的是 curRow() —— 三者经常给出不同的数字。
+  48:      *
+  49:      * 现在统一成一个：floorIndex = layer * 一张图的行数 + curRow。
+  50:      * 战斗强度、商店价格、排行上报、界面显示全部只认这个值。
+  51:      */
+  52:     public int floorIndex() {
+  53:         int rows = 6;
+  54:         try {
+  55:             String raw = mapRaw();
+  56:             if (raw != null && !raw.isEmpty()) rows = Math.max(1, raw.split("\\|", -1).length);
+  57:         } catch (Exception ignored) { }
+  58:         return layer() * rows + Math.max(0, curRow());
+  59:     }
+  60: 
+  61:     /** 给人看的层数：从 1 开始。 */
+  62:     public int floorNo() { return floorIndex() + 1; }
+  63: 
+  64:     // ── 排行榜主动上传 ────────────────────────────────────
+  65:     //
+  66:     // 玩家随时可以点「上传进度」，服务端 /v1/game/snapshot 是
+  67:     // **每人每天一条、覆盖更新**语义，所以重复上传不会累加 ——
+  68:     // 这正是能做成「随时更新」的前提。
+  69:     //
+  70:     // 每次上传都生成新 rev：
+  71:     //   · 老 rev 重传会被服务端判 dup 静默丢弃（防断网重放）；
+  72:     //   · 新 rev 才会真正覆盖成最新进度。
+  73:     // 所以这里不能缓存 rev —— 缓存了就等于「只能传第一次的数值」。
+  74: 
+  75:     /** 生成一个本次上传专用的幂等键。每次调用都是新的。 */
+  76:     public String newUploadRev() {
+  77:         return Long.toString(System.currentTimeMillis(), 36)
+  78:                 + "-" + Integer.toString((int) (Math.random() * (1 << 20)), 36);
+  79:     }
+  80: 
+  81:     /** 上次成功上传的时间戳，0 表示从未传过。仅用于界面提示。 */
+  82:     public long lastUploadAt() { return sp.getLong("lastUploadAt", 0L); }
+  83:     public void markUploaded() {
+  84:         sp.edit().putLong("lastUploadAt", System.currentTimeMillis()).apply();
+  85:     }
+  86: 
+  87:     public int right()     { return sp.getInt("right", 0); }
+  88:     public int wrong()     { return sp.getInt("wrong", 0); }
+  89:     public void markRight() { sp.edit().putInt("right", right() + 1).apply(); }
+  90:     public void markWrong() { sp.edit().putInt("wrong", wrong() + 1).apply(); }
+  91: 
+  92:     public int bestFloor() { return sp.getInt("bestFloor", 0); }
+  93:     public void raiseFloor(int f) {
+  94:         if (f > bestFloor()) sp.edit().putInt("bestFloor", f).apply();
+  95:     }
+  96: 
+  97:     // ── 特殊词 ───────────────────────────────────────────
+  98: 
+  99:     public JSONArray specials() {
+ 100:         try { return new JSONArray(sp.getString("specials", "[]")); }
+ 101:         catch (Exception e) { return new JSONArray(); }
+ 102:     }
+ 103: 
+ 104:     public boolean hasSpecial(String id) {
+ 105:         JSONArray a = specials();
+ 106:         for (int i = 0; i < a.length(); i++) {
+ 107:             if (id.equals(a.optString(i))) return true;
+ 108:         }
+ 109:         return false;
+ 110:     }
+ 111: 
+ 112:     public void addSpecial(String id) {
+ 113:         if (hasSpecial(id)) return;
+ 114:         JSONArray a = specials();
+ 115:         a.put(id);
+ 116:         sp.edit().putString("specials", a.toString()).apply();
+ 117:     }
+ 118: 
+ 119:     public int specialCount() { return specials().length(); }
+ 120: 
+ 121:     // ── 一次性道具 ───────────────────────────────────────
+ 122:     //
+ 123:     // 存在 "items" 这个 key 里，元素是 cards.json 的 item id。
+ 124:     // 和 specials 分开：特殊词是永久被动、买了就不删；
+ 125:     // 道具用掉必须删掉，否则下次进战斗还能再按一次。
+ 126: 
+ 127:     public org.json.JSONArray items() {
+ 128:         try { return new org.json.JSONArray(sp.getString("items", "[]")); }
+ 129:         catch (org.json.JSONException e) { return new org.json.JSONArray(); }
+ 130:     }
+ 131: 
+ 132:     public boolean hasItem(String id) {
+ 133:         if (id == null) return false;
+ 134:         org.json.JSONArray a = items();
+ 135:         for (int i = 0; i < a.length(); i++) {
+ 136:             if (id.equals(a.optString(i))) return true;
+ 137:         }
+ 138:         return false;
+ 139:     }
+ 140: 
+ 141:     public void addItem(String id) {
+ 142:         if (id == null || id.isEmpty() || hasItem(id)) return;
+ 143:         org.json.JSONArray a = items();
+ 144:         a.put(id);
+ 145:         sp.edit().putString("items", a.toString()).apply();
+ 146:     }
+ 147: 
+ 148:     /** 用掉一个道具：从列表里删掉第一个匹配项。 */
+ 149:     public void removeItem(String id) {
+ 150:         if (id == null) return;
+ 151:         org.json.JSONArray a = items();
+ 152:         org.json.JSONArray out = new org.json.JSONArray();
+ 153:         boolean dropped = false;
+ 154:         for (int i = 0; i < a.length(); i++) {
+ 155:             String v = a.optString(i);
+ 156:             if (!dropped && id.equals(v)) { dropped = true; continue; }
+ 157:             out.put(v);
+ 158:         }
+ 159:         if (dropped) sp.edit().putString("items", out.toString()).apply();
+ 160:     }
+ 161: 
+ 162:     public int itemCount() { return items().length(); }
+ 163: 
+ 164:     // ── 地图进度 ─────────────────────────────────────────
+ 165: 
+ 166:     /**
+ 167:      * 地图存档。
+ 168:      *
+ 169:      * 存的是一个二维数组：map[row][col] = 节点类型（int）。
+ 170:      * 每层节点数不固定（1~3），所以是变长二维数组，不是矩形。
+ 171:      * 邻接关系（谁能走到谁）由 GameData.Map 现场重建 —— 它只依赖每层节点数，
+ 172:      * 存下来会让存档体积翻几倍，而且一旦和类型不同步就是灾难。
+ 173:      *
+ 174:      * done 用一串 "row,col" 记录，已走过的格子画成暗色。
+ 175:      */
+ 176:     public String mapRaw() { return sp.getString("map", ""); }
+ 177: 
+ 178:     public void setMap(String s) { sp.edit().putString("map", s).apply(); }
+ 179: 
+ 180:     /** 玩家当前站在哪一层哪一列。走到哪由玩家上一步的选择决定。 */
+ 181:     public int curRow() { return sp.getInt("curRow", 0); }
+ 182:     public int curCol() { return sp.getInt("curCol", 0); }
+ 183: 
+ 184:     public void setPos(int row, int col) {
+ 185:         sp.edit().putInt("curRow", row).putInt("curCol", col).apply();
+ 186:     }
+ 187: 
+ 188:     /** 已走过的格子，"row,col" 逗号分隔。 */
+ 189:     public String visitedRaw() { return sp.getString("visited", ""); }
+ 190: 
+ 191:     public void markVisited(int row, int col) {
+ 192:         String v = visitedRaw();
+ 193:         String key = row + "," + col;
+ 194:         if (v.isEmpty()) { setVisited(key); return; }
+ 195:         String[] parts = v.split(";");
+ 196:         for (String s : parts) {
+ 197:             if (s.equals(key)) return;
+ 198:         }
+ 199:         setVisited(v + ";" + key);
+ 200:     }
+ 201: 
+ 202:     private void setVisited(String v) { sp.edit().putString("visited", v).apply(); }
+ 203: 
+ 204:     public boolean isVisited(int row, int col) {
+ 205:         String v = visitedRaw();
+ 206:         if (v.isEmpty()) return false;
+ 207:         String key = row + "," + col;
+ 208:         for (String s : v.split(";")) {
+ 209:             if (s.equals(key)) return true;
+ 210:         }
+ 211:         return false;
+ 212:     }
+ 213: 
+ 214:     /**
+ 215:      * 当前生命。跨战斗保留 —— 篝火和商店治疗才有意义。
+ 216:      * 0 或负数表示「还没开始过」，战斗里按满血处理。
+ 217:      */
+ 218:     public int curHp() { return sp.getInt("curHp", -1); }
+ 219: 
+ 220:     public void setCurHp(int hp) { sp.edit().putInt("curHp", Math.max(0, hp)).apply(); }
+ 221: 
+ 222:     /**
+ 223:      * 当前生命上限。0 表示「还没改过」，按 GameData.playerHp 处理。
+ 224:      *
+ 225:      * 以前生命上限是个常量（读 cards.json 的 playerHp），只有「非凡的」
+ 226:      * 特殊词会在单场战斗里临时 +20。宝箱怪战败要把上限**永久减半**，
+ 227:      * 这个损失必须跨战斗、跨进程保留，否则减半只影响当前那一场，
+ 228:      * 相当于没罚。所以上限要跟着存档走。
+ 229:      */
+ 230:     public int curMaxHp() { return sp.getInt("curMaxHp", 0); }
+ 231: 
+ 232:     public void setCurMaxHp(int hp) { sp.edit().putInt("curMaxHp", Math.max(1, hp)).apply(); }
+ 233: 
+ 234:     /** 清空已访问记录（新地图 / 新一层时用）。 */
+ 235:     public void setVisitedClear() { sp.edit().putString("visited", "").apply(); }
+ 236: 
+ 237:     public void unmarkVisited(int row, int col) {
+ 238:         String v = visitedRaw();
+ 239:         if (v.isEmpty()) return;
+ 240:         String key = row + "," + col;
+ 241:         StringBuilder sb = new StringBuilder();
+ 242:         for (String s : v.split(";")) {
+ 243:             if (s.isEmpty() || s.equals(key)) continue;
+ 244:             if (sb.length() > 0) sb.append(';');
+ 245:             sb.append(s);
+ 246:         }
+ 247:         setVisited(sb.toString());
+ 248:     }
+ 249: 
+ 250:     /**
+ 251:      * 进行中的战斗节点 "row,col"；空串 = 没有进行中的战斗。
+ 252:      *
+ 253:      * 为什么必须落盘：战斗状态（血量/手牌/回合）只活在 GBattleView 实例里，
+ 254:      * 进程一被系统回收就没了。而 store.setPos() 早就在 enterNode() 里
+ 255:      * 把玩家挪到了这一格并标成已访问 —— 重进时程序看到的是「这一格走过了、
+ 256:      * 人站在下一层」，于是上一场怪被当成打赢了，玩家白拿一个节点（自动过关）。
+ 257:      * 把这个节点写进 SharedPreferences，重进时就能把位置退回去重新打。
+ 258:      */
+ 259:     public String battleNode() { return sp.getString("battleNode", ""); }
+ 260: 
+ 261:     public void setBattleNode(int row, int col) {
+ 262:         sp.edit().putString("battleNode", row + "," + col).apply();
+ 263:     }
+ 264: 
+ 265:     public void clearBattleNode() { sp.edit().putString("battleNode", "").apply(); }
+ 266: 
+ 267:     /**
+ 268:      * 篝火 / 商店买的治疗量。
+ 269:      *
+ 270:      * 生命值存在 GBattle 实例里，每场战斗开始时才创建 —— 所以非战斗节点
+ 271:      * 的加血没法直接改「当前血量」，只能挂账，等下一场战斗开始时兑现。
+ 272:      * 兑现后清零，避免一路攒着变成白嫖满血。
+ 273:      */
+ 274:     public int campHeal() { return sp.getInt("campHeal", 0); }
+ 275: 
+ 276:     public void addCampHeal(int h) {
+ 277:         sp.edit().putInt("campHeal", Math.max(0, campHeal() + h)).apply();
+ 278:     }
+ 279: 
+ 280:     public void clearCampHeal() { sp.edit().putInt("campHeal", 0).apply(); }
+ 281: 
+ 282:     /** 兼容旧存档：旧版存的是 4 条平行路线，清掉即可（新版重新生成地图）。 */
+ 283:     public JSONArray route() {
+ 284:         try { return new JSONArray(sp.getString("route", "[]")); }
+ 285:         catch (Exception e) { return new JSONArray(); }
+ 286:     }
+ 287: 
+ 288:     public void setRoute(JSONArray a) {
+ 289:         sp.edit().putString("route", a.toString()).apply();
+ 290:     }
+ 291: 
+ 292:     // ── 每日战绩（排行榜用）───────────────────────────────
+ 293:     // 为什么要在 SharedPreferences 里再做一份按天分桶，而不是复用 Store 的
+ 294:     // eng_round 表：那是学习进度库，进度码导出/导入会把整库打包带走。
+ 295:     // 游戏战绩是「玩」的数据，混进去会让进度包多背一份无关内容，
+ 296:     // 也会让「换手机导入进度」把别人的游戏记录一起搬过去。
+ 297:     // 所以只在本机 zsb_game 命名空间里另存两份 JSON。
+ 298: 
+ 299:     /** 待上报的战斗记录。上限 200 条，超了丢最老的（宁可漏报也不让存档无限长）。 */
+ 300:     private static final String K_PENDING = "g_pending";
+ 301:     /** 按天聚合的本地战绩，保留最近 14 天。 */
+ 302:     private static final String K_DAILY = "g_daily";
+ 303:     private static final int PENDING_CAP = 200;
+ 304:     private static final int DAILY_KEEP = 14;
+ 305: 
+ 306:     public static class Battle {
+ 307:         public String day = "";
+ 308:         public int floor;
+ 309:         public int node;
+ 310:         public boolean win;
+ 311:         public int gold;
+ 312:         public int right;
+ 313:         public int wrong;
+ 314:         public long ms;
+ 315:         public long started;
+ 316:         public String rev = "";
+ 317:         public int total() { return right + wrong; }
+ 318:     }
+ 319: 
+ 320:     private JSONArray arr(String key) {
+ 321:         try { return new JSONArray(sp.getString(key, "[]")); }
+ 322:         catch (Exception e) { return new JSONArray(); }
+ 323:     }
+ 324: 
+ 325:     private JSONObject obj(String key) {
+ 326:         try { return new JSONObject(sp.getString(key, "{}")); }
+ 327:         catch (Exception e) { return new JSONObject(); }
+ 328:     }
+ 329: 
+ 330:     /**
+ 331:      * 记一场战斗。
+ 332:      *
+ 333:      * 幂等：同一个 rev 重复调用不会记两次（rev 由调用方在战斗开始时生成一次，
+ 334:      * 补传时一直用同一个，所以「传成功了但没收到响应、用户又重进」不会算两场）。
+ 335:      */
+ 336:     public void addBattle(Battle b) {
+ 337:         if (b == null || b.rev == null || b.rev.isEmpty()) return;
+ 338: 
+ 339:         // 1) 待上报队列
+ 340:         JSONArray pend = arr(K_PENDING);
+ 341:         for (int i = 0; i < pend.length(); i++) {
+ 342:             JSONObject o = pend.optJSONObject(i);
+ 343:             if (o != null && b.rev.equals(o.optString("rev"))) return;   // 已经记过
+ 344:         }
+ 345:         JSONArray next = new JSONArray();
+ 346:         int from = Math.max(0, pend.length() - (PENDING_CAP - 1));
+ 347:         for (int i = from; i < pend.length(); i++) next.put(pend.opt(i));
+ 348:         try {
+ 349:             JSONObject o = new JSONObject();
+ 350:             o.put("day", b.day);
+ 351:             o.put("floor", b.floor);
+ 352:             o.put("node", b.node);
+ 353:             o.put("win", b.win ? 1 : 0);
+ 354:             o.put("gold", b.gold);
+ 355:             o.put("r", b.right);
+ 356:             o.put("w", b.wrong);
+ 357:             o.put("ms", b.ms);
+ 358:             o.put("started", b.started);
+ 359:             o.put("rev", b.rev);
+ 360:             next.put(o);
+ 361:         } catch (Exception e) {
+ 362:             return;
+ 363:         }
+ 364:         sp.edit().putString(K_PENDING, next.toString()).apply();
+ 365: 
+ 366:         // 2) 当日聚合桶
+ 367:         JSONObject daily = obj(K_DAILY);
+ 368:         JSONObject d = daily.optJSONObject(b.day);
+ 369:         if (d == null) d = new JSONObject();
+ 370:         try {
+ 371:             d.put("nodes", d.optInt("nodes", 0) + (b.win ? 1 : 0));
+ 372:             d.put("gold", d.optInt("gold", 0) + Math.max(0, b.gold));
+ 373:             d.put("right", d.optInt("right", 0) + b.right);
+ 374:             d.put("wrong", d.optInt("wrong", 0) + b.wrong);
+ 375:             d.put("battles", d.optInt("battles", 0) + 1);
+ 376:             if (b.floor > d.optInt("floor", 0)) d.put("floor", b.floor);
+ 377:             daily.put(b.day, d);
+ 378:             // 只留最近 14 天：按 key 排序后裁掉最老的
+ 379:             if (daily.length() > DAILY_KEEP) {
+ 380:                 java.util.List<String> keys = new java.util.ArrayList<>();
+ 381:                 java.util.Iterator<String> it = daily.keys();
+ 382:                 while (it.hasNext()) keys.add(it.next());
+ 383:                 java.util.Collections.sort(keys);
+ 384:                 int drop = keys.size() - DAILY_KEEP;
+ 385:                 for (int i = 0; i < drop; i++) daily.remove(keys.get(i));
+ 386:             }
+ 387:         } catch (Exception e) {
+ 388:             return;
+ 389:         }
+ 390:         sp.edit().putString(K_DAILY, daily.toString()).apply();
+ 391:     }
+ 392: 
+ 393:     /** 还没传上去的战斗。 */
+ 394:     public JSONArray pendingBattles() { return arr(K_PENDING); }
+ 395: 
+ 396:     /** 标记已上传。按 rev 定位。 */
+ 397:     public void markBattleSent(String rev) {
+ 398:         if (rev == null || rev.isEmpty()) return;
+ 399:         JSONArray pend = arr(K_PENDING);
+ 400:         JSONArray next = new JSONArray();
+ 401:         for (int i = 0; i < pend.length(); i++) {
+ 402:             JSONObject o = pend.optJSONObject(i);
+ 403:             if (o == null) continue;
+ 404:             if (!rev.equals(o.optString("rev"))) next.put(o);
+ 405:         }
+ 406:         sp.edit().putString(K_PENDING, next.toString()).apply();
+ 407:     }
+ 408: 
+ 409:     /** 某一天的本地汇总（离线也能显示的「我的今日战绩」）。 */
+ 410:     public JSONObject dayStat(String day) {
+ 411:         JSONObject d = obj(K_DAILY).optJSONObject(day);
+ 412:         return d == null ? new JSONObject() : d;
+ 413:     }
+ 414: 
+ 415:     // ── 重置 ─────────────────────────────────────────────
+ 416: 
+ 417:     public void resetRun() {
+ 418:         sp.edit()
+ 419:           .putInt("gold", 0)
+ 420:           .putInt("layer", 0)
+ 421:           .putInt("node", 0)
+ 422:           .putString("route", "[]")
+ 423:           .putString("specials", "[]")
+ 424:           .putString("items", "[]")
+ 425:           .putString("battleNode", "")   // 重置这一局就不能留下"打到一半"的记录
+ 426:           .putString("visited", "")
+ 427:           .remove("curRow")
+ 428:           .remove("curCol")
+ 429:           .remove("curMaxHp")     // 新的一局，生命上限回到初始值
+ 430:           .remove("curHp")
+ 431:           .apply();
+ 432:     }
+ 433: 
+ 434:     public void resetAll() { sp.edit().clear().apply(); }
+ 435: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\Linalg.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: /**
+   4:  * 2×2 矩阵的几何。纯 Java，不碰 Android。
+   5:  *
+   6:  * 为什么单独一个类：
+   7:  *   特征值/特征向量这类东西，界面上"画出来像不像"和"算得对不对"是两回事。
+   8:  *   画错一条轴看起来只是"位置有点怪"，学生不会发现自己在学错东西。
+   9:  *   所以计算全部放在这里，电脑上逐条断言 M·v = λv，界面只负责画。
+  10:  *
+  11:  * Gemini 给的公式方向是对的（迹 T、行列式 D、判别式 T²−4D、求根公式），
+  12:  * 但它的 computeEigen 有两个真问题，这里都改了（见 eigen() 注释）。
+  13:  */
+  14: public class Linalg {
+  15: 
+  16:     public static final double EPS = 1e-9;
+  17: 
+  18:     // ── 矩阵 ──────────────────────────────────────────────
+  19:     /** [[a, b], [c, d]]。列向量约定：e1=(a,c)，e2=(b,d)。 */
+  20:     public static class Mat {
+  21:         public double a, b, c, d;
+  22: 
+  23:         public Mat(double a, double b, double c, double d) {
+  24:             this.a = a; this.b = b; this.c = c; this.d = d;
+  25:         }
+  26: 
+  27:         public Mat copy() { return new Mat(a, b, c, d); }
+  28: 
+  29:         @Override public String toString() {
+  30:             return "[" + fmt(a) + ", " + fmt(b) + "; " + fmt(c) + ", " + fmt(d) + "]";
+  31:         }
+  32:     }
+  33: 
+  34:     /** 二维向量。 */
+  35:     public static class Vec {
+  36:         public double x, y;
+  37: 
+  38:         public Vec(double x, double y) { this.x = x; this.y = y; }
+  39: 
+  40:         public double len() { return Math.hypot(x, y); }
+  41: 
+  42:         public Vec norm() {
+  43:             double l = len();
+  44:             return l < EPS ? new Vec(0, 0) : new Vec(x / l, y / l);
+  45:         }
+  46: 
+  47:         @Override public String toString() { return "(" + fmt(x) + ", " + fmt(y) + ")"; }
+  48:     }
+  49: 
+  50:     /** 特征信息。 */
+  51:     public static class Eigen {
+  52:         public boolean hasReal;      // 有无实特征值
+  53:         public double trace, det, disc;
+  54:         public double l1, l2;        // 实特征值（无实根时是实部）
+  55:         public double imag;          // 无实根时的虚部
+  56:         public Vec v1, v2;           // 单位特征向量（可能为 null）
+  57:         public boolean scalar;       // 单位阵的倍数：整个平面都是特征方向
+  58:     }
+  59: 
+  60:     // ── 基本量 ────────────────────────────────────────────
+  61:     public static double trace(Mat m) { return m.a + m.d; }
+  62: 
+  63:     public static double det(Mat m) { return m.a * m.d - m.b * m.c; }
+  64: 
+  65:     /** 判别式 T² − 4D。>0 两个不同实根，=0 重根，<0 一对共轭复根。 */
+  66:     public static double disc(Mat m) {
+  67:         double t = trace(m);
+  68:         return t * t - 4 * det(m);
+  69:     }
+  70: 
+  71:     /** 秩：0 / 1 / 2。 */
+  72:     public static int rank(Mat m) {
+  73:         // 先看是不是零矩阵
+  74:         if (Math.abs(m.a) < 1e-9 && Math.abs(m.b) < 1e-9
+  75:                 && Math.abs(m.c) < 1e-9 && Math.abs(m.d) < 1e-9) return 0;
+  76:         // 行列式非零 → 满秩
+  77:         if (Math.abs(det(m)) > 1e-9) return 2;
+  78:         return 1;
+  79:     }
+  80: 
+  81:     /** 作用在点上。这是映射函数本身 —— 不用 Canvas 矩阵变形，就靠它。 */
+  82:     public static Vec apply(Mat m, double x, double y) {
+  83:         return new Vec(m.a * x + m.b * y, m.c * x + m.d * y);
+  84:     }
+  85: 
+  86:     /** 单位正方形的像的面积（带符号）。 */
+  87:     public static double signedArea(Mat m) { return det(m); }
+  88: 
+  89:     // ── 特征值 / 特征向量 ─────────────────────────────────
+  90:     /**
+  91:      * 2×2 特征分解，直接用求根公式，不需要 QR 迭代。
+  92:      *
+  93:      * Gemini 版本的两个问题，这里改掉：
+  94:      *  ① 它是用 eps=1e-5 判 disc<−eps 才认为"无实根"。判别式恰好为 0
+  95:      *    （重根，例如剪切矩阵）时它会走实根分支，但随后用
+  96:      *    |l1−l2|>1e-3 判断"要不要算第二个向量"，重根情况下第二个向量
+  97:      *    悄悄消失 —— 界面上看起来像"只有一个特征方向"，学生记错。
+  98:      *     这里改成显式区分三种情况（两不同实根 / 重根 / 复根）。
+  99:      *  ② 它的 getVec 在 (a−λ, b) 与 (λ−d, c) 都接近零时返回 null，
+ 100:      *    但没考虑"整个平面都是特征方向"（单位阵倍数）。此时任意向量
+ 101:      *    都是特征向量，正确做法是给出两条坐标轴而不是空手而归。
+ 102:      */
+ 103:     public static Eigen eigen(Mat m) {
+ 104:         Eigen e = new Eigen();
+ 105:         e.trace = trace(m);
+ 106:         e.det = det(m);
+ 107:         e.disc = disc(m);
+ 108: 
+ 109:         double t = e.trace;
+ 110:         double d = e.disc;
+ 111: 
+ 112:         // 整个平面都是特征方向：A = kI
+ 113:         if (Math.abs(m.b) < 1e-9 && Math.abs(m.c) < 1e-9
+ 114:                 && Math.abs(m.a - m.d) < 1e-9) {
+ 115:             e.hasReal = true;
+ 116:             e.scalar = true;
+ 117:             e.l1 = m.a;
+ 118:             e.l2 = m.a;
+ 119:             e.v1 = new Vec(1, 0);
+ 120:             e.v2 = new Vec(0, 1);
+ 121:             return e;
+ 122:         }
+ 123: 
+ 124:         if (d < -1e-9) {
+ 125:             // 一对共轭复根：没有实的不动直线（会把平面转起来）
+ 126:             e.hasReal = false;
+ 127:             e.l1 = t / 2;
+ 128:             e.l2 = t / 2;
+ 129:             e.imag = Math.sqrt(-d) / 2;
+ 130:             return e;
+ 131:         }
+ 132: 
+ 133:         e.hasReal = true;
+ 134:         double sq = Math.sqrt(Math.max(0, d));
+ 135:         e.l1 = (t + sq) / 2;
+ 136:         e.l2 = (t - sq) / 2;
+ 137: 
+ 138:         e.v1 = eigenVec(m, e.l1);
+ 139:         // 重根只看一个方向；两不同根才找第二个
+ 140:         if (sq > 1e-9) e.v2 = eigenVec(m, e.l2);
+ 141:         else e.v2 = null;
+ 142:         return e;
+ 143:     }
+ 144: 
+ 145:     /**
+ 146:      * 求 λ 对应的单位特征向量。
+ 147:      * 解 (A − λI)v = 0。取法向量 (b, λ−a) 或 (λ−d, c)，哪个不退化用哪个。
+ 148:      */
+ 149:     public static Vec eigenVec(Mat m, double lambda) {
+ 150:         double bx = m.b, by = lambda - m.a;
+ 151:         if (Math.hypot(bx, by) > 1e-9) return new Vec(bx, by).norm();
+ 152: 
+ 153:         double cx = lambda - m.d, cy = m.c;
+ 154:         if (Math.hypot(cx, cy) > 1e-9) return new Vec(cx, cy).norm();
+ 155: 
+ 156:         return null;
+ 157:     }
+ 158: 
+ 159:     /** 校验：M·v 是否等于 λ·v（给审计用，也让界面能自检）。 */
+ 160:     public static double residual(Mat m, Vec v, double lambda) {
+ 161:         Vec mv = apply(m, v.x, v.y);
+ 162:         return Math.hypot(mv.x - lambda * v.x, mv.y - lambda * v.y);
+ 163:     }
+ 164: 
+ 165:     // ── 几何描述 ──────────────────────────────────────────
+ 166:     /**
+ 167:      * 一句话讲清这个矩阵干了什么。
+ 168:      * 按 rank → 复根 → det 正负 → 一般，四层分。
+ 169:      */
+ 170:     public static String describe(Mat m) {
+ 171:         int r = rank(m);
+ 172:         double D = det(m);
+ 173:         Eigen e = eigen(m);
+ 174: 
+ 175:         if (r == 0) {
+ 176:             return "零矩阵：整个平面被压到原点，什么都剩不下。";
+ 177:         }
+ 178:         if (r == 1) {
+ 179:             return "行列式为 0：平面被压成一条直线，面积归零，"
+ 180:                     + "信息丢了（不可逆）。";
+ 181:         }
+ 182:         if (!e.hasReal) {
+ 183:             return String.format(
+ 184:                     "判别式 %.2f < 0：没有实数特征方向。"
+ 185:                     + "这个变换把平面「转」了一下，"
+ 186:                     + "每条直线都被拧走了，面积缩放 %.2f 倍。",
+ 187:                     e.disc, Math.abs(D));
+ 188:         }
+ 189:         if (e.scalar) {
+ 190:             return String.format(
+ 191:                     "这是一个「等比缩放」：所有方向都是特征方向，"
+ 192:                     + "每条向量都被拉长到 %.2f 倍，方向完全不变。", e.l1);
+ 193:         }
+ 194:         if (D < 0) {
+ 195:             return String.format(
+ 196:                     "行列式为 %.2f < 0：空间被「翻了个面」（镜像），"
+ 197:                     + "面积缩放 %.2f 倍。有 2 条不动直线"
+ 198:                     + "（一条上的向量反向，一条不变）。", D, Math.abs(D));
+ 199:         }
+ 200:         if (Math.abs(e.disc) < 1e-9) {
+ 201:             return String.format(
+ 202:                     "判别式 = 0（重根 λ = %.2f）：只有 1 条特征方向，"
+ 203:                     + "沿它不转向，其它方向都被拧过去。"
+ 204:                     + "面积缩放 %.2f 倍。典型的「剪切」。", e.l1, D);
+ 205:         }
+ 206:         return String.format(
+ 207:                 "行列式为 %.2f > 0，方向不变（没有翻转），"
+ 208:                 + "面积缩放 %.2f 倍。有 2 条特征方向："
+ 209:                 + "沿它们的方向不变，只被拉长 λ₁ = %.2f / λ₂ = %.2f 倍。",
+ 210:                 D, D, e.l1, e.l2);
+ 211:     }
+ 212: 
+ 213:     /** 给界面显示的特征值文字。 */
+ 214:     public static String eigenText(Mat m) {
+ 215:         Eigen e = eigen(m);
+ 216:         if (rank(m) == 0) return "—";
+ 217:         if (!e.hasReal) {
+ 218:             return String.format("%.2f ± %.2fi（复根）", e.l1, e.imag);
+ 219:         }
+ 220:         if (e.scalar) return String.format("%.2f（所有方向）", e.l1);
+ 221:         if (Math.abs(e.disc) < 1e-9) return String.format("%.2f（重根）", e.l1);
+ 222:         return String.format("%.2f, %.2f", e.l1, e.l2);
+ 223:     }
+ 224: 
+ 225:     // ── 网格线（供绘制，线段端点直接给屏幕无关的数学坐标）──
+ 226:     /**
+ 227:      * 变换后的网格线。返回 {x1,y1,x2,y2} 数组。
+ 228:      * 每条原网格线（x=k 或 y=k）在变换后仍是一条直线，端点取两端即可。
+ 229:      */
+ 230:     public static double[][] gridLines(Mat m, int range) {
+ 231:         int n = (range * 2 + 1) * 2;
+ 232:         double[][] out = new double[n][];
+ 233:         int k = 0;
+ 234:         for (int i = -range; i <= range; i++) {
+ 235:             // 原直线 x = i，y 从 -range 到 range
+ 236:             Vec p1 = apply(m, i, -range);
+ 237:             Vec p2 = apply(m, i, range);
+ 238:             out[k++] = new double[]{p1.x, p1.y, p2.x, p2.y};
+ 239:             // 原直线 y = i
+ 240:             Vec q1 = apply(m, -range, i);
+ 241:             Vec q2 = apply(m, range, i);
+ 242:             out[k++] = new double[]{q1.x, q1.y, q2.x, q2.y};
+ 243:         }
+ 244:         return out;
+ 245:     }
+ 246: 
+ 247:     /** 单位正方形的像（平行四边形的四个顶点）。 */
+ 248:     public static Vec[] unitSquare(Mat m) {
+ 249:         return new Vec[]{
+ 250:                 new Vec(0, 0),
+ 251:                 apply(m, 1, 0),
+ 252:                 apply(m, 1, 1),
+ 253:                 apply(m, 0, 1)
+ 254:         };
+ 255:     }
+ 256: 
+ 257:     // ── 动画：4 个参数线性插值 ────────────────────────────
+ 258:     public static Mat lerp(Mat from, Mat to, double t) {
+ 259:         double u = t < 0 ? 0 : (t > 1 ? 1 : t);
+ 260:         return new Mat(
+ 261:                 from.a + (to.a - from.a) * u,
+ 262:                 from.b + (to.b - from.b) * u,
+ 263:                 from.c + (to.c - from.c) * u,
+ 264:                 from.d + (to.d - from.d) * u);
+ 265:     }
+ 266: 
+ 267:     // ── 预设 ──────────────────────────────────────────────
+ 268:     public static final Mat[] PRESETS = {
+ 269:             new Mat(1.5, 0.5, 0.5, 1.0),   // 对称拉伸
+ 270:             new Mat(1, 0, 0, 1),           // 单位阵
+ 271:             new Mat(1, 1, 0, 1),           // 水平剪切
+ 272:             new Mat(0.7071, -0.7071, 0.7071, 0.7071), // 旋转 45°
+ 273:             new Mat(0, 1, 1, 0),           // 镜像翻面
+ 274:             new Mat(1, 2, 2, 4),           // 坍缩成线
+ 275:     };
+ 276: 
+ 277:     /**
+ 278:      * 预设名。控制 2-4 个字：一排要能扫完，长了就得横向滚，
+ 279:      * 用户不知道右边还有东西。矩阵本身写在按钮下方读数据区。
+ 280:      */
+ 281:     public static final String[] PRESET_NAMES = {
+ 282:             "拉伸", "不变", "剪切", "旋转", "翻面", "压扁",
+ 283:     };
+ 284: 
+ 285:     /** 数字格式化：整数不带小数点，其它保留两位。 */
+ 286:     public static String fmt(double v) {
+ 287:         if (Math.abs(v) < 5e-5) return "0";
+ 288:         if (Math.abs(v - Math.rint(v)) < 5e-5) return String.valueOf((long) Math.rint(v));
+ 289:         return String.format("%.2f", v);
+ 290:     }
+ 291: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\LinalgView.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.app.AlertDialog;
+   4: import android.content.Context;
+   5: import android.graphics.Canvas;
+   6: import android.graphics.Color;
+   7: import android.graphics.DashPathEffect;
+   8: import android.graphics.Paint;
+   9: import android.graphics.Path;
+  10: import android.graphics.Typeface;
+  11: import android.graphics.drawable.GradientDrawable;
+  12: import android.util.TypedValue;
+  13: import android.view.Gravity;
+  14: import android.view.View;
+  15: import android.view.ViewGroup;
+  16: import android.view.inputmethod.InputMethodManager;
+  17: import android.widget.EditText;
+  18: import android.widget.HorizontalScrollView;
+  19: import android.widget.LinearLayout;
+  20: import android.widget.ScrollView;
+  21: import android.widget.TextView;
+  22: 
+  23: /**
+  24:  * 线性变换 —— 2×2 矩阵把平面怎么拧。
+  25:  *
+  26:  * 三个关键决定：
+  27:  *  ① 不用 canvas.concat(Matrix) 整体变形。那样网格变了，但文字标签
+  28:  *    和线宽也跟着被拉扁，箭头会变成歪的扁片。这里用 Linalg.apply
+  29:  *    一行算出新坐标再画线，线宽和字始终是正的。
+  30:  *  ② 用 ValueAnimator 对 4 个参数线性插值（400ms）。点"变换"时
+  31:  *    看着方格一步步被拧歪，比直接跳出结果直观得多。
+  32:  *  ③ 特征向量用求根公式解析算（见 Linalg.eigen），不写迭代。
+  33:  */
+  34: public class LinalgView extends LinearLayout {
+  35: 
+  36:     // ── 配色（沿用全局深色调）────────────────────────────
+  37:     private static final int C_BG = 0xFF14161C;
+  38:     private static final int C_BG2 = 0xFF1B1E26;
+  39:     private static final int C_BG3 = 0xFF262A34;
+  40:     private static final int C_FG = 0xFFE8EAF0;
+  41:     private static final int C_FG2 = 0xFFC3C9D6;
+  42:     private static final int C_FG3 = 0xFF6B7282;
+  43:     private static final int C_TEAL = 0xFF3ECFAD;
+  44:     private static final int C_AMBER = 0xFFE0A94A;
+  45:     private static final int C_RED = 0xFFE05A54;
+  46:     private static final int C_BLUE = 0xFF2575FC;
+  47: 
+  48:     private final MainActivity act;
+  49:     private MatCanvas canvas;
+  50:     private EditText[] et = new EditText[4];
+  51:     private TextView tvDesc, tvInfo;
+  52:     private AlertDialog dlg;
+  53: 
+  54:     /** 当前 / 目标矩阵。动画在这两者之间插值。 */
+  55:     private Linalg.Mat cur = new Linalg.Mat(1.5, 0.5, 0.5, 1.0);
+  56:     private Linalg.Mat target = cur.copy();
+  57:     private android.animation.ValueAnimator anim;
+  58: 
+  59:     public LinalgView(MainActivity a) {
+  60:         super(a);
+  61:         this.act = a;
+  62:         setOrientation(VERTICAL);
+  63:         setBackgroundColor(C_BG);
+  64:         setPadding(dp(14), dp(14), dp(14), dp(14));
+  65:         build();
+  66:     }
+  67: 
+  68:     private int dp(int v) {
+  69:         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+  70:                 getResources().getDisplayMetrics());
+  71:     }
+  72: 
+  73:     private void build() {
+  74:         TextView title = new TextView(act);
+  75:         title.setText("线性变换 · 2×2 矩阵");
+  76:         title.setTextSize(19);
+  77:         title.setTypeface(Typeface.DEFAULT_BOLD);
+  78:         title.setTextColor(C_FG);
+  79:         addView(title);
+  80: 
+  81:         TextView sub = new TextView(act);
+  82:         sub.setText("改矩阵，看平面怎么被拉扯。金色虚线是特征方向 —— "
+  83:                 + "沿它的向量只变长不转向。");
+  84:         sub.setTextSize(11.5f);
+  85:         sub.setTextColor(C_FG3);
+  86:         sub.setPadding(0, dp(4), 0, dp(10));
+  87:         addView(sub);
+  88: 
+  89:         // ── 画布 ──
+  90:         canvas = new MatCanvas(act);
+  91:         // 固定高度，不用 weight。这个 View 会被包进 ScrollView 打开，
+  92:         // 而 ScrollView 给子视图的高度上限是 UNSPECIFIED，
+  93:         // weight=1 配 height=0 在那种情况下会算出 0 高 —— 画布直接不可见。
+  94:         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+  95:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
+  96:         clp.topMargin = dp(2);
+  97:         canvas.setLayoutParams(clp);
+  98:         GradientDrawable cg = new GradientDrawable();
+  99:         cg.setCornerRadius(dp(12));
+ 100:         cg.setColor(C_BG2);
+ 101:         canvas.setBackground(cg);
+ 102:         addView(canvas);
+ 103: 
+ 104:         // ── 读数 ──
+ 105:         tvInfo = new TextView(act);
+ 106:         tvInfo.setTextSize(11.5f);
+ 107:         tvInfo.setTextColor(C_FG2);
+ 108:         tvInfo.setPadding(dp(2), dp(8), dp(2), dp(6));
+ 109:         tvInfo.setLineSpacing(dp(3), 1f);
+ 110:         addView(tvInfo);
+ 111: 
+ 112:         // ── 矩阵输入 ──
+ 113:         addView(buildMatrixBox());
+ 114: 
+ 115:         // ── 预设 ──
+ 116:         addView(buildPresets());
+ 117: 
+ 118:         // ── 说明 ──
+ 119:         tvDesc = new TextView(act);
+ 120:         tvDesc.setTextSize(12);
+ 121:         tvDesc.setTextColor(C_FG2);
+ 122:         tvDesc.setLineSpacing(dp(4), 1f);
+ 123:         tvDesc.setPadding(dp(10), dp(10), dp(10), dp(10));
+ 124:         GradientDrawable dg = new GradientDrawable();
+ 125:         dg.setCornerRadius(dp(10));
+ 126:         dg.setColor(C_BG3);
+ 127:         tvDesc.setBackground(dg);
+ 128:         LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(
+ 129:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 130:         dlp.topMargin = dp(10);
+ 131:         tvDesc.setLayoutParams(dlp);
+ 132:         addView(tvDesc);
+ 133: 
+ 134:         refresh(false);
+ 135:     }
+ 136: 
+ 137:     /** 2×2 输入框，按矩阵的样子摆（两行两列 + 括号）。 */
+ 138:     private View buildMatrixBox() {
+ 139:         LinearLayout wrap = new LinearLayout(act);
+ 140:         wrap.setOrientation(HORIZONTAL);
+ 141:         wrap.setGravity(Gravity.CENTER_VERTICAL);
+ 142:         wrap.setPadding(0, dp(6), 0, dp(2));
+ 143: 
+ 144:         TextView lb = new TextView(act);
+ 145:         lb.setText("A =");
+ 146:         lb.setTextSize(15);
+ 147:         lb.setTypeface(Typeface.DEFAULT_BOLD);
+ 148:         lb.setTextColor(C_FG2);
+ 149:         lb.setPadding(dp(2), 0, dp(8), 0);
+ 150:         wrap.addView(lb);
+ 151: 
+ 152:         // 左括号
+ 153:         wrap.addView(bracket(true));
+ 154: 
+ 155:         LinearLayout grid = new LinearLayout(act);
+ 156:         grid.setOrientation(VERTICAL);
+ 157:         String[] init = {"1.5", "0.5", "0.5", "1"};
+ 158:         for (int r = 0; r < 2; r++) {
+ 159:             LinearLayout row = new LinearLayout(act);
+ 160:             row.setOrientation(HORIZONTAL);
+ 161:             if (r == 1) {
+ 162:                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+ 163:                         ViewGroup.LayoutParams.WRAP_CONTENT,
+ 164:                         ViewGroup.LayoutParams.WRAP_CONTENT);
+ 165:                 rlp.topMargin = dp(4);
+ 166:                 row.setLayoutParams(rlp);
+ 167:             }
+ 168:             for (int c = 0; c < 2; c++) {
+ 169:                 EditText e = new EditText(act);
+ 170:                 e.setText(init[r * 2 + c]);
+ 171:                 e.setTextSize(14);
+ 172:                 e.setTextColor(C_TEAL);
+ 173:                 e.setGravity(Gravity.CENTER);
+ 174:                 e.setSingleLine(true);
+ 175:                 e.setTypeface(Typeface.MONOSPACE);
+ 176:                 e.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
+ 177:                         | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL
+ 178:                         | android.text.InputType.TYPE_NUMBER_FLAG_SIGNED);
+ 179:                 GradientDrawable g = new GradientDrawable();
+ 180:                 g.setCornerRadius(dp(6));
+ 181:                 g.setColor(C_BG3);
+ 182:                 e.setBackground(g);
+ 183:                 e.setPadding(dp(4), dp(5), dp(4), dp(5));
+ 184:                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(52), dp(30));
+ 185:                 lp.leftMargin = dp(3);
+ 186:                 lp.rightMargin = dp(3);
+ 187:                 e.setLayoutParams(lp);
+ 188:                 et[r * 2 + c] = e;
+ 189:                 row.addView(e);
+ 190:             }
+ 191:             grid.addView(row);
+ 192:         }
+ 193:         wrap.addView(grid);
+ 194:         wrap.addView(bracket(false));
+ 195: 
+ 196:         TextView go = new TextView(act);
+ 197:         go.setText("变换");
+ 198:         go.setTextSize(13);
+ 199:         go.setTypeface(Typeface.DEFAULT_BOLD);
+ 200:         go.setTextColor(0xFF10131A);
+ 201:         go.setGravity(Gravity.CENTER);
+ 202:         GradientDrawable gg = new GradientDrawable();
+ 203:         gg.setCornerRadius(dp(8));
+ 204:         gg.setColor(C_TEAL);
+ 205:         go.setBackground(gg);
+ 206:         go.setPadding(dp(14), dp(9), dp(14), dp(9));
+ 207:         LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+ 208:                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 209:         glp.leftMargin = dp(10);
+ 210:         go.setLayoutParams(glp);
+ 211:         go.setOnClickListener(v -> {
+ 212:             readInputs();
+ 213:             hideIme();
+ 214:             refresh(true);
+ 215:         });
+ 216:         wrap.addView(go);
+ 217: 
+ 218:         return wrap;
+ 219:     }
+ 220: 
+ 221:     /** 画一个高的方括号 —— 用 TextView 拼，不借助图片资源。 */
+ 222:     private View bracket(boolean left) {
+ 223:         TextView t = new TextView(act);
+ 224:         t.setText(left ? "[" : "]");
+ 225:         t.setTextSize(30);
+ 226:         t.setTextColor(C_FG3);
+ 227:         t.setTypeface(Typeface.create("sans-serif-thin", Typeface.NORMAL));
+ 228:         t.setGravity(Gravity.CENTER);
+ 229:         t.setPadding(0, 0, 0, 0);
+ 230:         return t;
+ 231:     }
+ 232: 
+ 233:     private View buildPresets() {
+ 234:         HorizontalScrollView hs = new HorizontalScrollView(act);
+ 235:         hs.setHorizontalScrollBarEnabled(false);
+ 236:         LinearLayout row = new LinearLayout(act);
+ 237:         row.setOrientation(HORIZONTAL);
+ 238:         row.setPadding(0, dp(8), 0, 0);
+ 239:         for (int i = 0; i < Linalg.PRESETS.length; i++) {
+ 240:             final Linalg.Mat m = Linalg.PRESETS[i];
+ 241:             TextView b = new TextView(act);
+ 242:             b.setText(Linalg.PRESET_NAMES[i]);
+ 243:             b.setTextSize(11.5f);
+ 244:             b.setTextColor(C_FG2);
+ 245:             b.setGravity(Gravity.CENTER);
+ 246:             GradientDrawable g = new GradientDrawable();
+ 247:             g.setCornerRadius(dp(14));
+ 248:             g.setColor(C_BG3);
+ 249:             b.setBackground(g);
+ 250:             b.setPadding(dp(12), dp(7), dp(12), dp(7));
+ 251:             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 252:                     ViewGroup.LayoutParams.WRAP_CONTENT,
+ 253:                     ViewGroup.LayoutParams.WRAP_CONTENT);
+ 254:             lp.rightMargin = dp(6);
+ 255:             b.setLayoutParams(lp);
+ 256:             b.setOnClickListener(v -> {
+ 257:                 et[0].setText(Linalg.fmt(m.a));
+ 258:                 et[1].setText(Linalg.fmt(m.b));
+ 259:                 et[2].setText(Linalg.fmt(m.c));
+ 260:                 et[3].setText(Linalg.fmt(m.d));
+ 261:                 hideIme();
+ 262:                 readInputs();
+ 263:                 refresh(true);
+ 264:             });
+ 265:             row.addView(b);
+ 266:         }
+ 267:         hs.addView(row);
+ 268:         return hs;
+ 269:     }
+ 270: 
+ 271:     /** 从输入框读出目标矩阵。读不动就保留原值，不弹错。 */
+ 272:     private void readInputs() {
+ 273:         double[] v = new double[4];
+ 274:         double[] old = {target.a, target.b, target.c, target.d};
+ 275:         for (int i = 0; i < 4; i++) {
+ 276:             v[i] = old[i];
+ 277:             if (et[i] == null) continue;
+ 278:             String s = et[i].getText().toString().trim();
+ 279:             if (s.isEmpty()) continue;
+ 280:             try { v[i] = Double.parseDouble(s); } catch (Exception ignore) { }
+ 281:         }
+ 282:         target = new Linalg.Mat(v[0], v[1], v[2], v[3]);
+ 283:     }
+ 284: 
+ 285:     private void hideIme() {
+ 286:         try {
+ 287:             InputMethodManager im = (InputMethodManager)
+ 288:                     act.getSystemService(Context.INPUT_METHOD_SERVICE);
+ 289:             if (im != null && et[0] != null) {
+ 290:                 im.hideSoftInputFromWindow(et[0].getWindowToken(), 0);
+ 291:             }
+ 292:         } catch (Exception ignore) { }
+ 293:     }
+ 294: 
+ 295:     /** 刷新读数与说明；animated=true 时做 400ms 插值动画。 */
+ 296:     private void refresh(boolean animated) {
+ 297:         if (anim != null) anim.cancel();
+ 298: 
+ 299:         if (!animated) {
+ 300:             cur = target.copy();
+ 301:             applyState();
+ 302:             return;
+ 303:         }
+ 304:         final Linalg.Mat from = cur.copy();
+ 305:         final Linalg.Mat to = target.copy();
+ 306:         anim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+ 307:         anim.setDuration(400);
+ 308:         anim.setInterpolator(new android.view.animation.DecelerateInterpolator());
+ 309:         anim.addUpdateListener(a -> {
+ 310:             cur = Linalg.lerp(from, to, (float) a.getAnimatedValue());
+ 311:             applyState();
+ 312:         });
+ 313:         anim.start();
+ 314:     }
+ 315: 
+ 316:     private void applyState() {
+ 317:         if (canvas != null) canvas.invalidate();
+ 318:         Linalg.Mat m = cur;
+ 319: 
+ 320:         if (tvInfo != null) {
+ 321:             double d = Linalg.det(m);
+ 322:             // det=0 时说"面积 0 倍"是别扭的，那本来就是被压成线了
+ 323:             String area = Math.abs(d) < 5e-4
+ 324:                     ? "面积压成 0"
+ 325:                     : "面积 ×" + Linalg.fmt(Math.abs(d));
+ 326:             tvInfo.setText(
+ 327:                     "矩阵 A = " + m + "\n"
+ 328:                     + "行列式 " + Linalg.fmt(d) + "（" + area + "）"
+ 329:                     + "　秩 " + Linalg.rank(m)
+ 330:                     + "　迹 " + Linalg.fmt(Linalg.trace(m)) + "\n"
+ 331:                     + "特征值 λ = " + Linalg.eigenText(m));
+ 332:         }
+ 333:         if (tvDesc != null) tvDesc.setText(Linalg.describe(m));
+ 334:     }
+ 335: 
+ 336:     /** 打开这个工具（对话框形式，和 MathView 一致）。 */
+ 337:     public void open() {
+ 338:         if (dlg != null && dlg.isShowing()) return;
+ 339:         ScrollView sv = new ScrollView(act);
+ 340:         sv.setBackgroundColor(C_BG);
+ 341:         LinalgView body = new LinalgView(act);
+ 342:         sv.addView(body, new ScrollView.LayoutParams(
+ 343:                 ViewGroup.LayoutParams.MATCH_PARENT,
+ 344:                 ViewGroup.LayoutParams.WRAP_CONTENT));
+ 345:         dlg = new AlertDialog.Builder(act, android.R.style.Theme_Material_NoActionBar)
+ 346:                 .setView(sv)
+ 347:                 .setNegativeButton("关闭", (d, w) -> d.dismiss())
+ 348:                 .create();
+ 349:         if (dlg.getWindow() != null) {
+ 350:             dlg.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+ 351:         }
+ 352:         dlg.show();
+ 353:     }
+ 354: 
+ 355:     // ── 画布 ──────────────────────────────────────────────
+ 356:     /**
+ 357:      * 自己的 View 而不是复用一个通用画布 —— 因为要画的东西
+ 358:      * （网格、平行四边形、特征轴、基向量）和 PlotView 完全不同。
+ 359:      *
+ 360:      * 关键：所有坐标都经 Linalg.apply 算出"数学坐标"，再单独转屏幕像素。
+ 361:      * 绝不用 canvas.concat，否则线宽和字号会跟着被拉扁。
+ 362:      */
+ 363:     private class MatCanvas extends View {
+ 364:         private final Paint pGrid = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 365:         private final Paint pAxis = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 366:         private final Paint pBlue = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 367:         private final Paint pFill = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 368:         private final Paint pGold = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 369:         private final Paint pRed = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 370:         private final Paint pTeal = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 371:         private final Paint pText = new Paint(Paint.ANTI_ALIAS_FLAG);
+ 372:         private final Path path = new Path();
+ 373: 
+ 374:         MatCanvas(Context c) {
+ 375:             super(c);
+ 376:             pGrid.setStyle(Paint.Style.STROKE);
+ 377:             pGrid.setStrokeWidth(dp0(0.8f));
+ 378:             pGrid.setColor(0xFF2A2E38);
+ 379: 
+ 380:             pAxis.setStyle(Paint.Style.STROKE);
+ 381:             pAxis.setStrokeWidth(dp0(1.3f));
+ 382:             pAxis.setColor(0xFF3E4552);
+ 383: 
+ 384:             pBlue.setStyle(Paint.Style.STROKE);
+ 385:             pBlue.setStrokeWidth(dp0(1.1f));
+ 386:             pBlue.setColor(0x882575FC);
+ 387: 
+ 388:             pFill.setStyle(Paint.Style.FILL);
+ 389: 
+ 390:             pGold.setStyle(Paint.Style.STROKE);
+ 391:             pGold.setStrokeWidth(dp0(2f));
+ 392:             pGold.setColor(C_AMBER);
+ 393:             pGold.setPathEffect(new DashPathEffect(
+ 394:                     new float[]{dp0(7), dp0(5)}, 0));
+ 395: 
+ 396:             pRed.setStyle(Paint.Style.STROKE);
+ 397:             pRed.setStrokeWidth(dp0(2.4f));
+ 398:             pRed.setStrokeCap(Paint.Cap.ROUND);
+ 399:             pRed.setColor(C_RED);
+ 400: 
+ 401:             pTeal.setStyle(Paint.Style.STROKE);
+ 402:             pTeal.setStrokeWidth(dp0(2.4f));
+ 403:             pTeal.setStrokeCap(Paint.Cap.ROUND);
+ 404:             pTeal.setColor(C_TEAL);
+ 405: 
+ 406:             pText.setColor(C_FG2);
+ 407:             pText.setTextSize(dp0(9.5f));
+ 408:         }
+ 409: 
+ 410:         private float dp0(float v) {
+ 411:             return TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+ 412:                     getResources().getDisplayMetrics());
+ 413:         }
+ 414: 
+ 415:         @Override
+ 416:         protected void onDraw(Canvas c) {
+ 417:             super.onDraw(c);
+ 418:             float w = getWidth(), h = getHeight();
+ 419:             if (w <= 0 || h <= 0) return;
+ 420: 
+ 421:             float cx = w / 2f, cy = h / 2f;
+ 422:             float scale = Math.min(w, h) / 8.2f;
+ 423: 
+ 424:             // 裁剪：变换后的网格可能画出界，不裁会花到旁边的控件上
+ 425:             int save = c.save();
+ 426:             c.clipRect(0, 0, w, h);
+ 427: 
+ 428:             drawGrid(c, cx, cy, scale);
+ 429:             drawSquare(c, cx, cy, scale);
+ 430:             drawTransformedGrid(c, cx, cy, scale);
+ 431:             drawEigen(c, cx, cy, scale);
+ 432:             drawBasis(c, cx, cy, scale);
+ 433:             drawLegend(c);
+ 434: 
+ 435:             c.restoreToCount(save);
+ 436:         }
+ 437: 
+ 438:         private void drawGrid(Canvas c, float cx, float cy, float scale) {
+ 439:             for (int i = -4; i <= 4; i++) {
+ 440:                 c.drawLine(px(cx, scale, i), py(cy, scale, -4),
+ 441:                            px(cx, scale, i), py(cy, scale, 4), pGrid);
+ 442:                 c.drawLine(px(cx, scale, -4), py(cy, scale, i),
+ 443:                            px(cx, scale, 4), py(cy, scale, i), pGrid);
+ 444:             }
+ 445:             c.drawLine(cx, py(cy, scale, -4), cx, py(cy, scale, 4), pAxis);
+ 446:             c.drawLine(px(cx, scale, -4), cy, px(cx, scale, 4), cy, pAxis);
+ 447:         }
+ 448: 
+ 449:         private void drawSquare(Canvas c, float cx, float cy, float scale) {
+ 450:             double det = Linalg.det(cur);
+ 451:             if (Math.abs(det) < 1e-6) return;
+ 452:             Linalg.Vec[] sq = Linalg.unitSquare(cur);
+ 453:             path.reset();
+ 454:             path.moveTo(px(cx, scale, sq[0].x), py(cy, scale, sq[0].y));
+ 455:             for (int i = 1; i < 4; i++) {
+ 456:                 path.lineTo(px(cx, scale, sq[i].x), py(cy, scale, sq[i].y));
+ 457:             }
+ 458:             path.close();
+ 459:             // 翻面（det<0）用红色，正常用蓝色 —— 一眼看出手性变了没有
+ 460:             pFill.setColor(det > 0 ? 0x332575FC : 0x33E05A54);
+ 461:             c.drawPath(path, pFill);
+ 462:             pFill.setColor(det > 0 ? 0x552575FC : 0x55E05A54);
+ 463:             pFill.setStyle(Paint.Style.STROKE);
+ 464:             pFill.setStrokeWidth(dp0(1.2f));
+ 465:             c.drawPath(path, pFill);
+ 466:             pFill.setStyle(Paint.Style.FILL);
+ 467:         }
+ 468: 
+ 469:         private void drawTransformedGrid(Canvas c, float cx, float cy, float scale) {
+ 470:             for (double[] seg : Linalg.gridLines(cur, 4)) {
+ 471:                 c.drawLine(px(cx, scale, seg[0]), py(cy, scale, seg[1]),
+ 472:                            px(cx, scale, seg[2]), py(cy, scale, seg[3]), pBlue);
+ 473:             }
+ 474:         }
+ 475: 
+ 476:         private void drawEigen(Canvas c, float cx, float cy, float scale) {
+ 477:             Linalg.Eigen e = Linalg.eigen(cur);
+ 478:             if (!e.hasReal || Linalg.rank(cur) == 0) return;
+ 479:             float span = 3.6f;
+ 480:             if (e.v1 != null) {
+ 481:                 c.drawLine(px(cx, scale, -e.v1.x * span), py(cy, scale, -e.v1.y * span),
+ 482:                            px(cx, scale, e.v1.x * span), py(cy, scale, e.v1.y * span), pGold);
+ 483:             }
+ 484:             if (e.v2 != null) {
+ 485:                 c.drawLine(px(cx, scale, -e.v2.x * span), py(cy, scale, -e.v2.y * span),
+ 486:                            px(cx, scale, e.v2.x * span), py(cy, scale, e.v2.y * span), pGold);
+ 487:             }
+ 488:         }
+ 489: 
+ 490:         /**
+ 491:          * 两条基向量。长的先画、短的后画 —— 否则矩阵把两条基向量
+ 492:          * 压到同一条方向时（比如 [1,2;2,4]），长的绿箭头会把短的
+ 493:          * 红箭头整根盖住，看着像只有一条。
+ 494:          */
+ 495:         private void drawBasis(Canvas c, float cx, float cy, float scale) {
+ 496:             double lenI = Math.hypot(cur.a, cur.c);
+ 497:             double lenJ = Math.hypot(cur.b, cur.d);
+ 498:             if (lenI >= lenJ) {
+ 499:                 arrow(c, cx, cy, scale, 0, 0, cur.a, cur.c, pRed);
+ 500:                 arrow(c, cx, cy, scale, 0, 0, cur.b, cur.d, pTeal);
+ 501:             } else {
+ 502:                 arrow(c, cx, cy, scale, 0, 0, cur.b, cur.d, pTeal);
+ 503:                 arrow(c, cx, cy, scale, 0, 0, cur.a, cur.c, pRed);
+ 504:             }
+ 505:         }
+ 506: 
+ 507:         private void arrow(Canvas c, float cx, float cy, float scale,
+ 508:                            double x1, double y1, double x2, double y2, Paint p) {
+ 509:             float sx1 = px(cx, scale, x1), sy1 = py(cy, scale, y1);
+ 510:             float sx2 = px(cx, scale, x2), sy2 = py(cy, scale, y2);
+ 511:             c.drawLine(sx1, sy1, sx2, sy2, p);
+ 512:             float dx = sx2 - sx1, dy = sy2 - sy1;
+ 513:             if (Math.hypot(dx, dy) < dp0(8)) return;
+ 514:             double ang = Math.atan2(dy, dx);
+ 515:             float hl = dp0(8);
+ 516:             Path head = new Path();
+ 517:             head.moveTo(sx2, sy2);
+ 518:             head.lineTo((float) (sx2 - hl * Math.cos(ang - 0.42)),
+ 519:                         (float) (sy2 - hl * Math.sin(ang - 0.42)));
+ 520:             head.lineTo((float) (sx2 - hl * Math.cos(ang + 0.42)),
+ 521:                         (float) (sy2 - hl * Math.sin(ang + 0.42)));
+ 522:             head.close();
+ 523:             Paint fp = new Paint(p);
+ 524:             fp.setStyle(Paint.Style.FILL);
+ 525:             c.drawPath(head, fp);
+ 526:         }
+ 527: 
+ 528:         /**
+ 529:          * 左上角图例。文字是正着画的 —— 这就是不用 concat 的原因。
+ 530:          *
+ 531:          * 特征轴只在真有实特征方向时才出现。旋转类矩阵（复根）
+ 532:          * 画不出金线，若图例还写着"λ 轴"，用户会以为自己漏看了。
+ 533:          * 所以按当前矩阵决定这一项显示什么。
+ 534:          */
+ 535:         private void drawLegend(Canvas c) {
+ 536:             float x = dp0(8), y = dp0(14);
+ 537:             dotLabel(c, x, y, C_RED, "i'");
+ 538:             dotLabel(c, x + dp0(46), y, C_TEAL, "j'");
+ 539:             Linalg.Eigen e = Linalg.eigen(cur);
+ 540:             if (Linalg.rank(cur) == 0) return;
+ 541:             if (!e.hasReal) {
+ 542:                 dotLabel(c, x + dp0(92), y, C_FG3, "无实特征轴");
+ 543:             } else {
+ 544:                 dotLabel(c, x + dp0(92), y, C_AMBER, "λ 轴");
+ 545:             }
+ 546:         }
+ 547: 
+ 548:         private void dotLabel(Canvas c, float x, float y, int color, String label) {
+ 549:             pFill.setColor(color);
+ 550:             c.drawCircle(x, y - dp0(3), dp0(3), pFill);
+ 551:             pText.setColor(C_FG3);
+ 552:             c.drawText(label, x + dp0(7), y, pText);
+ 553:         }
+ 554: 
+ 555:         private float px(float cx, float scale, double x) {
+ 556:             return (float) (cx + x * scale);
+ 557:         }
+ 558: 
+ 559:         private float py(float cy, float scale, double y) {
+ 560:             return (float) (cy - y * scale);
+ 561:         }
+ 562:     }
+ 563: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\LoginView.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.app.Activity;
+   4: import android.app.Dialog;
+   5: import android.graphics.Typeface;
+   6: import android.graphics.drawable.GradientDrawable;
+   7: import android.text.InputType;
+   8: import android.util.TypedValue;
+   9: import android.view.Gravity;
+  10: import android.view.View;
+  11: import android.view.ViewGroup;
+  12: import android.view.inputmethod.EditorInfo;
+  13: import android.widget.EditText;
+  14: import android.widget.LinearLayout;
+  15: import android.widget.ScrollView;
+  16: import android.widget.TextView;
+  17: 
+  18: import org.json.JSONObject;
+  19: 
+  20: /**
+  21:  * 登录 / 注册。一个全屏 Dialog：用户名 + 密码 + 一个按钮。
+  22:  *
+  23:  * 为什么是「用户名 + 密码」而不是邮箱/手机号：
+  24:  *   20 个同学，都是一个班的。要邮箱就得收验证码，要手机号就得实名，
+  25:  *   这两样都是为了防陌生人的，这里没有陌生人。
+  26:  *   忘记密码就找管理员重置，最省事。
+  27:  *
+  28:  * 密码不落盘：登录成功只把 token 存进 SharedPreferences，
+  29:  * 之后所有请求带 token。token 是长期凭证，再存一份密码只是多一个泄漏面。
+  30:  */
+  31: public class LoginView {
+  32: 
+  33:     private static final int C_BG = 0xFF14161C;
+  34:     private static final int C_BG2 = 0xFF1C1F27;
+  35:     private static final int C_BG3 = 0xFF262A34;
+  36:     private static final int C_FG = 0xFFE8EAF0;
+  37:     private static final int C_FG2 = 0xFFC3C9D6;
+  38:     private static final int C_FG3 = 0xFF6B7282;
+  39:     private static final int C_TEAL = 0xFF3ECFAD;
+  40:     private static final int C_RED = 0xFFE05A54;
+  41: 
+  42:     private final Activity act;
+  43:     private Dialog dlg;
+  44:     private EditText etName, etPwd;
+  45:     private TextView tvStatus, btnMain, btnSwitch;
+  46:     private boolean registering;
+  47:     private boolean busy;
+  48: 
+  49:     /** 登录/注册成功回调，主界面接这个去刷标题和触发首次同步。 */
+  50:     public interface OnLoggedIn {
+  51:         void onLoggedIn(Account acc);
+  52:     }
+  53: 
+  54:     private OnLoggedIn onLoggedIn;
+  55: 
+  56:     public LoginView(Activity a) {
+  57:         this.act = a;
+  58:     }
+  59: 
+  60:     public void setOnLoggedIn(OnLoggedIn cb) {
+  61:         this.onLoggedIn = cb;
+  62:     }
+  63: 
+  64:     private int dp(float v) {
+  65:         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+  66:                 act.getResources().getDisplayMetrics());
+  67:     }
+  68: 
+  69:     private GradientDrawable round(int fill) {
+  70:         GradientDrawable g = new GradientDrawable();
+  71:         g.setColor(fill);
+  72:         g.setCornerRadius(dp(12));
+  73:         return g;
+  74:     }
+  75: 
+  76:     public void show() {
+  77:         if (dlg != null && dlg.isShowing()) { dlg.show(); return; }
+  78:         build();
+  79:         dlg.show();
+  80:     }
+  81: 
+  82:     public boolean isShowing() {
+  83:         return dlg != null && dlg.isShowing();
+  84:     }
+  85: 
+  86:     // ── 界面 ──────────────────────────────────────────────
+  87: 
+  88:     private void build() {
+  89:         dlg = new Dialog(act, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+  90: 
+  91:         LinearLayout root = new LinearLayout(act);
+  92:         root.setOrientation(LinearLayout.VERTICAL);
+  93:         root.setBackgroundColor(C_BG);
+  94: 
+  95:         LinearLayout top = new LinearLayout(act);
+  96:         top.setOrientation(LinearLayout.HORIZONTAL);
+  97:         top.setGravity(Gravity.CENTER_VERTICAL);
+  98:         top.setPadding(dp(14), dp(12), dp(14), dp(8));
+  99: 
+ 100:         TextView close = new TextView(act);
+ 101:         close.setText("✕");
+ 102:         close.setTextSize(22);
+ 103:         close.setTextColor(C_FG2);
+ 104:         close.setPadding(dp(6), dp(4), dp(14), dp(4));
+ 105:         close.setOnClickListener(v -> dlg.dismiss());
+ 106:         top.addView(close);
+ 107: 
+ 108:         TextView title = new TextView(act);
+ 109:         title.setText("账号");
+ 110:         title.setTextSize(17);
+ 111:         title.setTextColor(C_FG);
+ 112:         title.setTypeface(Typeface.DEFAULT_BOLD);
+ 113:         top.addView(title, new LinearLayout.LayoutParams(0,
+ 114:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 115:         root.addView(top);
+ 116: 
+ 117:         ScrollView sc = new ScrollView(act);
+ 118:         LinearLayout body = new LinearLayout(act);
+ 119:         body.setOrientation(LinearLayout.VERTICAL);
+ 120:         body.setPadding(dp(18), dp(6), dp(18), dp(24));
+ 121:         sc.addView(body);
+ 122:         root.addView(sc, new LinearLayout.LayoutParams(
+ 123:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+ 124: 
+ 125:         // 说明
+ 126:         TextView hint = new TextView(act);
+ 127:         hint.setText("起个用户名，设个密码。"
+ 128:                 + "\n进度会存到云端，换手机也不会丢。");
+ 129:         hint.setTextSize(13);
+ 130:         hint.setTextColor(C_FG3);
+ 131:         hint.setLineSpacing(dp(3), 1f);
+ 132:         body.addView(hint, lp(0));
+ 133: 
+ 134:         // 用户名
+ 135:         body.addView(label("用户名"), lp(18));
+ 136:         etName = field("例如：小明", false);
+ 137:         etName.setSingleLine(true);
+ 138:         etName.setInputType(InputType.TYPE_CLASS_TEXT
+ 139:                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+ 140:         body.addView(etName, lp(8));
+ 141: 
+ 142:         // 密码
+ 143:         body.addView(label("密码（至少 4 位）"), lp(14));
+ 144:         etPwd = field("密码", true);
+ 145:         etPwd.setSingleLine(true);
+ 146:         etPwd.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+ 147:         etPwd.setImeOptions(EditorInfo.IME_ACTION_DONE);
+ 148:         etPwd.setOnEditorActionListener((v, actionId, ev) -> {
+ 149:             if (actionId == EditorInfo.IME_ACTION_DONE) { submit(); return true; }
+ 150:             return false;
+ 151:         });
+ 152:         body.addView(etPwd, lp(8));
+ 153: 
+ 154:         // 状态行
+ 155:         tvStatus = new TextView(act);
+ 156:         tvStatus.setTextSize(13);
+ 157:         tvStatus.setTextColor(C_RED);
+ 158:         tvStatus.setLineSpacing(dp(2), 1f);
+ 159:         body.addView(tvStatus, lp(12));
+ 160: 
+ 161:         // 主按钮
+ 162:         btnMain = primary("登录");
+ 163:         btnMain.setOnClickListener(v -> submit());
+ 164:         body.addView(btnMain, lp(10));
+ 165: 
+ 166:         // 切换登录/注册
+ 167:         btnSwitch = new TextView(act);
+ 168:         btnSwitch.setText("没有账号？点这里注册");
+ 169:         btnSwitch.setTextSize(13);
+ 170:         btnSwitch.setTextColor(C_TEAL);
+ 171:         btnSwitch.setGravity(Gravity.CENTER);
+ 172:         btnSwitch.setPadding(dp(8), dp(14), dp(8), dp(14));
+ 173:         btnSwitch.setOnClickListener(v -> {
+ 174:             registering = !registering;
+ 175:             tvStatus.setText("");
+ 176:             btnMain.setText(registering ? "注册并登录" : "登录");
+ 177:             btnSwitch.setText(registering ? "已有账号？点这里登录" : "没有账号？点这里注册");
+ 178:         });
+ 179:         body.addView(btnSwitch, lp(4));
+ 180: 
+ 181:         // 忘记密码说明
+ 182:         TextView foot = new TextView(act);
+ 183:         foot.setText("忘记密码：找管理员重置。"
+ 184:                 + "\n数据只在你和设备之间传输，不上报任何第三方。");
+ 185:         foot.setTextSize(12);
+ 186:         foot.setTextColor(C_FG3);
+ 187:         foot.setLineSpacing(dp(3), 1f);
+ 188:         foot.setPadding(dp(2), dp(18), dp(2), dp(4));
+ 189:         body.addView(foot);
+ 190: 
+ 191:         dlg.setContentView(root);
+ 192:     }
+ 193: 
+ 194:     private LinearLayout.LayoutParams lp(int topDp) {
+ 195:         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+ 196:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 197:         p.topMargin = dp(topDp);
+ 198:         return p;
+ 199:     }
+ 200: 
+ 201:     private TextView label(String s) {
+ 202:         TextView t = new TextView(act);
+ 203:         t.setText(s);
+ 204:         t.setTextSize(12);
+ 205:         t.setTextColor(C_FG3);
+ 206:         return t;
+ 207:     }
+ 208: 
+ 209:     private EditText field(String hint, boolean pwd) {
+ 210:         EditText e = new EditText(act);
+ 211:         e.setHint(hint);
+ 212:         e.setHintTextColor(C_FG3);
+ 213:         e.setTextColor(C_FG);
+ 214:         e.setTextSize(15);
+ 215:         e.setBackground(round(C_BG2));
+ 216:         e.setPadding(dp(14), dp(12), dp(14), dp(12));
+ 217:         if (!pwd) e.setInputType(InputType.TYPE_CLASS_TEXT);
+ 218:         return e;
+ 219:     }
+ 220: 
+ 221:     private TextView primary(String s) {
+ 222:         TextView t = new TextView(act);
+ 223:         t.setText(s);
+ 224:         t.setTextSize(15);
+ 225:         t.setTextColor(0xFF10131A);
+ 226:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 227:         t.setGravity(Gravity.CENTER);
+ 228:         t.setBackground(round(C_TEAL));
+ 229:         t.setPadding(dp(12), dp(14), dp(12), dp(14));
+ 230:         return t;
+ 231:     }
+ 232: 
+ 233:     // ── 提交 ──────────────────────────────────────────────
+ 234: 
+ 235:     private void submit() {
+ 236:         if (busy) return;
+ 237:         final String name = etName.getText().toString().trim();
+ 238:         final String pwd = etPwd.getText().toString();
+ 239: 
+ 240:         if (name.isEmpty()) { tvStatus.setText("用户名不能为空"); return; }
+ 241:         if (name.length() > 20) { tvStatus.setText("用户名最长 20 个字"); return; }
+ 242:         if (pwd.length() < 4) { tvStatus.setText("密码至少 4 位"); return; }
+ 243: 
+ 244:         busy = true;
+ 245:         tvStatus.setTextColor(C_FG3);
+ 246:         tvStatus.setText(registering ? "正在注册…" : "正在登录…");
+ 247:         btnMain.setAlpha(0.5f);
+ 248: 
+ 249:         final boolean asRegister = registering;
+ 250:         new Thread(() -> {
+ 251:             Api.R r = asRegister ? Api.register(name, pwd) : Api.login(name, pwd);
+ 252:             act.runOnUiThread(() -> {
+ 253:                 busy = false;
+ 254:                 btnMain.setAlpha(1f);
+ 255:                 if (!r.ok) {
+ 256:                     tvStatus.setTextColor(C_RED);
+ 257:                     tvStatus.setText(r.msg.isEmpty() ? "失败了，再试一次" : r.msg);
+ 258:                     return;
+ 259:                 }
+ 260:                 JSONObject b = r.body;
+ 261:                 Account acc = new Account();
+ 262:                 acc.uid = b.optString("uid", "");
+ 263:                 acc.username = b.optString("username", name);
+ 264:                 acc.token = b.optString("token", "");
+ 265:                 if (!acc.loggedIn()) {
+ 266:                     tvStatus.setTextColor(C_RED);
+ 267:                     tvStatus.setText("服务器返回的凭证不完整，稍后再试");
+ 268:                     return;
+ 269:                 }
+ 270:                 acc.save(act);
+ 271:                 Account.setLastSyncedAt(act, 0);
+ 272:                 dlg.dismiss();
+ 273:                 if (onLoggedIn != null) onLoggedIn.onLoggedIn(acc);
+ 274:             });
+ 275:         }).start();
+ 276:     }
+ 277: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\MainActivity.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.app.Activity;
+   4: import android.app.AlertDialog;
+   5: import android.content.ClipData;
+   6: import android.content.ClipboardManager;
+   7: import android.content.Context;
+   8: import android.content.Intent;
+   9: import android.graphics.Color;
+  10: import android.graphics.Typeface;
+  11: import android.graphics.drawable.GradientDrawable;
+  12: import android.os.Bundle;
+  13: import android.os.Handler;
+  14: import android.os.Looper;
+  15: import android.text.InputType;
+  16: import android.text.TextUtils;
+  17: import android.util.TypedValue;
+  18: import android.view.Gravity;
+  19: import android.view.View;
+  20: import android.view.ViewGroup;
+  21: import android.view.Window;
+  22: import android.widget.Button;
+  23: import android.widget.EditText;
+  24: import android.widget.HorizontalScrollView;
+  25: import android.widget.LinearLayout;
+  26: import android.widget.ScrollView;
+  27: import android.widget.TextView;
+  28: import android.widget.Toast;
+  29: 
+  30: import java.io.BufferedReader;
+  31: import java.io.InputStreamReader;
+  32: import java.util.ArrayList;
+  33: import java.util.List;
+  34: 
+  35: /**
+  36:  * 主界面。全部用代码构建布局，不依赖 XML——
+  37:  * 这样构建链只有 aapt2 + javac + d8，不上 Gradle 也能出包。
+  38:  */
+  39: public class MainActivity extends Activity {
+  40: 
+  41:     // ── 配色 ──────────────────────────────────────────────
+  42:     static final int C_BG      = 0xFF14161C;
+  43:     static final int C_BG2     = 0xFF1C1F27;
+  44:     static final int C_BG3     = 0xFF262A34;
+  45:     static final int C_LINE    = 0xFF2C313C;
+  46:     static final int C_FG      = 0xFFE8EAF0;
+  47:     static final int C_FG2     = 0xFFA8AEBC;
+  48:     static final int C_FG3     = 0xFF6B7282;
+  49:     static final int C_PURPLE  = 0xFF7C6CF0;
+  50:     static final int C_TEAL    = 0xFF2FA8A0;
+  51:     static final int C_ORANGE  = 0xFFE0873F;
+  52:     static final int C_PINK    = 0xFFE89A9D;
+  53:     static final int C_GREEN   = 0xFF4BBF8A;
+  54:     static final int C_AMBER   = 0xFFE0A94A;
+  55: 
+  56:     private Plan plan;
+  57:     private Store store;
+  58:     private BookView book;
+  59:     private QuizView quizView;
+  60:     private WordView wordView;
+  61:     private MathView mathView;
+  62:     private EngView engView;
+  63:     private BoardView boardView;
+  64:     private LinalgView linalgView;
+  65:     private GModeView gameView;
+  66:     private GStore gameStore;
+  67:     private Update updater;
+  68: 
+  69:     private LinearLayout content;
+  70:     private TextView tvDays, tvLeftLabel;
+  71:     private LinearLayout navBar;
+  72:     private final TextView[] navBtn = new TextView[TAB_NAMES.length];
+  73:     private int tab = 0;
+  74:     private int idx = 0;
+  75: 
+  76:     // 计时
+  77:     private final Handler tickHandler = new Handler(Looper.getMainLooper());
+  78:     private Runnable tickRun;
+  79:     private String timingKey;      // "yyyy-MM-dd|taskId"
+  80:     private long timingStart;
+  81: 
+  82:     /**
+  83:      * 导航只有四个。
+  84:      *
+  85:      * 原来有「检索」这一栏，但它渲染的是 d.reviews —— 和「今日」页里
+  86:      * 那张「到期检索」卡片是同一批数据（同一份 plan.json、同一个
+  87:      * reviewRow）。用户看到的"还是以前的东西"，因为那确实是同一样东西
+  88:      * 换了个位置重复显示。
+  89:      *
+  90:      * 而且检索本身不该单独成页：它属于当天的动作，逾期会累积到当天，
+  91:      * 所以「今日」就是它唯一正确的位置。删掉不丢功能。
+  92:      */
+  93:     private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "词汇塔", "数据"};
+  94: 
+  95:     @Override
+  96:     protected void onCreate(Bundle b) {
+  97:         super.onCreate(b);
+  98:         plan = Plan.parse(readAsset("plan.json"));
+  99:         store = new Store(this);
+ 100:         book = new BookView(this);
+ 101:         quizView = new QuizView(this, store);
+ 102:         wordView = new WordView(this);
+ 103:         mathView = new MathView(this);
+ 104:         engView = new EngView(this, store);
+ 105:         boardView = new BoardView(this);
+ 106:         linalgView = new LinalgView(this);
+ 107:         gameStore = new GStore(this);
+ 108:         gameView = new GModeView(this, gameStore);
+ 109:         gameView.setOnExit(() -> { tab = 0; render(); });
+ 110:         idx = store.todayIndex(plan);
+ 111: 
+ 112:         Window w = getWindow();
+ 113:         w.setStatusBarColor(C_BG);
+ 114:         w.setNavigationBarColor(C_BG);
+ 115: 
+ 116:         setContentView(buildRoot());
+ 117:         render();
+ 118: 
+ 119:         // 启动后静默查一次更新（有新版才弹窗，没网也不打扰）
+ 120:         updater = new Update(this);
+ 121:         updater.check(true);
+ 122:     }
+ 123: 
+ 124:     // ── 根布局 ────────────────────────────────────────────
+ 125:     private View buildRoot() {
+ 126:         LinearLayout root = new LinearLayout(this);
+ 127:         root.setOrientation(LinearLayout.VERTICAL);
+ 128:         root.setBackgroundColor(C_BG);
+ 129: 
+ 130:         // 顶栏
+ 131:         LinearLayout head = new LinearLayout(this);
+ 132:         head.setOrientation(LinearLayout.VERTICAL);
+ 133:         head.setBackgroundColor(C_BG);
+ 134:         head.setPadding(dp(14), dp(10), dp(14), dp(8));
+ 135: 
+ 136:         LinearLayout row = new LinearLayout(this);
+ 137:         row.setOrientation(LinearLayout.HORIZONTAL);
+ 138:         row.setGravity(Gravity.CENTER_VERTICAL);
+ 139: 
+ 140:         TextView t1 = new TextView(this);
+ 141:         t1.setText("剩余 ");
+ 142:         t1.setTextColor(C_FG2);
+ 143:         t1.setTextSize(13);
+ 144:         row.addView(t1);
+ 145: 
+ 146:         tvDays = new TextView(this);
+ 147:         tvDays.setTextColor(C_FG);
+ 148:         tvDays.setTextSize(22);
+ 149:         tvDays.setTypeface(Typeface.DEFAULT_BOLD);
+ 150:         row.addView(tvDays);
+ 151: 
+ 152:         TextView t2 = new TextView(this);
+ 153:         t2.setText(" 天");
+ 154:         t2.setTextColor(C_FG2);
+ 155:         t2.setTextSize(13);
+ 156:         row.addView(t2);
+ 157: 
+ 158:         tvLeftLabel = new TextView(this);
+ 159:         tvLeftLabel.setTextColor(C_FG3);
+ 160:         tvLeftLabel.setTextSize(11);
+ 161:         tvLeftLabel.setPadding(dp(8), dp(3), 0, 0);
+ 162:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 163:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 164:         tvLeftLabel.setLayoutParams(lp);
+ 165:         row.addView(tvLeftLabel);
+ 166: 
+ 167:         head.addView(row);
+ 168:         root.addView(head);
+ 169: 
+ 170:         // 导航
+ 171:         navBar = new LinearLayout(this);
+ 172:         navBar.setOrientation(LinearLayout.HORIZONTAL);
+ 173:         navBar.setBackgroundColor(C_BG);
+ 174:         navBar.setPadding(dp(4), 0, dp(4), dp(2));
+ 175:         for (int i = 0; i < TAB_NAMES.length; i++) {
+ 176:             final int k = i;
+ 177:             TextView tv = new TextView(this);
+ 178:             tv.setText(TAB_NAMES[i]);
+ 179:             tv.setTextSize(14);
+ 180:             tv.setGravity(Gravity.CENTER);
+ 181:             tv.setPadding(0, dp(11), 0, dp(11));
+ 182:             tv.setLayoutParams(new LinearLayout.LayoutParams(
+ 183:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 184:             tv.setOnClickListener(v -> { tab = k; render(); });
+ 185:             navBtn[i] = tv;
+ 186:             navBar.addView(tv);
+ 187:         }
+ 188:         root.addView(navBar);
+ 189: 
+ 190:         View line = new View(this);
+ 191:         line.setBackgroundColor(C_LINE);
+ 192:         root.addView(line, new LinearLayout.LayoutParams(
+ 193:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+ 194: 
+ 195:         // 内容
+ 196:         ScrollView sc = new ScrollView(this);
+ 197:         sc.setLayoutParams(new LinearLayout.LayoutParams(
+ 198:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+ 199:         sc.setFillViewport(true);
+ 200:         sc.setClipToPadding(false);
+ 201:         content = new LinearLayout(this);
+ 202:         content.setOrientation(LinearLayout.VERTICAL);
+ 203:         content.setBackgroundColor(C_BG);
+ 204:         content.setPadding(dp(12), dp(12), dp(12), dp(28));
+ 205:         sc.addView(content);
+ 206:         root.addView(sc);
+ 207: 
+ 208:         return root;
+ 209:     }
+ 210: 
+ 211:     /**
+ 212:      * 系统返回键的接管。
+ 213:      *
+ 214:      * 原来没有任何处理 —— 按一下就把 MainActivity 关掉回桌面，
+ 215:      * 而战斗状态（血量/手牌/回合/题目）只存在 GBattleView 实例里，
+ 216:      * Activity 一死就全没了。重进时地图以为那一格已经打过，
+ 217:      * 于是「上一个怪就自动过关了」。
+ 218:      *
+ 219:      * 现在的顺序：
+ 220:      *   1. 在词汇塔且正在战斗 → 什么都不做（战后有「继续」按钮，不用返回键逃）
+ 221:      *   2. 在词汇塔（非战斗）→ 回今日页，不退出应用
+ 222:      *   3. 其它 tab → 回今日页
+ 223:      *   4. 已经在今日页 → 才真正退出（moveTaskToBack 保留进程）
+ 224:      */
+ 225:     @Override
+ 226:     public void onBackPressed() {
+ 227:         if (tab == 3) {
+ 228:             if (gameView != null && gameView.inBattle()) {
+ 229:                 Toast.makeText(this, "战斗中不能退出 —— 打完这一场再用「继续」推进",
+ 230:                         Toast.LENGTH_SHORT).show();
+ 231:                 return;
+ 232:             }
+ 233:             tab = 0;
+ 234:             render();
+ 235:             return;
+ 236:         }
+ 237:         if (tab != 0) {
+ 238:             tab = 0;
+ 239:             render();
+ 240:             return;
+ 241:         }
+ 242:         // 回到后台而不是 finish()：进程留着，下次打开还在原处
+ 243:         moveTaskToBack(true);
+ 244:     }
+ 245: 
+ 246:     // ── 渲染分发 ──────────────────────────────────────────
+ 247:     private void render() {
+ 248:         tvDays.setText(String.valueOf(store.daysLeft(plan)));
+ 249:         tvLeftLabel.setText("已确认 " + store.completed.size() + " / " + plan.days.size() + " 天");
+ 250: 
+ 251:         for (int i = 0; i < navBtn.length; i++) {
+ 252:             navBtn[i].setTextColor(i == tab ? C_FG : C_FG3);
+ 253:             navBtn[i].setTypeface(i == tab ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+ 254:         }
+ 255: 
+ 256:         content.removeAllViews();
+ 257:         // 游戏页要贴满屏幕，其它页保留统一的左右留白。
+ 258:         // 在这里集中设置，避免各 render 方法各设一套、切 tab 后互相残留。
+ 259:         if (tab == 3) content.setPadding(0, 0, 0, 0);
+ 260:         else content.setPadding(dp(12), dp(10), dp(12), dp(10));
+ 261: 
+ 262:         switch (tab) {
+ 263:             case 0: renderToday(); break;
+ 264:             case 1: renderHard(); break;
+ 265:             case 2: renderPlanList(); break;
+ 266:             case 3: renderGame(); break;
+ 267:             default: renderStats(); break;
+ 268:         }
+ 269:     }
+ 270: 
+ 271:     // ══ 今日 ══════════════════════════════════════════════
+ 272:     private void renderToday() {
+ 273:         if (plan.days.isEmpty()) { content.addView(hint("计划数据为空")); return; }
+ 274:         idx = Math.max(0, Math.min(idx, plan.days.size() - 1));
+ 275:         final Plan.Day d = plan.days.get(idx);
+ 276: 
+ 277:         content.addView(dayHeader(d));
+ 278: 
+ 279:         // ── 每日置顶必背卡 ────────────────────────────────
+ 280:         //
+ 281:         // 用户原话："让你默写这个东西，不用默写毕竟手机上怎么默写，
+ 282:         // 把答案写出来直接提醒用户答案是这个记住就行了，做成每日置顶，
+ 283:         // 显眼每次打开看一遍更好"。
+ 284:         //
+ 285:         // 所以这里不是"练习"，是"答案卡"：一打开就先看到今天该背的
+ 286:         // 结论，默写框已删除（原来 reviewRow 里的 EditText 去掉了）。
+ 287:         addRecallTop();
+ 288: 
+ 289:         // 任务
+ 290:         if (!d.tasks.isEmpty()) {
+ 291:             LinearLayout card = card("今日任务", null);
+ 292:             for (Plan.Task t : d.tasks) card.addView(taskRow(d.date, t));
+ 293:             content.addView(card);
+ 294:         }
+ 295: 
+ 296:         // 检索
+ 297:         //
+ 298:         // 原来这里还有个独立的「检索」tab，渲染的是同一批 d.reviews ——
+ 299:         // 明明是同一份数据换个位置重复显示，用户自然会问"怎么还是以前的东西"。
+ 300:         // 检索本来就属于当天：逾期会累积到当天，不单独成页。已删。
+ 301:         //
+ 302:         // 但"还有多少项没做、会不会累积"这件事要让人看得见，
+ 303:         // 所以把逾期统计补在这一张卡上，而不是靠翻页去数。
+ 304:         if (!d.reviews.isEmpty()) {
+ 305:             int done = 0;
+ 306:             for (Plan.Review r : d.reviews) {
+ 307:                 if (store.completed.contains("R-" + r.id)) done++;
+ 308:             }
+ 309:             int left = d.reviews.size() - done;
+ 310:             String sub = left == 0
+ 311:                     ? "今天要回忆的都看过了"
+ 312:                     : "还剩 " + left + " 项没看 · 点开直接看答案，不用默写";
+ 313:             LinearLayout card = card("今日回忆 · " + d.reviews.size() + " 章", sub);
+ 314:             for (Plan.Review r : d.reviews) card.addView(reviewRow(d.date, r));
+ 315:             content.addView(card);
+ 316:         }
+ 317: 
+ 318:         // 词汇 —— 英语这一科在 App 里就是这块
+ 319:         // 用户原话："英语只需要单词就行了"
+ 320:         // 原来这里只把 json 片段当文字打印出来（{"from":20,"to":40}），
+ 321:         // 既不能背也不能点。现在做成真入口。
+ 322:         if (d.vocabFrom >= 0 && d.vocabTo > d.vocabFrom) {
+ 323:             final int vf = d.vocabFrom, vt = d.vocabTo;
+ 324:             int nNew = vt - vf;
+ 325: 
+ 326:             LinearLayout vcard = card("英语 · 背单词", null);
+ 327: 
+ 328:             TextView big = new TextView(this);
+ 329:             big.setText("今天 " + nNew + " 个新词");
+ 330:             big.setTextColor(C_FG);
+ 331:             big.setTextSize(17);
+ 332:             big.setTypeface(Typeface.DEFAULT_BOLD);
+ 333:             vcard.addView(big);
+ 334: 
+ 335:             TextView sub = new TextView(this);
+ 336:             sub.setText("第 " + (vf + 1) + " – " + vt + " 个"
+ 337:                     + (d.vocabReviewJson != null ? " · 另有旧词要复习" : ""));
+ 338:             sub.setTextColor(C_FG3);
+ 339:             sub.setTextSize(12);
+ 340:             sub.setPadding(0, dp(3), 0, 0);
+ 341:             vcard.addView(sub);
+ 342: 
+ 343:             // 主按钮：背今天的词
+ 344:             TextView go = new TextView(this);
+ 345:             go.setText("开始背这 " + nNew + " 个 →");
+ 346:             go.setTextColor(C_TEAL);
+ 347:             go.setTextSize(13.5f);
+ 348:             go.setTypeface(Typeface.DEFAULT_BOLD);
+ 349:             go.setPadding(0, dp(10), 0, dp(2));
+ 350:             go.setOnClickListener(v -> wordView.open(vf, vt, "今天的单词"));
+ 351:             vcard.addView(go);
+ 352: 
+ 353:             // 练一练：翻卡只测"见过没"，测不出版面真实能力。
+ 354:             // 五种题型分别查读、写、语境、词性 —— 这是"丰富教法"的落点。
+ 355:             TextView drill = new TextView(this);
+ 356:             drill.setText("✎ 练一练这 " + nNew + " 个词（五种题型）→");
+ 357:             drill.setTextColor(C_PURPLE);
+ 358:             drill.setTextSize(13.5f);
+ 359:             drill.setTypeface(Typeface.DEFAULT_BOLD);
+ 360:             drill.setPadding(0, dp(9), 0, dp(2));
+ 361:             drill.setOnClickListener(v -> engView.open(vf, vt, "练今天这批词"));
+ 362:             vcard.addView(drill);
+ 363: 
+ 364:             // 复习按钮：只在有旧词时出现
+ 365:             final String rvJson = d.vocabReviewJson;
+ 366:             if (rvJson != null) {
+ 367:                 TextView rev = new TextView(this);
+ 368:                 rev.setText("复习旧词 →");
+ 369:                 rev.setTextColor(C_AMBER);
+ 370:                 rev.setTextSize(13.5f);
+ 371:                 rev.setTypeface(Typeface.DEFAULT_BOLD);
+ 372:                 rev.setPadding(0, dp(6), 0, dp(2));
+ 373:                 rev.setOnClickListener(v -> {
+ 374:                     try {
+ 375:                         wordView.openReview(new org.json.JSONArray(rvJson), "复习旧词");
+ 376:                     } catch (Exception e) {
+ 377:                         android.widget.Toast.makeText(MainActivity.this,
+ 378:                                 "复习数据读取失败", android.widget.Toast.LENGTH_SHORT).show();
+ 379:                     }
+ 380:                 });
+ 381:                 vcard.addView(rev);
+ 382: 
+ 383:                 TextView drillOld = new TextView(this);
+ 384:                 drillOld.setText("✎ 练这批旧词 →");
+ 385:                 drillOld.setTextColor(C_PURPLE);
+ 386:                 drillOld.setTextSize(13.5f);
+ 387:                 drillOld.setTypeface(Typeface.DEFAULT_BOLD);
+ 388:                 drillOld.setPadding(0, dp(6), 0, dp(2));
+ 389:                 drillOld.setOnClickListener(v -> {
+ 390:                     try {
+ 391:                         org.json.JSONArray arr = new org.json.JSONArray(rvJson);
+ 392:                         List<String> ws = new ArrayList<String>();
+ 393:                         for (int i = 0; i < arr.length(); i++) {
+ 394:                             org.json.JSONObject o = arr.optJSONObject(i);
+ 395:                             if (o != null) {
+ 396:                                 String w = o.optString("w", "");
+ 397:                                 if (!w.isEmpty()) ws.add(w);
+ 398:                             }
+ 399:                         }
+ 400:                         if (ws.isEmpty()) {
+ 401:                             engView.open();
+ 402:                         } else {
+ 403:                             engView.openList(ws, "练旧词");
+ 404:                         }
+ 405:                     } catch (Exception e) {
+ 406:                         engView.open();
+ 407:                     }
+ 408:                 });
+ 409:                 vcard.addView(drillOld);
+ 410:             }
+ 411: 
+ 412:             vcard.addView(checkRow(d.date, "V-" + d.date, "今天的单词过完了"));
+ 413:             content.addView(vcard);
+ 414:         }
+ 415: 
+ 416:         // 推进闸门
+ 417:         content.addView(commitBlock(d));
+ 418:     }
+ 419: 
+ 420:     private View dayHeader(Plan.Day d) {
+ 421:         LinearLayout box = new LinearLayout(this);
+ 422:         box.setOrientation(LinearLayout.VERTICAL);
+ 423:         box.setPadding(0, 0, 0, dp(10));
+ 424: 
+ 425:         boolean isToday = Store.todayIso().equals(d.date);
+ 426: 
+ 427:         TextView title = new TextView(this);
+ 428:         title.setText(d.date + "  周" + d.weekday + (isToday ? "   · 今天" : ""));
+ 429:         title.setTextColor(isToday ? C_TEAL : C_FG);
+ 430:         title.setTextSize(19);
+ 431:         title.setTypeface(Typeface.DEFAULT_BOLD);
+ 432:         box.addView(title);
+ 433: 
+ 434:         TextView sub = new TextView(this);
+ 435:         String s = "第 " + (idx + 1) + " / " + plan.days.size() + " 学习日";
+ 436:         if (!TextUtils.isEmpty(d.phase)) s += "   ·   " + d.phase;
+ 437:         int examLeft = store.realDaysToExam(plan);
+ 438:         if (examLeft > 0) s += "   ·   距考 " + examLeft + " 天";
+ 439:         sub.setText(s);
+ 440:         sub.setTextColor(C_FG3);
+ 441:         sub.setTextSize(12);
+ 442:         sub.setPadding(0, dp(4), 0, 0);
+ 443:         box.addView(sub);

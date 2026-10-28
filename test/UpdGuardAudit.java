@@ -62,6 +62,55 @@ public class UpdGuardAudit {
 
         System.out.println("=== ③ 发版脚本只留最新包（历史包无用）===");
         ok("部署前清掉旧 apk", rel.contains("os.remove"));
+
+        // ── 2026-10-28 审计后新增的防线 ──────────────────────────
+        System.out.println();
+        System.out.println("=== ④ 下载源不得混入不同版本（串版本装旧包）===");
+        ok("GitHub 兜底源必须版本号一致才启用",
+                src.contains("fallbackGithubCode == ltCode(lt)"));
+        ok("记录了 GitHub 那版的版本号",
+                src.contains("fallbackGithubCode = code"));
+        ok("自有域名与 pages.dev 互为镜像",
+                src.contains("app.xxjcloudns.kdns.fr/")
+                        && src.contains("zsb-update.pages.dev/"));
+
+        System.out.println();
+        System.out.println("=== ⑤ 版本号进位（1.5.100 会与 1.6.0 碰撞）===");
+        String build = read(new File(root, "build_apk.py").getPath());
+        ok("bump 时 patch 段到 100 必须进位", build.contains("seg[2] >= 100"));
+        ok("minor 段到 100 也要进位", build.contains("seg[1] >= 100"));
+        ok("发版脚本对越界版本号直接报错",
+                rel.contains("会和更高级的版本碰撞"));
+
+        System.out.println();
+        System.out.println("=== ⑥ Gist 更新必须用 POST（PUT 是 404）===");
+        String gist = read(new File(root, "src/com/zsb/plan/GistSync.java").getPath());
+        ok("不再用 PUT 更新 gist",
+                !gist.contains("send(\"PUT\", API"));
+        ok("改用 POST /gists/{id}", gist.contains("send(\"POST\", API + \"/\" + gistId"));
+
+        System.out.println();
+        System.out.println("=== ⑦ 教材 PDF 必须验魔数（Pages 会回 200+HTML）===");
+        String book = read(new File(root, "src/com/zsb/plan/BookView.java").getPath());
+        ok("有 PDF 魔数校验", book.contains("looksLikePdf("));
+        ok("校验 %PDF- 前五字节",
+                book.contains("0x25") && book.contains("0x2D"));
+        ok("渲染失败要删掉坏缓存", book.contains("catch (Exception e) {"));
+        ok("下载后校验长度与格式", book.contains("expect > 0 && tmp.length() != expect"));
+
+        System.out.println();
+        System.out.println("=== ⑧ 导入进度必须立刻落库 ===");
+        String store = read(new File(root, "src/com/zsb/plan/Store.java").getPath());
+        ok("Store 重写了 importJson", store.contains("public int importJson(String raw)"));
+        ok("导入后调用 writeNow()",
+                store.indexOf("public int importJson") < store.indexOf("writeNow();",
+                        store.indexOf("public int importJson")));
+
+        System.out.println();
+        System.out.println("=== ⑨ 生命周期护栏（界面没了不要弹窗）===");
+        ok("askUpdate 检查 isFinishing",
+                src.contains("isFinishing() || act.isDestroyed()"));
+
         System.out.println();
         System.out.println("STAT " + pass + " " + fail);
     }

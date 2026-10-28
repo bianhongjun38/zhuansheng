@@ -168,6 +168,23 @@ def read_version(bump):
             while len(seg) < 3:
                 seg.append(0)
             seg[2] += 1
+            # 每段必须 < 100。
+            #
+            # Update.parseVer() 把这版号压成 maj*10000 + min*100 + pat，
+            # 也就是按 100 进制。patch 段一旦到 100，1.5.100 算出来是
+            # 10600 —— 和 1.6.0 完全相等；再到 1.5.101（10601），切到
+            # 1.6.0 反而算"变旧"：发版脚本拒绝发布、客户端显示
+            # "已是最新版本"，包永远发不出去。
+            #
+            # 按 1.5.39 的速度（单日几十次 --bump），再 build 61 次就撞线，
+            # 所以必须在这里进位，而不是等出事再补。
+            # 99 → 进位到下一段，和 parseVer 的 100 进制保持一致。
+            if seg[2] >= 100:
+                seg[2] = 0
+                seg[1] += 1
+            if seg[1] >= 100:
+                seg[1] = 0
+                seg[0] += 1
             name = ".".join(str(x) for x in seg)
         except Exception:
             name = "1.0.1"

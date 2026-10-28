@@ -1,0 +1,3200 @@
+﻿ 444: 
+ 445:         // 前后翻页
+ 446:         LinearLayout nav = new LinearLayout(this);
+ 447:         nav.setOrientation(LinearLayout.HORIZONTAL);
+ 448:         nav.setPadding(0, dp(9), 0, 0);
+ 449: 
+ 450:         nav.addView(smallBtn("‹ 上一天", () -> {
+ 451:             if (idx > 0) { idx--; stopTimer(); render(); }
+ 452:         }, idx > 0));
+ 453: 
+ 454:         nav.addView(smallBtn("下一天 ›", () -> {
+ 455:             if (idx < plan.days.size() - 1) { idx++; stopTimer(); render(); }
+ 456:         }, idx < plan.days.size() - 1));
+ 457: 
+ 458:         if (idx != store.todayIndex(plan)) {
+ 459:             nav.addView(smallBtn("回到今天", () -> {
+ 460:                 idx = store.todayIndex(plan); stopTimer(); render();
+ 461:             }, true));
+ 462:         }
+ 463:         box.addView(nav);
+ 464:         return box;
+ 465:     }
+ 466: 
+ 467:     // ── 任务 → 教材页 ─────────────────────────────────────
+ 468:     // 每科一本教材，页码由 plan.json 的 pdfStart 给出
+ 469:     // （生成时已按各书的印刷页→PDF 页偏移换算好）。
+ 470:     // 练习册与数学科已整块移除，这里不再有 pract 分支。
+ 471:     static class BookRef {
+ 472:         String id, title, shortName;
+ 473:         int page;
+ 474:     }
+ 475: 
+ 476:     /** 学科代码 → 中文名。题库按钮和页面标题都用它。 */
+ 477:     static String subjectName(String s) {
+ 478:         if ("math".equals(s)) return "数学";
+ 479:         if ("comp".equals(s)) return "计算机";
+ 480:         if ("eng".equals(s)) return "英语";
+ 481:         return s == null ? "" : s;
+ 482:     }
+ 483: 
+ 484:     private BookRef bookRefOf(Plan.Task t) {
+ 485:         if (t == null) return null;
+ 486: 
+ 487:         String subj = t.subject == null ? "" : t.subject;
+ 488:         String bookId, title, shortName;
+ 489:         if ("comp".equals(subj)) {
+ 490:             bookId = "comp_book"; title = "计算机基础教材"; shortName = "计算机教材";
+ 491:         } else if ("eng".equals(subj)) {
+ 492:             bookId = "eng_book"; title = "大学英语基础教材"; shortName = "英语教材";
+ 493:         } else {
+ 494:             return null;
+ 495:         }
+ 496: 
+ 497:         // 练习册整块去掉了：用户说排版乱、不要了。
+ 498:         // 原来这里按 kind=="pract" 换成 *_pract 书并 +2 页偏移，
+ 499:         // 连带 plan.json 里 77 条 pract 任务一起清了。
+ 500:         int page = 0;
+ 501:         if (t.pdfStart != null) page = t.pdfStart;
+ 502:         else if (t.startPage > 0) page = t.startPage + 1;
+ 503: 
+ 504:         if (page <= 0) return null;
+ 505:         BookRef r = new BookRef();
+ 506:         r.id = bookId;
+ 507:         r.title = title;
+ 508:         r.shortName = shortName;
+ 509:         r.page = page;
+ 510:         return r;
+ 511:     }
+ 512: 
+ 513:     private View taskRow(final String date, final Plan.Task t) {
+ 514:         LinearLayout row = new LinearLayout(this);
+ 515:         row.setOrientation(LinearLayout.HORIZONTAL);
+ 516:         row.setPadding(0, dp(10), 0, dp(10));
+ 517:         row.setGravity(Gravity.TOP);
+ 518: 
+ 519:         final String tid = Plan.taskId(t);
+ 520:         final boolean done = store.isDone(date, tid);
+ 521: 
+ 522:         // 勾选框
+ 523:         final TextView chk = new TextView(this);
+ 524:         chk.setText(done ? "✓" : "");
+ 525:         chk.setTextSize(13);
+ 526:         chk.setGravity(Gravity.CENTER);
+ 527:         chk.setTextColor(Color.WHITE);
+ 528:         GradientDrawable g = new GradientDrawable();
+ 529:         g.setCornerRadius(dp(6));
+ 530:         g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+ 531:         g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+ 532:         chk.setBackground(g);
+ 533:         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(dp(24), dp(24));
+ 534:         clp.topMargin = dp(1);
+ 535:         chk.setLayoutParams(clp);
+ 536:         chk.setOnClickListener(v -> {
+ 537:             boolean nv = store.toggleDone(date, tid);
+ 538:             chk.setText(nv ? "✓" : "");
+ 539:             GradientDrawable g2 = new GradientDrawable();
+ 540:             g2.setCornerRadius(dp(6));
+ 541:             g2.setStroke(dp(2), nv ? C_PURPLE : C_FG3);
+ 542:             g2.setColor(nv ? C_PURPLE : Color.TRANSPARENT);
+ 543:             chk.setBackground(g2);
+ 544:             renderHeaderOnly();
+ 545:             // 勾选状态变化可能影响推进按钮，重画整页
+ 546:             render();
+ 547:         });
+ 548:         row.addView(chk);
+ 549: 
+ 550:         // 文字区
+ 551:         LinearLayout col = new LinearLayout(this);
+ 552:         col.setOrientation(LinearLayout.VERTICAL);
+ 553:         LinearLayout.LayoutParams colp = new LinearLayout.LayoutParams(
+ 554:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 555:         colp.leftMargin = dp(11);
+ 556:         col.setLayoutParams(colp);
+ 557: 
+ 558:         Plan.Subject sj = plan.subject(t.subject);
+ 559:         Plan.Chapter ch = plan.chapter(t.chapterId);
+ 560: 
+ 561:         TextView name = new TextView(this);
+ 562:         String line1;
+ 563:         if ("learn".equals(t.kind) && ch != null) {
+ 564:             line1 = sj.name + " · " + ch.name;
+ 565:         } else {
+ 566:             line1 = TextUtils.isEmpty(t.note) ? sj.name : t.note;
+ 567:         }
+ 568:         name.setText(line1);
+ 569:         name.setTextColor(done ? C_FG3 : C_FG);
+ 570:         name.setTextSize(14.5f);
+ 571:         if (!done) name.setTypeface(Typeface.DEFAULT_BOLD);
+ 572:         col.addView(name);
+ 573: 
+ 574:         // 页码 + 时长
+ 575:         List<String> meta = new ArrayList<>();
+ 576:         if (t.startPage > 0 && t.endPage >= t.startPage) {
+ 577:             meta.add("p" + t.startPage + "-" + t.endPage);
+ 578:         }
+ 579:         if (t.min > 0) meta.add(t.min + " 分钟");
+ 580:         long el = store.timingOf(date, tid);
+ 581:         if (el > 1000) meta.add("已计时 " + fmtDur(el));
+ 582: 
+ 583:         TextView m = new TextView(this);
+ 584:         m.setText(TextUtils.join("   ", meta));
+ 585:         m.setTextColor(C_FG3);
+ 586:         m.setTextSize(11.5f);
+ 587:         m.setPadding(0, dp(3), 0, 0);
+ 588:         col.addView(m);
+ 589:         if (!TextUtils.isEmpty(t.note) && "learn".equals(t.kind)) {
+ 590:             TextView note = new TextView(this);
+ 591:             note.setText(t.note);
+ 592:             note.setTextColor(0xFF5C6373);
+ 593:             note.setTextSize(11);
+ 594:             note.setPadding(0, dp(2), 0, 0);
+ 595:             col.addView(note);
+ 596:         }
+ 597: 
+ 598:         // 打开教材 —— 点这行文字直接跳对应页，不用去翻 PDF
+ 599:         final BookRef ref = bookRefOf(t);
+ 600:         if (ref != null) {
+ 601:             TextView open = new TextView(this);
+ 602:             open.setText("📖 打开" + ref.shortName + " p" + ref.page);
+ 603:             open.setTextColor(C_TEAL);
+ 604:             open.setTextSize(12.5f);
+ 605:             open.setTypeface(Typeface.DEFAULT_BOLD);
+ 606:             open.setPadding(0, dp(7), 0, dp(1));
+ 607:             open.setOnClickListener(v -> book.open(ref.id, ref.title, ref.page));
+ 608:             col.addView(open);
+ 609:         }
+ 610: 
+ 611:         // 做题 —— 任务本身带题库时才有这个按钮
+ 612:         // 用户原话："根本没有题目"：光写"练习册 p5-6"没法在手机上做
+ 613:         if (!TextUtils.isEmpty(t.bankSubject)) {
+ 614:             TextView quiz = new TextView(this);
+ 615:             int n = t.bankLimit > 0 ? t.bankLimit : 10;
+ 616: 
+ 617:             // 数学分支已删：数学任务整块移出今日任务，
+ 618:             // 函数图像/求导公式改在「工具」页里直达（不会丢入口）。
+ 619:             String label;
+ 620:             if (t.bankYear > 0) {
+ 621:                 label = "✎ 做 " + t.bankYear + " 年真题";
+ 622:             } else {
+ 623:                 label = "✎ 做题（" + n + " 道）";
+ 624:             }
+ 625:             quiz.setText(label);
+ 626:             quiz.setTextColor(C_AMBER);
+ 627:             quiz.setTextSize(12.5f);
+ 628:             quiz.setTypeface(Typeface.DEFAULT_BOLD);
+ 629:             quiz.setPadding(0, dp(6), 0, dp(1));
+ 630:             quiz.setOnClickListener(v -> {
+ 631:                 if (t.bankYear > 0) {
+ 632:                     quizView.openYear(t.bankSubject, t.bankYear,
+ 633:                             t.bankYear + " 年真题");
+ 634:                 } else {
+ 635:                     quizView.openSubject(t.bankSubject, n, false,
+ 636:                             subjectName(t.bankSubject) + " 练习");
+ 637:                 }
+ 638:             });
+ 639:             col.addView(quiz);
+ 640:         }
+ 641: 
+ 642:         row.addView(col);
+ 643: 
+ 644:         // 计时按钮
+ 645:         final TextView timer = new TextView(this);
+ 646:         final String tkey = Store.key(date, tid);
+ 647:         boolean running = tkey.equals(timingKey);
+ 648:         timer.setText(running ? "■" : "▶");
+ 649:         timer.setTextSize(13);
+ 650:         timer.setTextColor(running ? C_PINK : C_FG3);
+ 651:         timer.setGravity(Gravity.CENTER);
+ 652:         GradientDrawable bg = new GradientDrawable();
+ 653:         bg.setCornerRadius(dp(8));
+ 654:         bg.setColor(C_BG3);
+ 655:         timer.setBackground(bg);
+ 656:         LinearLayout.LayoutParams tlp = new LinearLayout.LayoutParams(dp(34), dp(30));
+ 657:         tlp.leftMargin = dp(6);
+ 658:         timer.setLayoutParams(tlp);
+ 659:         timer.setOnClickListener(v -> {
+ 660:             if (tkey.equals(timingKey)) stopTimer();
+ 661:             else startTimer(tkey, m);
+ 662:             render();
+ 663:         });
+ 664:         row.addView(timer);
+ 665: 
+ 666:         return row;
+ 667:     }
+ 668: 
+ 669:     /**
+ 670:      * 今日置顶必背卡。
+ 671:      *
+ 672:      * 取今天所有到期复习章节的答案，一章一组，直接摊在最上面。
+ 673:      * 用户要求"每次打开看一遍"，所以不折叠、不需要点开。
+ 674:      */
+ 675:     private void addRecallTop() {
+ 676:         if (idx < 0 || idx >= plan.days.size()) return;
+ 677:         Plan.Day d = plan.days.get(idx);
+ 678: 
+ 679:         // 候选章：① 今天到期要复习的（优先，这是记忆曲线的正事）
+ 680:         //         ② 今天新学的（保证每天都有卡，不然头几天打开是空的）
+ 681:         // 都按出现顺序去重；没有答案的章直接跳过（宁缺勿编）。
+ 682:         java.util.LinkedHashSet<String> seen = new java.util.LinkedHashSet<>();
+ 683:         for (Plan.Review r : d.reviews) {
+ 684:             if (plan.recall.containsKey(r.chapterId)) seen.add(r.chapterId);
+ 685:         }
+ 686:         int fromReview = seen.size();
+ 687:         if (seen.isEmpty()) {
+ 688:             for (Plan.Task t : d.tasks) {
+ 689:                 if (plan.recall.containsKey(t.chapterId)) seen.add(t.chapterId);
+ 690:             }
+ 691:         }
+ 692:         // ③ 兜底：越靠后越是整天刷真题/错题，没有"新学的章"。
+ 693:         // 但"每日置顶"不能因为今天是综合练习就空着——那就退回到
+ 694:         // 最近学过的那几章，让用户每天都有东西扫一眼。
+ 695:         if (seen.isEmpty()) {
+ 696:             for (int i = idx; i >= 0 && seen.isEmpty(); i--) {
+ 697:                 for (Plan.Task t : plan.days.get(i).tasks) {
+ 698:                     if (plan.recall.containsKey(t.chapterId)) seen.add(t.chapterId);
+ 699:                 }
+ 700:             }
+ 701:         }
+ 702:         if (seen.isEmpty()) return;
+ 703: 
+ 704:         String sub;
+ 705:         if (fromReview > 0) {
+ 706:             sub = "今天到期的 " + fromReview + " 章 · 答案直接摊开，不用默写";
+ 707:         } else if (hasLearnedOn(d)) {
+ 708:             sub = "今天新学的 " + seen.size() + " 章 · 先背住这些结论";
+ 709:         } else {
+ 710:             sub = "最近学过的 " + seen.size() + " 章 · 综合练习日再看一遍";
+ 711:         }
+ 712: 
+ 713:         LinearLayout card = card("今日必背 · " + seen.size() + " 章", sub);
+ 714: 
+ 715:         int rank = 0;
+ 716:         for (String cid : seen) {
+ 717:             Plan.Chapter ch = plan.chapter(cid);
+ 718:             String name = ch != null ? ch.name : cid;
+ 719: 
+ 720:             TextView h = new TextView(this);
+ 721:             h.setText((++rank) + ".  " + name);
+ 722:             h.setTextColor(C_AMBER);
+ 723:             h.setTextSize(14.5f);
+ 724:             h.setTypeface(Typeface.DEFAULT_BOLD);
+ 725:             h.setPadding(0, dp(rank == 1 ? 2 : 12), 0, dp(2));
+ 726:             card.addView(h);
+ 727: 
+ 728:             addRecallPoints(card, cid);
+ 729:         }
+ 730:         content.addView(card);
+ 731:     }
+ 732: 
+ 733:     /** 今天有没有可以直接出卡的「新学」章节。 */
+ 734:     private boolean hasLearnedOn(Plan.Day d) {
+ 735:         for (Plan.Task t : d.tasks) {
+ 736:             if (plan.recall.containsKey(t.chapterId)) return true;
+ 737:         }
+ 738:         return false;
+ 739:     }
+ 740: 
+ 741:     /** 把一章的答案点逐条摊开。没有卡就静默跳过。 */
+ 742:     private void addRecallPoints(LinearLayout parent, String chapterId) {
+ 743:         Plan.Recall rc = plan.recall.get(chapterId);
+ 744:         if (rc == null) return;
+ 745: 
+ 746:         for (String p : rc.points) {
+ 747:             TextView tv = new TextView(this);
+ 748:             tv.setText("· " + p);
+ 749:             tv.setTextColor(C_FG2);
+ 750:             tv.setTextSize(13.5f);
+ 751:             tv.setLineSpacing(dp(3), 1f);
+ 752:             tv.setPadding(dp(2), dp(2), 0, dp(2));
+ 753:             parent.addView(tv);
+ 754:         }
+ 755: 
+ 756:         if (!rc.exam.isEmpty()) {
+ 757:             TextView k = new TextView(this);
+ 758:             k.setText("考点： " + rc.exam);
+ 759:             k.setTextColor(C_TEAL);
+ 760:             k.setTextSize(13f);
+ 761:             k.setTypeface(Typeface.DEFAULT_BOLD);
+ 762:             k.setLineSpacing(dp(3), 1f);
+ 763:             k.setPadding(dp(2), dp(4), 0, dp(3));
+ 764:             parent.addView(k);
+ 765:         }
+ 766:     }
+ 767: 
+ 768:     private View reviewRow(final String date, final Plan.Review r) {
+ 769:         LinearLayout box = new LinearLayout(this);
+ 770:         box.setOrientation(LinearLayout.VERTICAL);
+ 771:         box.setPadding(0, dp(9), 0, dp(9));
+ 772: 
+ 773:         final String rid = "R-" + r.id;
+ 774:         final boolean done = store.isDone(date, rid);
+ 775: 
+ 776:         LinearLayout row = new LinearLayout(this);
+ 777:         row.setOrientation(LinearLayout.HORIZONTAL);
+ 778:         row.setGravity(Gravity.CENTER_VERTICAL);
+ 779: 
+ 780:         final TextView chk = new TextView(this);
+ 781:         chk.setText(done ? "✓" : "");
+ 782:         chk.setTextSize(13);
+ 783:         chk.setGravity(Gravity.CENTER);
+ 784:         chk.setTextColor(Color.WHITE);
+ 785:         GradientDrawable g = new GradientDrawable();
+ 786:         g.setCornerRadius(dp(6));
+ 787:         g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+ 788:         g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+ 789:         chk.setBackground(g);
+ 790:         chk.setLayoutParams(new LinearLayout.LayoutParams(dp(24), dp(24)));
+ 791:         chk.setOnClickListener(v -> store.toggleDone(date, rid));
+ 792:         row.addView(chk);
+ 793: 
+ 794:         Plan.Subject sj = plan.subject(r.subject);
+ 795:         Plan.Chapter ch = plan.chapter(r.chapterId);
+ 796: 
+ 797:         TextView tv = new TextView(this);
+ 798:         tv.setText(r.kind + "  " + sj.name + (ch != null ? " · " + ch.name : "")
+ 799:                 + (r.min > 0 ? "  (" + r.min + " 分钟)" : ""));
+ 800:         tv.setTextColor(done ? C_FG3 : C_FG);
+ 801:         tv.setTextSize(13.5f);
+ 802:         tv.setPadding(dp(11), 0, 0, 0);
+ 803:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 804:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 805:         tv.setLayoutParams(lp);
+ 806:         row.addView(tv);
+ 807: 
+ 808:         box.addView(row);
+ 809: 
+ 810:         // 默写框已删除。
+ 811:         // 手机上打字慢、还看不全公式，默写只会变成"卡住不动"。
+ 812:         // 改成直接把答案摊开（见下面的 recallPoints），看一眼记一遍。
+ 813:         addRecallPoints(box, r.chapterId);
+ 814: 
+ 815:         // 三档自评
+ 816:         LinearLayout grades = new LinearLayout(this);
+ 817:         grades.setOrientation(LinearLayout.HORIZONTAL);
+ 818:         LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+ 819:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 820:         glp.topMargin = dp(6);
+ 821:         glp.leftMargin = dp(35);
+ 822:         grades.setLayoutParams(glp);
+ 823: 
+ 824:         // 三档自评保留，但不再带默写内容 —— 没有输入框了，
+ 825:         // 原来那两句 store.setNote(..., et.getText()) 已删。
+ 826:         grades.addView(gradeBtn("记不住", () -> {
+ 827:             store.bumpHard(r.chapterId.isEmpty() ? r.id : r.chapterId);
+ 828:             store.setDone(date, rid, false);
+ 829:             toast("已进错题库，明天再看一遍");
+ 830:             render();
+ 831:         }));
+ 832:         grades.addView(gradeBtn("有点印象", () -> {
+ 833:             store.setDone(date, rid, true);
+ 834:             toast("再多扫两遍就记住了");
+ 835:             render();
+ 836:         }));
+ 837:         grades.addView(gradeBtn("记住了", () -> {
+ 838:             store.setDone(date, rid, true);
+ 839:             toast("过关");
+ 840:             render();
+ 841:         }));
+ 842:         box.addView(grades);
+ 843: 
+ 844:         View sep = new View(this);
+ 845:         sep.setBackgroundColor(C_LINE);
+ 846:         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+ 847:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(1));
+ 848:         slp.topMargin = dp(9);
+ 849:         sep.setLayoutParams(slp);
+ 850:         box.addView(sep);
+ 851: 
+ 852:         return box;
+ 853:     }
+ 854: 
+ 855:     private View commitBlock(final Plan.Day d) {
+ 856:         LinearLayout box = new LinearLayout(this);
+ 857:         box.setOrientation(LinearLayout.VERTICAL);
+ 858:         box.setPadding(0, dp(6), 0, 0);
+ 859: 
+ 860:         List<String> ids = Plan.dayTaskIds(d);
+ 861:         int doneN = 0;
+ 862:         for (String id : ids) if (store.isDone(d.date, id)) doneN++;
+ 863:         final boolean all = !ids.isEmpty() && doneN == ids.size();
+ 864:         final boolean passed = store.completed.contains(d.date);
+ 865: 
+ 866:         TextView label = new TextView(this);
+ 867:         label.setText("完成度 " + doneN + " / " + ids.size()
+ 868:                 + (all ? "   全部完成" : "   还有 " + (ids.size() - doneN) + " 项"));
+ 869:         label.setTextColor(all ? C_GREEN : C_FG3);
+ 870:         label.setTextSize(12.5f);
+ 871:         label.setGravity(Gravity.CENTER);
+ 872:         label.setPadding(0, dp(6), 0, dp(8));
+ 873:         box.addView(label);
+ 874: 
+ 875:         Button btn = new Button(this);
+ 876:         if (passed) {
+ 877:             btn.setText("已确认完成 · 点此撤销");
+ 878:             btn.setTextColor(C_FG2);
+ 879:             btn.setBackgroundColor(C_BG3);
+ 880:             btn.setOnClickListener(v -> new AlertDialog.Builder(this)
+ 881:                     .setMessage("把 " + d.date + " 退回未完成？剩余天数会增加 1。")
+ 882:                     .setNegativeButton("取消", null)
+ 883:                     .setPositiveButton("撤销", (x, y) -> {
+ 884:                         store.uncommitDay(d.date);
+ 885:                         idx = store.todayIndex(plan);
+ 886:                         render();
+ 887:                         toast("已撤销");
+ 888:                     }).show());
+ 889:         } else {
+ 890:             btn.setText(all ? "今日完成 · 推进到下一天" : "把上面全部勾完才能推进");
+ 891:             btn.setTextColor(all ? Color.WHITE : C_FG3);
+ 892:             btn.setBackgroundColor(all ? C_PURPLE : C_BG3);
+ 893:             btn.setEnabled(all);
+ 894:             btn.setOnClickListener(v -> new AlertDialog.Builder(this)
+ 895:                     .setMessage("确认 " + d.date + " 已完成？\n\n这会推进计划进度，剩余天数减少 1。")
+ 896:                     .setNegativeButton("再想想", null)
+ 897:                     .setPositiveButton("确认完成", (x, y) -> {
+ 898:                         store.commitDay(d.date);
+ 899:                         idx = store.todayIndex(plan);
+ 900:                         render();
+ 901:                         toast("已推进 · 剩余 " + store.daysLeft(plan) + " 天");
+ 902:                     }).show());
+ 903:         }
+ 904:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 905:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(48));
+ 906:         lp.topMargin = dp(2);
+ 907:         btn.setLayoutParams(lp);
+ 908:         btn.setTextSize(14);
+ 909:         box.addView(btn);
+ 910: 
+ 911:         return box;
+ 912:     }
+ 913: 
+ 914:     // ══ 错题库 ════════════════════════════════════════════
+ 915:     private void renderHardMap() { renderHard(); }
+ 916: 
+ 917:     private void renderHard() {
+ 918:         if (store.hard.isEmpty()) {
+ 919:             content.addView(hint("错题库是空的。\n\n检索时选「写不出」，那一节就会进来。"
+ 920:                     + "\n英语训练答错的单词也会自动进来。"));
+ 921:             content.addView(wideBtn("✎ 练英语单词（五种题型）", () -> engView.open()));
+ 922:             return;
+ 923:         }
+ 924:         LinearLayout card = card("错题库 · " + store.hard.size() + " 项",
+ 925:                 "等级越高越该回头看。清掉后就从列表移除。");
+ 926:         for (final String id : new ArrayList<>(store.hard.keySet())) {
+ 927:             Plan.Chapter ch = plan.chapter(id);
+ 928:             Integer lv = store.hard.get(id);
+ 929:             LinearLayout row = new LinearLayout(this);
+ 930:             row.setOrientation(LinearLayout.HORIZONTAL);
+ 931:             row.setGravity(Gravity.CENTER_VERTICAL);
+ 932:             row.setPadding(0, dp(9), 0, dp(9));
+ 933: 
+ 934:             TextView tv = new TextView(this);
+ 935:             // 英语错题的 key 是 "eng:单词"，不是章节 id，plan.chapter() 找不到。
+ 936:             // 不特判的话这里会把 "eng:apple" 原样打出来，看着像脏数据。
+ 937:             boolean isEngWord = id.startsWith("eng:");
+ 938:             String nm;
+ 939:             if (isEngWord) {
+ 940:                 nm = "英语 · 单词 " + id.substring(4);
+ 941:             } else if (ch != null) {
+ 942:                 nm = plan.subject(ch.subject).name + " · " + ch.name;
+ 943:             } else {
+ 944:                 nm = id;
+ 945:             }
+ 946:             tv.setText(nm + "    等级 " + (lv == null ? 1 : lv) + " / 3");
+ 947:             tv.setTextColor(C_FG);
+ 948:             tv.setTextSize(13.5f);
+ 949:             tv.setLayoutParams(new LinearLayout.LayoutParams(
+ 950:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 951:             if (isEngWord) {
+ 952:                 final String word = id.substring(4);
+ 953:                 tv.setOnClickListener(v -> {
+ 954:                     List<String> one = new ArrayList<String>();
+ 955:                     one.add(word);
+ 956:                     engView.openList(one, "重练 " + word);
+ 957:                 });
+ 958:             }
+ 959:             row.addView(tv);
+ 960: 
+ 961:             row.addView(smallBtn("降级", () -> {
+ 962:                 Integer c = store.hard.get(id);
+ 963:                 if (c == null || c <= 1) { store.clearHard(id); toast("移出错题库"); }
+ 964:                 else { store.hard.put(id, c - 1); store.save(); toast("降一级"); }
+ 965:                 render();
+ 966:             }, true));
+ 967: 
+ 968:             card.addView(row);
+ 969:         }
+ 970:         content.addView(card);
+ 971:     }
+ 972: 
+ 973:     // ══ 全表 ══════════════════════════════════════════════
+ 974:     private void renderPlanList() {
+ 975:         LinearLayout card = card("全部 " + plan.days.size() + " 个学习日", "点任意一天查看并补做");
+ 976:         final int cur = store.todayIndex(plan);
+ 977:         for (int i = 0; i < plan.days.size(); i++) {
+ 978:             final Plan.Day d = plan.days.get(i);
+ 979:             final int pos = i;
+ 980:             boolean done = store.completed.contains(d.date);
+ 981: 
+ 982:             LinearLayout row = new LinearLayout(this);
+ 983:             row.setOrientation(LinearLayout.HORIZONTAL);
+ 984:             row.setGravity(Gravity.CENTER_VERTICAL);
+ 985:             row.setPadding(0, dp(11), 0, dp(11));
+ 986: 
+ 987:             View bar = new View(this);
+ 988:             GradientDrawable bg = new GradientDrawable();
+ 989:             bg.setCornerRadius(dp(2));
+ 990:             bg.setColor(done ? C_GREEN : (i == cur ? C_PURPLE : C_BG3));
+ 991:             bar.setBackground(bg);
+ 992:             LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(dp(3), dp(30));
+ 993:             blp.rightMargin = dp(11);
+ 994:             bar.setLayoutParams(blp);
+ 995:             row.addView(bar);
+ 996: 
+ 997:             LinearLayout col = new LinearLayout(this);
+ 998:             col.setOrientation(LinearLayout.VERTICAL);
+ 999:             col.setLayoutParams(new LinearLayout.LayoutParams(
+1000:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+1001: 
+1002:             TextView a = new TextView(this);
+1003:             a.setText(d.date + "  周" + d.weekday);
+1004:             a.setTextColor(i == cur ? C_FG : C_FG2);
+1005:             a.setTextSize(13.5f);
+1006:             if (i == cur) a.setTypeface(Typeface.DEFAULT_BOLD);
+1007:             col.addView(a);
+1008: 
+1009:             TextView bx = new TextView(this);
+1010:             String st = "第 " + (i + 1) + " 天";
+1011:             if (!TextUtils.isEmpty(d.phase)) st += " · " + d.phase;
+1012:             st += " · " + d.tasks.size() + " 任务";
+1013:             if (!d.reviews.isEmpty()) st += " · " + d.reviews.size() + " 检索";
+1014:             if (done) st += "   ✓ 已确认";
+1015:             else if (i == cur) st += "   ← 当前";
+1016:             bx.setText(st);
+1017:             bx.setTextColor(done ? C_GREEN : C_FG3);
+1018:             bx.setTextSize(11.5f);
+1019:             bx.setPadding(0, dp(2), 0, 0);
+1020:             col.addView(bx);
+1021: 
+1022:             row.addView(col);
+1023: 
+1024:             row.setOnClickListener(v -> { idx = pos; tab = 0; stopTimer(); render(); });
+1025:             card.addView(row);
+1026: 
+1027:             if (i < plan.days.size() - 1) {
+1028:                 View sep = new View(this);
+1029:                 sep.setBackgroundColor(C_LINE);
+1030:                 card.addView(sep, new LinearLayout.LayoutParams(
+1031:                         ViewGroup.LayoutParams.MATCH_PARENT, dp(1)));
+1032:             }
+1033:         }
+1034:         content.addView(card);
+1035:     }
+1036: 
+1037:     // ══ 词汇塔 ══════════════════════════════════════════
+1038:     private void renderGame() {
+1039:         ViewGroup parent = (ViewGroup) gameView.getParent();
+1040:         if (parent != null) parent.removeView(gameView);
+1041:         gameView.setLayoutParams(new LinearLayout.LayoutParams(
+1042:                 ViewGroup.LayoutParams.MATCH_PARENT,
+1043:                 ViewGroup.LayoutParams.MATCH_PARENT));
+1044:         content.addView(gameView);
+1045:         gameView.show();
+1046:     }
+1047: 
+1048:     // ══ 数据 ══════════════════════════════════════════════
+1049:     private void renderStats() {
+1050:         int total = plan.days.size();
+1051:         int conf = store.completed.size();
+1052:         int taskDone = store.done.size();
+1053: 
+1054:         LinearLayout c1 = card("总览", null);
+1055:         c1.addView(statRow("学习日总数", total + " 天"));
+1056:         c1.addView(statRow("已确认完成", conf + " 天"));
+1057:         c1.addView(statRow("剩余", store.daysLeft(plan) + " 天"));
+1058:         c1.addView(statRow("已勾选条目", taskDone + " 项"));
+1059:         c1.addView(statRow("错题库", store.hard.size() + " 项"));
+1060:         c1.addView(statRow("考试日", plan.meta.examDate));
+1061:         content.addView(c1);
+1062: 
+1063:         // 常驻工具入口：数学和英语的能力不该只在某一天的任务里出现。
+1064:         // 数学题库已经删了（用户不要），换成能画图、能查公式表的工具。
+1065:         LinearLayout tools = card("学习工具", "随时可用，不用等到某一天的任务");
+1066:         tools.addView(wideBtn("📈 函数图像（可叠导数曲线、看切线）", () -> mathView.open(0)));
+1067:         tools.addView(wideBtn("📋 求导公式对照表（40 条，点一条就画图）", () -> mathView.open(1)));
+1068:         tools.addView(wideBtn("✍ 求导练习（写答案，程序判等价）", () -> mathView.open(2)));
+1069:         tools.addView(wideBtn("🔤 英语五练（英译中/中译英/拼写/填空/词性）", () -> engView.open()));
+1070:         tools.addView(wideBtn("🔄 线性变换（2×2 矩阵怎么拉扯平面、特征方向）",
+1071:                 () -> linalgView.open()));
+1072:         content.addView(tools);
+1073: 
+1074:         // 账号卡：登录后进度才上云。
+1075:         // 放在「数据管理」前面，因为它决定了下面那些手动导出还要不要用。
+1076:         LinearLayout cAcc = card("账号", "登录后进度自动存到云端，换手机不会丢");
+1077:         final TextView btnAcc = wideBtn("", null);
+1078:         final Runnable refreshAcc = () -> {
+1079:             Account acc = Account.load(this);
+1080:             btnAcc.setText(acc.loggedIn() ? "已登录：" + acc.username : "登录 / 注册");
+1081:         };
+1082:         refreshAcc.run();
+1083:         btnAcc.setOnClickListener(v -> {
+1084:             Account acc = Account.load(this);
+1085:             if (acc.loggedIn()) {
+1086:                 new AlertDialog.Builder(this)
+1087:                         .setTitle("账号")
+1088:                         .setMessage("当前用户：" + acc.username
+1089:                                 + "\n\n退出登录不会清掉这台手机上的进度，"
+1090:                                 + "只是停止上传。重新登录同一个用户名就能接着同步。")
+1091:                         .setNegativeButton("关闭", null)
+1092:                         .setPositiveButton("退出登录", (x, y) -> {
+1093:                             Account.clear(this);
+1094:                             refreshAcc.run();
+1095:                             toast("已退出登录");
+1096:                         })
+1097:                         .show();
+1098:             } else {
+1099:                 LoginView lv = new LoginView(this);
+1100:                 lv.setOnLoggedIn(a -> {
+1101:                     refreshAcc.run();
+1102:                     toast("欢迎，" + a.username);
+1103:                 });
+1104:                 lv.show();
+1105:             }
+1106:         });
+1107:         cAcc.addView(btnAcc);
+1108:         cAcc.addView(wideBtn("排行榜", () -> {
+1109:             Account acc = Account.load(this);
+1110:             if (!acc.loggedIn()) { toast("先登录才能看排行榜"); return; }
+1111:             boardView.show();
+1112:         }));
+1113:         content.addView(cAcc);
+1114: 
+1115:         LinearLayout c2 = card("数据管理", "全部数据只存在这台手机上，不上传任何服务器");
+1116:         c2.addView(wideBtn("生成进度码", () -> {
+1117:             final String code = ProgressCode.encode(store.exportSnapshot());
+1118:             final String json = store.exportJson();
+1119:             if (code == null) { toast("生成失败"); return; }
+1120:             new AlertDialog.Builder(this)
+1121:                     .setTitle("进度码")
+1122:                     .setMessage("这是一串可以带走的进度。换手机或重装后，"
+1123:                             + "在新手机上点「导入进度码」粘进去，进度全部回来。\n\n"
+1124:                             + "长度 " + code.length() + " 字符，含校验位，抄错会直接报错。")
+1125:                     .setPositiveButton("复制进度码", (x, y) -> {
+1126:                         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+1127:                         cm.setPrimaryClip(ClipData.newPlainText("zsb-progress", code));
+1128:                         toast("进度码已复制");
+1129:                     })
+1130:                     .setNeutralButton("复制完整备份", (x, y) -> {
+1131:                         ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+1132:                         cm.setPrimaryClip(ClipData.newPlainText("zsb-backup", json));
+1133:                         toast("完整 JSON 已复制（" + json.length() + " 字符）");
+1134:                     })
+1135:                     .setNegativeButton("关闭", null)
+1136:                     .show();
+1137:         }));
+1138: 
+1139:         c2.addView(wideBtn("导入进度码", () -> {
+1140:             final EditText et = new EditText(this);
+1141:             et.setHint("粘贴进度码（ZSB1-…）或完整备份 JSON");
+1142:             et.setHintTextColor(C_FG3);
+1143:             et.setTextColor(C_FG);
+1144:             et.setTextSize(13);
+1145:             et.setMinLines(4);
+1146:             et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+1147:             new AlertDialog.Builder(this)
+1148:                     .setTitle("导入进度")
+1149:                     .setMessage("会覆盖当前全部进度。空白和换行不影响，小写也行。")
+1150:                     .setView(et)
+1151:                     .setNegativeButton("取消", null)
+1152:                     .setPositiveButton("导入", (x, y) -> {
+1153:                         String in = et.getText().toString().trim();
+1154:                         if (in.isEmpty()) { toast("没有内容"); return; }
+1155:                         // 先当进度码解，不是码就按原始 JSON 处理
+1156:                         String json = ProgressCode.decode(in);
+1157:                         if (json == null) json = in;
+1158:                         try {
+1159:                             int n = store.importJson(json);
+1160:                             idx = store.todayIndex(plan);
+1161:                             render();
+1162:                             toast("已导入 " + n + " 条勾选");
+1163:                         } catch (Exception e) {
+1164:                             toast("导入失败：内容无效（进度码可能抄错）");
+1165:                         }
+1166:                     }).show();
+1167:         }));
+1168: 
+1169:         // 检查更新：按钮文案直接带版本号，省得用户不知道自己装的是哪一版。
+1170:         // 首次渲染显示本机版本，异步查到线上版本后追加「最新 vX.Y.Z」或
+1171:         // 「可升级 vX.Y.Z」。点一下重新查并弹窗（check(false)）。
+1172:         final Button btnUpd = wideBtn("检查更新 · 当前 v" + updater.currentVersion(),
+1173:                 () -> updater.check(false));
+1174:         c2.addView(btnUpd);
+1175:         updater.queryLatest(true, (tag, code) -> {
+1176:             String local = updater.currentVersion();
+1177:             if (tag == null) {
+1178:                 btnUpd.setText("检查更新 · 当前 v" + local + "（线上查询失败，点击重试）");
+1179:             } else if (code > Update.parseVer(local)) {
+1180:                 btnUpd.setText("检查更新 · 当前 v" + local + " → 可升级 v" + tag);
+1181:             } else {
+1182:                 btnUpd.setText("检查更新 · 当前 v" + local + "（已是最新）");
+1183:             }
+1184:         });
+1185:         c2.addView(wideBtn("清空全部进度", () -> new AlertDialog.Builder(this)
+1186:                 .setMessage("清空全部勾选、默写和计时？无法撤销。")
+1187:                 .setNegativeButton("取消", null)
+1188:                 .setPositiveButton("清空", (x, y) -> {
+1189:                     store.resetAll();
+1190:                     idx = store.todayIndex(plan);
+1191:                     render();
+1192:                     toast("已清空");
+1193:                 }).show()));
+1194:         content.addView(c2);
+1195: 
+1196:         LinearLayout c3 = card("这套计划的依据", null);
+1197:         TextView tv = new TextView(this);
+1198:         tv.setText("· 检索阶梯 R1 +4天 / R2 +18天 / R3 +53天 / R4 +133天，"
+1199:                 + "按 Cepeda 2008 的最优间隔比例（考试延迟的 8.5%–17%）换算。\n"
+1200:                 + "· 第二轮第三轮都是做题而不是重读，依据 Dunlosky 2013 对 10 种学习法的评级。\n"
+1201:                 + "· 日期跟真实日历走：今天是哪天就显示哪天的任务。没学完的会一直留着，"
+1202:                 + "勾选完成后这部分天数才从「剩余」里减掉。\n"
+1203:                 + "· 每页耗时是估算值，跑一周后要用真实数据重算整张表。");
+1204:         tv.setTextColor(C_FG3);
+1205:         tv.setTextSize(12.5f);
+1206:         tv.setLineSpacing(dp(3), 1f);
+1207:         c3.addView(tv);
+1208:         content.addView(c3);
+1209:     }
+1210: 
+1211:     // ── 小组件 ────────────────────────────────────────────
+1212:     private LinearLayout card(String title, String sub) {
+1213:         LinearLayout box = new LinearLayout(this);
+1214:         box.setOrientation(LinearLayout.VERTICAL);
+1215:         box.setBackground(roundRect(C_BG2, dp(14), C_LINE));
+1216:         box.setPadding(dp(14), dp(13), dp(14), dp(13));
+1217:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1218:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1219:         lp.bottomMargin = dp(11);
+1220:         box.setLayoutParams(lp);
+1221: 
+1222:         if (title != null) {
+1223:             TextView t = new TextView(this);
+1224:             t.setText(title);
+1225:             t.setTextColor(C_FG);
+1226:             t.setTextSize(15.5f);
+1227:             t.setTypeface(Typeface.DEFAULT_BOLD);
+1228:             box.addView(t);
+1229:         }
+1230:         if (sub != null) {
+1231:             TextView s = new TextView(this);
+1232:             s.setText(sub);
+1233:             s.setTextColor(C_FG3);
+1234:             s.setTextSize(12);
+1235:             s.setPadding(0, dp(3), 0, dp(9));
+1236:             box.addView(s);
+1237:         }
+1238:         return box;
+1239:     }
+1240: 
+1241:     private GradientDrawable roundRect(int fill, float radius, int stroke) {
+1242:         GradientDrawable g = new GradientDrawable();
+1243:         g.setColor(fill);
+1244:         g.setCornerRadius(radius);
+1245:         if (stroke != 0) g.setStroke(dp(1), stroke);
+1246:         return g;
+1247:     }
+1248: 
+1249:     private TextView hint(String s) {
+1250:         TextView tv = new TextView(this);
+1251:         tv.setText(s);
+1252:         tv.setTextColor(C_FG3);
+1253:         tv.setTextSize(13);
+1254:         tv.setGravity(Gravity.CENTER);
+1255:         tv.setPadding(dp(10), dp(40), dp(10), dp(40));
+1256:         return tv;
+1257:     }
+1258: 
+1259:     private View checkRow(String date, String id, String label) {
+1260:         LinearLayout row = new LinearLayout(this);
+1261:         row.setOrientation(LinearLayout.HORIZONTAL);
+1262:         row.setGravity(Gravity.CENTER_VERTICAL);
+1263:         row.setPadding(0, dp(9), 0, 0);
+1264: 
+1265:         final boolean done = store.isDone(date, id);
+1266:         final TextView chk = new TextView(this);
+1267:         chk.setText(done ? "✓" : "");
+1268:         chk.setTextSize(13);
+1269:         chk.setGravity(Gravity.CENTER);
+1270:         chk.setTextColor(Color.WHITE);
+1271:         GradientDrawable g = new GradientDrawable();
+1272:         g.setCornerRadius(dp(6));
+1273:         g.setStroke(dp(2), done ? C_PURPLE : C_FG3);
+1274:         g.setColor(done ? C_PURPLE : Color.TRANSPARENT);
+1275:         chk.setBackground(g);
+1276:         chk.setLayoutParams(new LinearLayout.LayoutParams(dp(24), dp(24)));
+1277:         chk.setOnClickListener(v -> { store.toggleDone(date, id); render(); });
+1278:         row.addView(chk);
+1279: 
+1280:         TextView tv = new TextView(this);
+1281:         tv.setText(label);
+1282:         tv.setTextColor(C_FG2);
+1283:         tv.setTextSize(13.5f);
+1284:         tv.setPadding(dp(11), 0, 0, 0);
+1285:         row.addView(tv);
+1286:         return row;
+1287:     }
+1288: 
+1289:     private TextView smallBtn(String text, Runnable onClick, boolean enabled) {
+1290:         TextView tv = new TextView(this);
+1291:         tv.setText(text);
+1292:         tv.setTextSize(12.5f);
+1293:         tv.setTextColor(enabled ? C_FG2 : 0xFF3C4250);
+1294:         tv.setGravity(Gravity.CENTER);
+1295:         tv.setPadding(dp(12), dp(9), dp(12), dp(9));
+1296:         GradientDrawable g = new GradientDrawable();
+1297:         g.setCornerRadius(dp(9));
+1298:         g.setColor(C_BG3);
+1299:         tv.setBackground(g);
+1300:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1301:                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+1302:         lp.rightMargin = dp(7);
+1303:         tv.setLayoutParams(lp);
+1304:         if (enabled) tv.setOnClickListener(v -> onClick.run());
+1305:         return tv;
+1306:     }
+1307: 
+1308:     private TextView gradeBtn(String text, Runnable onClick) {
+1309:         TextView tv = new TextView(this);
+1310:         tv.setText(text);
+1311:         tv.setTextSize(12);
+1312:         tv.setTextColor(C_FG2);
+1313:         tv.setGravity(Gravity.CENTER);
+1314:         tv.setPadding(0, dp(7), 0, dp(7));
+1315:         GradientDrawable g = new GradientDrawable();
+1316:         g.setCornerRadius(dp(8));
+1317:         g.setColor(C_BG3);
+1318:         tv.setBackground(g);
+1319:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1320:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+1321:         lp.rightMargin = dp(5);
+1322:         tv.setLayoutParams(lp);
+1323:         tv.setOnClickListener(v -> onClick.run());
+1324:         return tv;
+1325:     }
+1326: 
+1327:     private Button wideBtn(String text, Runnable onClick) {
+1328:         Button b = new Button(this);
+1329:         b.setText(text);
+1330:         b.setTextSize(13.5f);
+1331:         b.setTextColor(C_FG);
+1332:         b.setBackgroundColor(C_BG3);
+1333:         b.setAllCaps(false);
+1334:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+1335:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(46));
+1336:         lp.topMargin = dp(7);
+1337:         b.setLayoutParams(lp);
+1338:         b.setOnClickListener(v -> onClick.run());
+1339:         return b;
+1340:     }
+1341: 
+1342:     private View statRow(String k, String v) {
+1343:         LinearLayout row = new LinearLayout(this);
+1344:         row.setOrientation(LinearLayout.HORIZONTAL);
+1345:         row.setPadding(0, dp(7), 0, dp(7));
+1346: 
+1347:         TextView a = new TextView(this);
+1348:         a.setText(k);
+1349:         a.setTextColor(C_FG3);
+1350:         a.setTextSize(13);
+1351:         a.setLayoutParams(new LinearLayout.LayoutParams(
+1352:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+1353:         row.addView(a);
+1354: 
+1355:         TextView b = new TextView(this);
+1356:         b.setText(v);
+1357:         b.setTextColor(C_FG);
+1358:         b.setTextSize(13.5f);
+1359:         b.setTypeface(Typeface.DEFAULT_BOLD);
+1360:         row.addView(b);
+1361:         return row;
+1362:     }
+1363: 
+1364:     // ── 计时 ──────────────────────────────────────────────
+1365:     /** 计时中那个任务的文字标签，每秒刷新它显示已计时长 */
+1366:     private TextView timingLabel;
+1367: 
+1368:     private void startTimer(String key, TextView label) {
+1369:         stopTimer();
+1370:         timingKey = key;
+1371:         timingStart = System.currentTimeMillis();
+1372:         timingLabel = label;
+1373:         tickRun = new Runnable() {
+1374:             @Override public void run() {
+1375:                 if (timingKey == null) return;
+1376:                 // 每秒只刷新那一行文字，不重画整页（重画会丢焦点、闪屏）
+1377:                 if (timingLabel != null) {
+1378:                     long el = System.currentTimeMillis() - timingStart
+1379:                             + store.timingOf(dateOfKey(timingKey), idOfKey(timingKey));
+1380:                     timingLabel.setText("已计时 " + fmtDur(el));
+1381:                 }
+1382:                 tickHandler.postDelayed(this, 1000);
+1383:             }
+1384:         };
+1385:         tickHandler.postDelayed(tickRun, 1000);
+1386:     }
+1387: 
+1388:     private static String dateOfKey(String k) {
+1389:         int i = k.indexOf('|');
+1390:         return i < 0 ? "" : k.substring(0, i);
+1391:     }
+1392: 
+1393:     private static String idOfKey(String k) {
+1394:         int i = k.indexOf('|');
+1395:         return i < 0 ? "" : k.substring(i + 1);
+1396:     }
+1397: 
+1398:     private void stopTimer() {
+1399:         if (timingKey != null) {
+1400:             long el = System.currentTimeMillis() - timingStart;
+1401:             if (el > 1000) {
+1402:                 store.addTiming(dateOfKey(timingKey), idOfKey(timingKey), el);
+1403:             }
+1404:         }
+1405:         timingKey = null;
+1406:         timingStart = 0;
+1407:         timingLabel = null;
+1408:         if (tickRun != null) tickHandler.removeCallbacks(tickRun);
+1409:         tickRun = null;
+1410:     }
+1411: 
+1412:     @Override
+1413:     protected void onPause() {
+1414:         super.onPause();
+1415:         // 切后台先把计时结掉，避免手机锁屏后时间白跑。
+1416:         // 这里不调 render()——Activity 已经不可见了，重建视图纯属浪费，
+1417:         // 而且会把输入框里的未提交文本冲掉。回到前台时 onResume 会重画。
+1418:         stopTimer();
+1419:         store.flush();
+1420:     }
+1421: 
+1422:     @Override
+1423:     protected void onResume() {
+1424:         super.onResume();
+1425:         // 从后台回来：刷新一次，把后台期间不该累计的计时清掉并重画
+1426:         if (plan != null && store != null) render();
+1427:     }
+1428: 
+1429:     private void renderHeaderOnly() {
+1430:         tvDays.setText(String.valueOf(store.daysLeft(plan)));
+1431:         tvLeftLabel.setText("已确认 " + store.completed.size() + " / " + plan.days.size() + " 天");
+1432:     }
+1433: 
+1434:     // ── 工具 ──────────────────────────────────────────────
+1435:     private String readAsset(String name) {
+1436:         try {
+1437:             BufferedReader r = new BufferedReader(new InputStreamReader(
+1438:                     getAssets().open(name), "UTF-8"));
+1439:             StringBuilder sb = new StringBuilder();
+1440:             String line;
+1441:             while ((line = r.readLine()) != null) sb.append(line).append('\n');
+1442:             r.close();
+1443:             return sb.toString();
+1444:         } catch (Exception e) {
+1445:             throw new RuntimeException("读不到 assets/" + name + "：" + e.getMessage(), e);
+1446:         }
+1447:     }
+1448: 
+1449:     private int dp(float v) {
+1450:         return Math.round(TypedValue.applyDimension(
+1451:                 TypedValue.COMPLEX_UNIT_DIP, v, getResources().getDisplayMetrics()));
+1452:     }
+1453: 
+1454:     private String fmtDur(long ms) {
+1455:         if (ms < 1000) return "";
+1456:         long s = Math.round(ms / 1000.0);
+1457:         long m = s / 60;
+1458:         if (m < 1) return s + " 秒";
+1459:         if (m < 60) return m + " 分";
+1460:         return (m / 60) + " 小时 " + (m % 60) + " 分";
+1461:     }
+1462: 
+1463:     private void toast(String s) {
+1464:         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+1465:     }
+1466: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\MathView.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.app.Activity;
+   4: import android.app.Dialog;
+   5: import android.graphics.Typeface;
+   6: import android.graphics.drawable.GradientDrawable;
+   7: import android.text.InputType;
+   8: import android.util.TypedValue;
+   9: import android.view.Gravity;
+  10: import android.view.View;
+  11: import android.view.ViewGroup;
+  12: import android.widget.EditText;
+  13: import android.widget.HorizontalScrollView;
+  14: import android.widget.LinearLayout;
+  15: import android.widget.ScrollView;
+  16: import android.widget.TextView;
+  17: 
+  18: import java.util.ArrayList;
+  19: import java.util.List;
+  20: import java.util.Map;
+  21: 
+  22: /**
+  23:  * 数学工具 —— 替代原来的数学题库。
+  24:  *
+  25:  * 用户原话："把数学那部分不要了，只留计算机和英语部分……
+  26:  *           数学你可以做一个函数图像绘制的功能和求导常见公式对照表"
+  27:  *
+  28:  * 为什么这样做比题库更适合数学：
+  29:  *   数学考的是"会不会推"，不是"记不记得"。选择题只能测记忆，
+  30:  *   而一个能画图、能当场求导的工具，能让人把"f 和 f′ 长什么样"看出关系来。
+  31:  *
+  32:  * 三个页签：
+  33:  *   ① 函数图像：输入表达式，画曲线；可叠导数曲线、看切线、找零点
+  34:  *   ② 公式对照：40 条求导规则，按组排列，点一下就能把它画出来
+  35:  *   ③ 求导练习：随机给一个函数，自己算导数，程序判分（对/错/等价）
+  36:  *
+  37:  * 所有计算都在 Expr / PlotGeom / DerivTable 里，本类只做界面。
+  38:  * 那些类在电脑上被 MathTest 逐条审计过，界面里不重复算一遍。
+  39:  */
+  40: public class MathView {
+  41: 
+  42:     private static final int C_BG = 0xFF14161C;
+  43:     private static final int C_BG2 = 0xFF1C1F27;
+  44:     private static final int C_BG3 = 0xFF262A34;
+  45:     private static final int C_LINE = 0xFF2C313C;
+  46:     private static final int C_FG = 0xFFE8EAF0;
+  47:     private static final int C_FG2 = 0xFFC3C9D6;
+  48:     private static final int C_FG3 = 0xFF6B7282;
+  49:     private static final int C_TEAL = 0xFF3ECFAF;
+  50:     private static final int C_PURPLE = 0xFF7C6CF0;
+  51:     private static final int C_AMBER = 0xFFE0A94A;
+  52:     private static final int C_RED = 0xFFE05A54;
+  53: 
+  54:     private final Activity act;
+  55:     private Dialog dlg;
+  56:     private int tab = 0;   // 0 图像  1 公式  2 练习
+  57: 
+  58:     private LinearLayout body;
+  59:     private TextView[] tabBtn = new TextView[3];
+  60: 
+  61:     // 图像页状态
+  62:     private PlotView plot;
+  63:     private EditText etExpr;
+  64:     private TextView tvPlotInfo;
+  65:     private String exprText = "sin(x)";
+  66: 
+  67:     // 练习页状态
+  68:     private Expr.Node quizF;
+  69:     private String quizExpr = "";
+  70:     private String quizMsg = "";
+  71:     private int quizRight = 0, quizAll = 0;
+  72: 
+  73:     public MathView(Activity a) { this.act = a; }
+  74: 
+  75:     private int dp(float v) {
+  76:         return (int) TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v,
+  77:                 act.getResources().getDisplayMetrics());
+  78:     }
+  79: 
+  80:     /** 从某个入口打开：0=图像 1=公式表 2=练习 */
+  81:     public void open(int which) {
+  82:         tab = Math.max(0, Math.min(2, which));
+  83:         build();
+  84:         render();
+  85:         dlg.show();
+  86:     }
+  87: 
+  88:     private void build() {
+  89:         dlg = new Dialog(act, android.R.style.Theme_Black_NoTitleBar_Fullscreen);
+  90:         LinearLayout root = new LinearLayout(act);
+  91:         root.setOrientation(LinearLayout.VERTICAL);
+  92:         root.setBackgroundColor(C_BG);
+  93: 
+  94:         // 顶栏
+  95:         LinearLayout top = new LinearLayout(act);
+  96:         top.setOrientation(LinearLayout.HORIZONTAL);
+  97:         top.setGravity(Gravity.CENTER_VERTICAL);
+  98:         top.setPadding(dp(14), dp(12), dp(14), dp(8));
+  99: 
+ 100:         TextView close = new TextView(act);
+ 101:         close.setText("✕");
+ 102:         close.setTextSize(22);
+ 103:         close.setTextColor(C_FG2);
+ 104:         close.setPadding(dp(6), dp(4), dp(14), dp(4));
+ 105:         close.setOnClickListener(v -> dlg.dismiss());
+ 106:         top.addView(close);
+ 107: 
+ 108:         TextView t = new TextView(act);
+ 109:         t.setText("数学工具");
+ 110:         t.setTextSize(15);
+ 111:         t.setTextColor(C_FG);
+ 112:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 113:         top.addView(t, new LinearLayout.LayoutParams(
+ 114:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 115:         root.addView(top);
+ 116: 
+ 117:         // 页签
+ 118:         LinearLayout tabs = new LinearLayout(act);
+ 119:         tabs.setOrientation(LinearLayout.HORIZONTAL);
+ 120:         tabs.setPadding(dp(10), 0, dp(10), dp(8));
+ 121:         String[] names = {"函数图像", "求导公式", "求导练习"};
+ 122:         for (int i = 0; i < 3; i++) {
+ 123:             final int k = i;
+ 124:             TextView tv = new TextView(act);
+ 125:             tv.setText(names[i]);
+ 126:             tv.setTextSize(13.5f);
+ 127:             tv.setGravity(Gravity.CENTER);
+ 128:             tv.setPadding(0, dp(8), 0, dp(8));
+ 129:             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 130:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 131:             lp.leftMargin = dp(3); lp.rightMargin = dp(3);
+ 132:             tv.setLayoutParams(lp);
+ 133:             tv.setOnClickListener(v -> { tab = k; render(); });
+ 134:             tabBtn[i] = tv;
+ 135:             tabs.addView(tv);
+ 136:         }
+ 137:         root.addView(tabs);
+ 138: 
+ 139:         // 内容
+ 140:         ScrollView sc = new ScrollView(act);
+ 141:         sc.setLayoutParams(new LinearLayout.LayoutParams(
+ 142:                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+ 143:         sc.setFillViewport(true);
+ 144:         body = new LinearLayout(act);
+ 145:         body.setOrientation(LinearLayout.VERTICAL);
+ 146:         body.setPadding(dp(12), dp(4), dp(12), dp(24));
+ 147:         sc.addView(body);
+ 148:         root.addView(sc);
+ 149: 
+ 150:         dlg.setContentView(root);
+ 151:     }
+ 152: 
+ 153:     // ── 渲染分发 ──────────────────────────────────────────
+ 154:     private void render() {
+ 155:         for (int i = 0; i < 3; i++) {
+ 156:             boolean on = i == tab;
+ 157:             tabBtn[i].setTextColor(on ? C_BG : C_FG3);
+ 158:             tabBtn[i].setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+ 159:             GradientDrawable g = new GradientDrawable();
+ 160:             g.setCornerRadius(dp(8));
+ 161:             g.setColor(on ? C_TEAL : C_BG2);
+ 162:             tabBtn[i].setBackground(g);
+ 163:         }
+ 164:         body.removeAllViews();
+ 165:         if (tab == 0) renderPlot();
+ 166:         else if (tab == 1) renderTable();
+ 167:         else renderPractice();
+ 168:     }
+ 169: 
+ 170:     private LinearLayout card(String title) {
+ 171:         LinearLayout c = new LinearLayout(act);
+ 172:         c.setOrientation(LinearLayout.VERTICAL);
+ 173:         c.setBackgroundColor(C_BG2);
+ 174:         GradientDrawable g = new GradientDrawable();
+ 175:         g.setCornerRadius(dp(12));
+ 176:         g.setColor(C_BG2);
+ 177:         c.setBackground(g);
+ 178:         c.setPadding(dp(12), dp(10), dp(12), dp(12));
+ 179:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 180:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 181:         lp.bottomMargin = dp(10);
+ 182:         c.setLayoutParams(lp);
+ 183:         if (title != null) {
+ 184:             TextView t = new TextView(act);
+ 185:             t.setText(title);
+ 186:             t.setTextSize(12);
+ 187:             t.setTextColor(C_FG3);
+ 188:             t.setTypeface(Typeface.DEFAULT_BOLD);
+ 189:             t.setPadding(0, 0, 0, dp(6));
+ 190:             c.addView(t);
+ 191:         }
+ 192:         return c;
+ 193:     }
+ 194: 
+ 195:     private TextView btn(String text, int color) {
+ 196:         TextView b = new TextView(act);
+ 197:         b.setText(text);
+ 198:         b.setTextSize(12.5f);
+ 199:         b.setTextColor(color);
+ 200:         b.setTypeface(Typeface.DEFAULT_BOLD);
+ 201:         b.setGravity(Gravity.CENTER);
+ 202:         b.setPadding(dp(12), dp(8), dp(12), dp(8));
+ 203:         GradientDrawable g = new GradientDrawable();
+ 204:         g.setCornerRadius(dp(8));
+ 205:         g.setColor(C_BG3);
+ 206:         b.setBackground(g);
+ 207:         return b;
+ 208:     }
+ 209: 
+ 210:     // ══ 输入辅助：按键板 + 模板 ═══════════════════════════
+ 211:     /**
+ 212:      * 符号按键板。
+ 213:      *
+ 214:      * 手机上敲 x^2 要切三次符号页，敲 sqrt 会被联想改成别的词。
+ 215:      * 这排按键按一下就插到光标处，插完光标停在括号里。
+ 216:      * 插入逻辑全在 ExprInput（电脑上 52 项断言全过），这里只负责画。
+ 217:      */
+ 218:     private LinearLayout buildKeypad() {
+ 219:         LinearLayout wrap = new LinearLayout(act);
+ 220:         wrap.setOrientation(LinearLayout.VERTICAL);
+ 221:         wrap.setPadding(0, dp(2), 0, dp(6));
+ 222: 
+ 223:         final int perRow = 6;
+ 224:         keyPage = 0;
+ 225:         keyWrap = wrap;
+ 226:         buildKeysInto(wrap, perRow);
+ 227:         return wrap;
+ 228:     }
+ 229: 
+ 230:     /** 按当前页重建按键。切页时清空重画。 */
+ 231:     private void buildKeysInto(LinearLayout wrap, int perRow) {
+ 232:         wrap.removeAllViews();
+ 233:         // 补齐到整行：否则最后一行只剩两个键、右半边空着
+ 234:         final String[][] keys = ExprInput.paddedKeys(perRow, keyPage);
+ 235:         LinearLayout row = null;
+ 236:         for (int i = 0; i < keys.length; i++) {
+ 237:             if (i % perRow == 0) {
+ 238:                 row = new LinearLayout(act);
+ 239:                 row.setOrientation(LinearLayout.HORIZONTAL);
+ 240:                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+ 241:                         ViewGroup.LayoutParams.MATCH_PARENT,
+ 242:                         ViewGroup.LayoutParams.WRAP_CONTENT);
+ 243:                 if (i > 0) rlp.topMargin = dp(5);
+ 244:                 row.setLayoutParams(rlp);
+ 245:                 wrap.addView(row);
+ 246:             }
+ 247:             final String[] key = keys[i];
+ 248:             if (ExprInput.isPad(key)) {
+ 249:                 // 占位键：透明占位，保持列对齐
+ 250:                 View pad = new View(act);
+ 251:                 LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(
+ 252:                         0, dp(36), 1f);
+ 253:                 plp.leftMargin = dp(2);
+ 254:                 plp.rightMargin = dp(2);
+ 255:                 pad.setLayoutParams(plp);
+ 256:                 row.addView(pad);
+ 257:                 continue;
+ 258:             }
+ 259:             boolean isBack = "\b".equals(key[1]);
+ 260:             TextView b = new TextView(act);
+ 261:             b.setText(key[0]);
+ 262:             b.setTextSize(isBack ? 15f : 14f);
+ 263:             b.setTextColor(isBack ? C_RED : C_FG);
+ 264:             b.setTypeface(Typeface.DEFAULT_BOLD);
+ 265:             b.setGravity(Gravity.CENTER);
+ 266:             b.setPadding(0, dp(9), 0, dp(9));
+ 267:             // 按下要变样，否则手指按下去没有任何反馈，
+ 268:             // 用户根本不知道点中没有 —— 实机反馈就是这个问题。
+ 269:             b.setBackground(pressable(dp(7)));
+ 270:             b.setClickable(true);
+ 271:             b.setFocusable(true);
+ 272: 
+ 273:             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 274:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 275:             lp.leftMargin = dp(2);
+ 276:             lp.rightMargin = dp(2);
+ 277:             b.setLayoutParams(lp);
+ 278:             b.setOnClickListener(v -> applyKey(key[1]));
+ 279:             row.addView(b);
+ 280:         }
+ 281:     }
+ 282: 
+ 283:     /** 常用函数模板：点一下整条替换输入框，直接画。 */
+ 284:     private LinearLayout buildTemplates() {
+ 285:         LinearLayout wrap = new LinearLayout(act);
+ 286:         wrap.setOrientation(LinearLayout.VERTICAL);
+ 287:         wrap.setPadding(0, 0, 0, dp(6));
+ 288: 
+ 289:         TextView t = new TextView(act);
+ 290:         t.setText("常用图形（点一下直接画）");
+ 291:         t.setTextSize(11);
+ 292:         t.setTextColor(C_FG3);
+ 293:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 294:         t.setPadding(0, dp(4), 0, dp(5));
+ 295:         wrap.addView(t);
+ 296: 
+ 297:         // 3 列而不是 4 列。
+ 298:         //
+ 299:         // 4 列时每格只有约 75dp 可用宽，"(x+1)(x-1)" 必须缩到 64% 才塞得下，
+ 300:         // "x³ − 3x" 直接被截断 —— FitAudit 量出来的（74.04/75.0 卡在临界）。
+ 301:         // 减号两侧的空格是课本排版，不能为了塞进格子去删；
+ 302:         // 该让格子变宽。3 列每格约 103dp，16 个模板排 6 行，仍然一屏多可见。
+ 303:         final int perRow = 3;
+ 304:         LinearLayout row = null;
+ 305:         for (int i = 0; i < ExprInput.TEMPLATES.length; i++) {
+ 306:             if (i % perRow == 0) {
+ 307:                 row = new LinearLayout(act);
+ 308:                 row.setOrientation(LinearLayout.HORIZONTAL);
+ 309:                 LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+ 310:                         ViewGroup.LayoutParams.MATCH_PARENT,
+ 311:                         ViewGroup.LayoutParams.WRAP_CONTENT);
+ 312:                 if (i > 0) rlp.topMargin = dp(5);
+ 313:                 row.setLayoutParams(rlp);
+ 314:                 wrap.addView(row);
+ 315:             }
+ 316:             final String expr = ExprInput.TEMPLATES[i];
+ 317:             final String nm = i < ExprInput.TEMPLATE_NAMES.length
+ 318:                     ? ExprInput.TEMPLATE_NAMES[i] : "";
+ 319:             LinearLayout cell = new LinearLayout(act);
+ 320:             cell.setOrientation(LinearLayout.VERTICAL);
+ 321:             cell.setGravity(Gravity.CENTER);
+ 322:             // 上下留够：分式要两行，正弦式只有一行。
+ 323:             // 按一行的高度给格子，sin(x)/x 会被压扁到看不清分数线。
+ 324:             cell.setPadding(dp(3), dp(8), dp(3), dp(8));
+ 325:             cell.setMinimumHeight(dp(46));
+ 326:             cell.setBackground(pressable(dp(7)));
+ 327:             cell.setClickable(true);
+ 328:             cell.setFocusable(true);
+ 329: 
+ 330:             // 上排显示已经排好版的公式，下排是图形种类 ——
+ 331:             // 只写 "x^2" 看不出是抛物线，只写"抛物线"又不知道点了会画什么。
+ 332:             FormulaView fv = new FormulaView(act);
+ 333:             fv.setTextSize(12.5f);
+ 334:             fv.setTextColor(C_FG);
+ 335:             try { fv.setExpr(expr); } catch (Exception e) { /* 模板都过审计了 */ }
+ 336:             cell.addView(fv);
+ 337: 
+ 338:             if (!nm.isEmpty()) {
+ 339:                 TextView nt = new TextView(act);
+ 340:                 nt.setText(nm);
+ 341:                 nt.setTextSize(9.5f);
+ 342:                 nt.setTextColor(C_FG3);
+ 343:                 nt.setPadding(0, dp(1), 0, 0);
+ 344:                 cell.addView(nt);
+ 345:             }
+ 346: 
+ 347:             // 同一行必须等高，但不能用"固定 62dp"来实现。
+ 348:             //
+ 349:             // 走过的两条弯路：
+ 350:             //   ① 一开始用 WRAP_CONTENT —— 分式格子（1/x、sin x/x、1/(1+x²)）
+ 351:             //      内容两行，单行格子只占一行，一行之内高矮不齐 = "一大一小"；
+ 352:             //   ② 改成固定 62dp —— 等高是等高了，但分式格子"公式两行 + 说明
+ 353:             //      一行"塞不进 62dp，底下的"双曲线""sinc"被裁掉半截（实机截图）。
+ 354:             //
+ 355:             // 正确做法：先按内容量出这一行最高需要多少，再把这一行所有格子
+ 356:             // 都设成那个高度。等高和"不裁字"同时成立。
+ 357:             cell.setMinimumHeight(dp(TEMPLATE_CELL_H_MIN));
+ 358:             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 359:                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 360:             lp.leftMargin = dp(2);
+ 361:             lp.rightMargin = dp(2);
+ 362:             cell.setLayoutParams(lp);
+ 363:             cell.setOnClickListener(v -> {
+ 364:                 if (etExpr == null) return;
+ 365:                 etExpr.setText(expr);
+ 366:                 etExpr.setSelection(expr.length());
+ 367:                 exprText = expr;
+ 368:                 draw();
+ 369:             });
+ 370:             row.addView(cell);
+ 371:         }
+ 372:         equalizeRows(wrap);
+ 373:         return wrap;
+ 374:     }
+ 375: 
+ 376:     /** 单行公式也至少这么高，免得格子看起来是根空条。 */
+ 377:     private static final int TEMPLATE_CELL_H_MIN = 52;
+ 378: 
+ 379:     /**
+ 380:      * 把每一行的格子高度拉齐到该行最高那个。
+ 381:      *
+ 382:      * 只在布局完成后才知道真实高度，所以用 post —— view 已经在树里，
+ 383:      * 这里改 LayoutParams 会触发一次重新布局，用户看不到跳变（首帧即最终态）。
+ 384:      */
+ 385:     private void equalizeRows(LinearLayout wrap) {
+ 386:         wrap.post(() -> {
+ 387:             for (int r = 0; r < wrap.getChildCount(); r++) {
+ 388:                 View child = wrap.getChildAt(r);
+ 389:                 if (!(child instanceof LinearLayout)) continue;
+ 390:                 LinearLayout row = (LinearLayout) child;
+ 391:                 int max = 0;
+ 392:                 for (int i = 0; i < row.getChildCount(); i++) {
+ 393:                     max = Math.max(max, row.getChildAt(i).getHeight());
+ 394:                 }
+ 395:                 if (max <= 0) continue;
+ 396:                 for (int i = 0; i < row.getChildCount(); i++) {
+ 397:                     View c = row.getChildAt(i);
+ 398:                     ViewGroup.LayoutParams p = c.getLayoutParams();
+ 399:                     if (p != null && p.height != max) {
+ 400:                         p.height = max;
+ 401:                         c.setLayoutParams(p);
+ 402:                     }
+ 403:                 }
+ 404:             }
+ 405:         });
+ 406:     }
+ 407: 
+ 408:     /**
+ 409:      * 「怎么写 → 画出来什么样」对照表。
+ 410:      *
+ 411:      * 用户原话："函数图像那个你得写 sqrt 和 abs 和 exp 对照什么，不然谁知道"。
+ 412:      * 只给模板格子（"sqrt(x)"）等于只给了名字，不知道形状、不知道定义域、
+ 413:      * 不知道和 x^2 有什么不同 —— 模板再多也用不上。
+ 414:      *
+ 415:      * 每条给四样：真缩略曲线（PlotGeom 采样，和主图同一份代码）、
+ 416:      * 怎么写、中文名、一句形状人话、一句能自己验证的话。
+ 417:      * 整条可点，点了就填进输入框并直接画出来。
+ 418:      */
+ 419:     private LinearLayout buildOutline() {
+ 420:         LinearLayout wrap = new LinearLayout(act);
+ 421:         wrap.setOrientation(LinearLayout.VERTICAL);
+ 422:         wrap.setPadding(0, dp(10), 0, dp(4));
+ 423: 
+ 424:         TextView t = new TextView(act);
+ 425:         t.setText("这些写法画出来是什么样");
+ 426:         t.setTextSize(11);
+ 427:         t.setTextColor(C_FG3);
+ 428:         t.setTypeface(Typeface.DEFAULT_BOLD);
+ 429:         t.setPadding(0, 0, 0, dp(2));
+ 430:         wrap.addView(t);
+ 431: 
+ 432:         TextView sub = new TextView(act);
+ 433:         sub.setText("点任意一行直接画。曲线就是它真实的形状，不是示意图。");
+ 434:         sub.setTextSize(10.5f);
+ 435:         sub.setTextColor(C_FG3);
+ 436:         sub.setPadding(0, 0, 0, dp(7));
+ 437:         wrap.addView(sub);
+ 438: 
+ 439:         ExprOutline.Item[] items = ExprOutline.all();
+ 440:         int lastGroup = -1;
+ 441:         for (int i = 0; i < items.length; i++) {
+ 442:             final ExprOutline.Item it = items[i];
+ 443: 
+ 444:             int g = ExprOutline.groupOf(i);
+ 445:             if (g != lastGroup) {
+ 446:                 lastGroup = g;
+ 447:                 TextView gh = new TextView(act);
+ 448:                 gh.setText(ExprOutline.GROUPS[g]);
+ 449:                 gh.setTextSize(11.5f);
+ 450:                 gh.setTextColor(C_TEAL);
+ 451:                 gh.setTypeface(Typeface.DEFAULT_BOLD);
+ 452:                 gh.setPadding(0, dp(i == 0 ? 2 : 9), 0, dp(4));
+ 453:                 wrap.addView(gh);
+ 454:             }
+ 455: 
+ 456:             wrap.addView(outlineRow(it));
+ 457:         }
+ 458:         return wrap;
+ 459:     }
+ 460: 
+ 461:     /** 一条对照：左缩略图，右边写法 + 名字 + 形状 + 自验。整条可点。 */
+ 462:     private View outlineRow(final ExprOutline.Item it) {
+ 463:         LinearLayout row = new LinearLayout(act);
+ 464:         row.setOrientation(LinearLayout.HORIZONTAL);
+ 465:         row.setPadding(dp(8), dp(8), dp(8), dp(8));
+ 466:         row.setBackground(pressable(dp(8)));
+ 467:         row.setClickable(true);
+ 468:         row.setFocusable(true);
+ 469: 
+ 470:         MiniPlot mp = new MiniPlot(act);
+ 471:         try {
+ 472:             mp.set(Expr.parse(it.sample), it.color);
+ 473:         } catch (Exception e) {
+ 474:             // 数据都过审计了；真出问题也不该整块白屏
+ 475:         }
+ 476:         LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(
+ 477:                 (int) dp(78), (int) dp(56));
+ 478:         mlp.rightMargin = dp(10);
+ 479:         row.addView(mp, mlp);
+ 480: 
+ 481:         LinearLayout col = new LinearLayout(act);
+ 482:         col.setOrientation(LinearLayout.VERTICAL);
+ 483: 
+ 484:         // 第一行：写法（等宽感，一眼看出该敲什么）
+ 485:         TextView w = new TextView(act);
+ 486:         w.setText(it.write);
+ 487:         w.setTextSize(14);
+ 488:         w.setTextColor(C_FG);
+ 489:         w.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+ 490:         col.addView(w);
+ 491: 
+ 492:         // 第二行：中文名
+ 493:         TextView nm = new TextView(act);
+ 494:         nm.setText(it.name);
+ 495:         nm.setTextSize(11.5f);
+ 496:         nm.setTextColor(it.color);
+ 497:         nm.setPadding(0, dp(1), 0, 0);
+ 498:         col.addView(nm);
+ 499: 
+ 500:         // 第三行：形状（这才是用户真正缺的）
+ 501:         TextView sh = new TextView(act);
+ 502:         sh.setText(it.shape);
+ 503:         sh.setTextSize(11);
+ 504:         sh.setTextColor(C_FG2);
+ 505:         sh.setPadding(0, dp(4), 0, 0);
+ 506:         col.addView(sh);
+ 507: 
+ 508:         // 第四行：自己能验的一句话
+ 509:         TextView ask = new TextView(act);
+ 510:         ask.setText("试试：" + it.ask);
+ 511:         ask.setTextSize(10.5f);
+ 512:         ask.setTextColor(C_FG3);
+ 513:         ask.setPadding(0, dp(3), 0, 0);
+ 514:         col.addView(ask);
+ 515: 
+ 516:         row.addView(col, new LinearLayout.LayoutParams(
+ 517:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 518: 
+ 519:         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+ 520:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 521:         rlp.topMargin = dp(4);
+ 522:         row.setLayoutParams(rlp);
+ 523: 
+ 524:         row.setOnClickListener(v -> {
+ 525:             if (etExpr == null) return;
+ 526:             etExpr.setText(it.write);
+ 527:             etExpr.setSelection(it.write.length());
+ 528:             exprText = it.write;
+ 529:             draw();
+ 530:         });
+ 531:         return row;
+ 532:     }
+ 533: 
+ 534: 
+ 535:     /** 按一个键：插到光标处（或替换选区），然后刷新。 */
+ 536:     private void applyKey(String frag) {
+ 537:         if (etExpr == null) return;
+ 538: 
+ 539:         // 翻页：不插入任何内容，只换一张键盘
+ 540:         if (ExprInput.SWITCH.equals(frag)) {
+ 541:             keyPage = 1;
+ 542:             buildKeysInto(keyWrap, 6);
+ 543:             return;
+ 544:         }
+ 545:         if (ExprInput.BACK_TO_NUM.equals(frag)) {
+ 546:             keyPage = 0;
+ 547:             buildKeysInto(keyWrap, 6);
+ 548:             return;
+ 549:         }
+ 550:         int a = etExpr.getSelectionStart();
+ 551:         int b = etExpr.getSelectionEnd();
+ 552:         // Android 的 getSelectionStart 在极端情况下会返回 -1
+ 553:         if (a < 0) a = etExpr.getText().length();
+ 554:         if (b < 0) b = a;
+ 555: 
+ 556:         ExprInput.R r = ExprInput.insert(etExpr.getText().toString(), a, b, frag);
+ 557:         etExpr.setText(r.text);
+ 558:         int pos = Math.max(0, Math.min(r.cursor, etExpr.getText().length()));
+ 559:         etExpr.setSelection(pos);
+ 560: 
+ 561:         // 括号没闭上就补一下，省得用户数括号
+ 562:         int un = ExprInput.unclosedParens(r.text);
+ 563:         if (un != 0) updateKeyHint(un);
+ 564:         else updateKeyHint(0);
+ 565:         if (!"\b".equals(frag)) {
+ 566:             // 插入后立刻重画，边写边看
+ 567:             exprText = etExpr.getText().toString();
+ 568:             draw();
+ 569:         }
+ 570:     }
+ 571: 
+ 572:     private TextView keyHint;
+ 573:     private int keyPage;              // 0=数字页 1=函数页
+ 574:     private LinearLayout keyWrap;     // 按键容器，切页时重画
+ 575: 
+ 576:     private void updateKeyHint(int unclosed) {
+ 577:         if (keyHint == null) return;
+ 578:         if (unclosed > 0) {
+ 579:             keyHint.setText("缺 " + unclosed + " 个右括号");
+ 580:             keyHint.setTextColor(C_AMBER);
+ 581:         } else if (unclosed < 0) {
+ 582:             keyHint.setText("右括号多了 " + (-unclosed) + " 个");
+ 583:             keyHint.setTextColor(C_RED);
+ 584:         } else {
+ 585:             keyHint.setText("");
+ 586:         }
+ 587:     }
+ 588: 
+ 589:     // ══ ① 函数图像 ═══════════════════════════════════════
+ 590:     private void renderPlot() {
+ 591:         LinearLayout c1 = card("函数表达式");
+ 592: 
+ 593:         EditText et = new EditText(act);
+ 594:         et.setText(exprText);
+ 595:         et.setTextColor(C_FG);
+ 596:         et.setTextSize(15);
+ 597:         et.setBackgroundColor(C_BG3);
+ 598:         et.setPadding(dp(10), dp(8), dp(10), dp(8));
+ 599:         et.setMinHeight(dp(42));
+ 600:         // setSingleLine(true) 会把 EditText 的高度按"单行无内边距"算死，
+ 601:         // 但这里上下各有 8dp 内边距 —— 结果输入框比内容矮，文字顶出
+ 602:         // 自己的框，压到下面那行提示（实机截图里"右括号多了 1 个"
+ 603:         // 被上一个框盖住半截）。
+ 604:         // 用 maxLines=1 + 显式最小高度，既保证只输一行，又保证框够高。
+ 605:         et.setMaxLines(1);
+ 606:         et.setInputType(InputType.TYPE_CLASS_TEXT
+ 607:                 | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+ 608:         // 数学表达式不该被当作密码/邮箱去猜，给个纯 ASCII 的键盘
+ 609:         et.setPrivateImeOptions("nm");
+ 610:         etExpr = et;
+ 611:         c1.addView(et);
+ 612: 
+ 613:         TextView hint = new TextView(act);
+ 614:         hint.setText("可以写 x、pi、e；sin cos tan ln lg sqrt abs exp；2x、3sin(x)、(x+1)(x-1) 都认。"
+ 615:                 + "\n下面有按键，不用切输入法符号页。");
+ 616:         hint.setTextSize(11);
+ 617:         hint.setTextColor(C_FG3);
+ 618:         hint.setPadding(0, dp(6), 0, dp(8));
+ 619:         c1.addView(hint);
+ 620: 
+ 621:         keyHint = new TextView(act);
+ 622:         keyHint.setTextSize(11);
+ 623:         keyHint.setTextColor(C_AMBER);
+ 624:         keyHint.setPadding(0, dp(2), 0, 0);
+ 625:         c1.addView(keyHint);
+ 626:         updateKeyHint(ExprInput.unclosedParens(exprText));
+ 627: 
+ 628:         c1.addView(buildKeypad());
+ 629:         c1.addView(buildTemplates());
+ 630:         c1.addView(buildOutline());
+ 631: 
+ 632:         LinearLayout row1 = new LinearLayout(act);
+ 633:         row1.setOrientation(LinearLayout.HORIZONTAL);
+ 634:         TextView go = btn("画出来", C_BG);
+ 635:         GradientDrawable gg = new GradientDrawable();
+ 636:         gg.setCornerRadius(dp(8));
+ 637:         gg.setColor(C_TEAL);
+ 638:         go.setBackground(gg);
+ 639:         go.setOnClickListener(v -> {
+ 640:             exprText = etExpr.getText().toString();
+ 641:             draw();
+ 642:         });
+ 643:         row1.addView(go, new LinearLayout.LayoutParams(0,
+ 644:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 645: 
+ 646:         TextView reset = btn("复位", C_FG2);
+ 647:         reset.setOnClickListener(v -> {
+ 648:             if (plot != null) { plot.resetView(); draw(); }
+ 649:         });
+ 650:         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+ 651:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 652:         rlp.leftMargin = dp(8);
+ 653:         reset.setLayoutParams(rlp);
+ 654:         row1.addView(reset);
+ 655:         c1.addView(row1);
+ 656: 
+ 657:         LinearLayout row2 = new LinearLayout(act);
+ 658:         row2.setOrientation(LinearLayout.HORIZONTAL);
+ 659:         row2.setPadding(0, dp(8), 0, 0);
+ 660:         TextView zin = btn("放大 +", C_FG2);
+ 661:         zin.setOnClickListener(v -> { if (plot != null) plot.zoomBy(0.6); });
+ 662:         row2.addView(zin, new LinearLayout.LayoutParams(0,
+ 663:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 664:         TextView zout = btn("缩小 −", C_FG2);
+ 665:         LinearLayout.LayoutParams zlp = new LinearLayout.LayoutParams(
+ 666:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 667:         zlp.leftMargin = dp(8);
+ 668:         zout.setLayoutParams(zlp);
+ 669:         zout.setOnClickListener(v -> { if (plot != null) plot.zoomBy(1.6); });
+ 670:         row2.addView(zout);
+ 671:         c1.addView(row2);
+ 672:         body.addView(c1);
+ 673: 
+ 674:         // 画布
+ 675:         LinearLayout c2 = new LinearLayout(act);
+ 676:         c2.setOrientation(LinearLayout.VERTICAL);
+ 677:         GradientDrawable g2 = new GradientDrawable();
+ 678:         g2.setCornerRadius(dp(12));
+ 679:         g2.setColor(0xFF101319);
+ 680:         c2.setBackground(g2);
+ 681:         c2.setClipToOutline(true);
+ 682:         LinearLayout.LayoutParams c2lp = new LinearLayout.LayoutParams(
+ 683:                 ViewGroup.LayoutParams.MATCH_PARENT, dp(300));
+ 684:         c2lp.bottomMargin = dp(10);
+ 685:         c2.setLayoutParams(c2lp);
+ 686: 
+ 687:         plot = new PlotView(act);
+ 688:         plot.setLayoutParams(new LinearLayout.LayoutParams(
+ 689:                 ViewGroup.LayoutParams.MATCH_PARENT,
+ 690:                 ViewGroup.LayoutParams.MATCH_PARENT));
+ 691:         c2.addView(plot);
+ 692:         body.addView(c2);
+ 693: 
+ 694:         // 显示开关
+ 695:         LinearLayout c3 = card("显示");
+ 696:         LinearLayout switches = new LinearLayout(act);
+ 697:         switches.setOrientation(LinearLayout.HORIZONTAL);
+ 698: 
+ 699:         final TextView swD = btn("导数曲线 f′", C_FG3);
+ 700:         swD.setOnClickListener(v -> {
+ 701:             if (plot == null) return;
+ 702:             boolean nv = !plot.isShowDeriv();
+ 703:             plot.setShowDeriv(nv);
+ 704:             swD.setTextColor(nv ? C_AMBER : C_FG3);
+ 705:             updateInfo();
+ 706:         });
+ 707:         switches.addView(swD, new LinearLayout.LayoutParams(0,
+ 708:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 709: 
+ 710:         final TextView swT = btn("切线（点图选点）", C_FG3);
+ 711:         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+ 712:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+ 713:         slp.leftMargin = dp(8);
+ 714:         swT.setLayoutParams(slp);
+ 715:         swT.setOnClickListener(v -> {
+ 716:             if (plot == null) return;
+ 717:             boolean nv = !plot.isShowTangent();
+ 718:             plot.setShowTangent(nv);
+ 719:             swT.setTextColor(nv ? C_PURPLE : C_FG3);
+ 720:             updateInfo();
+ 721:         });
+ 722:         switches.addView(swT);
+ 723:         c3.addView(switches);
+ 724: 
+ 725:         tvPlotInfo = new TextView(act);
+ 726:         tvPlotInfo.setTextSize(12);
+ 727:         tvPlotInfo.setTextColor(C_FG2);
+ 728:         tvPlotInfo.setPadding(0, dp(8), 0, 0);
+ 729:         tvPlotInfo.setLineSpacing(dp(3), 1f);
+ 730:         c3.addView(tvPlotInfo);
+ 731:         body.addView(c3);
+ 732: 
+ 733:         // 快捷函数
+ 734:         LinearLayout c4 = card("常用图像（点一下直接画）");
+ 735:         HorizontalScrollView hs = new HorizontalScrollView(act);
+ 736:         hs.setHorizontalScrollBarEnabled(false);
+ 737:         LinearLayout chips = new LinearLayout(act);
+ 738:         chips.setOrientation(LinearLayout.HORIZONTAL);
+ 739:         String[] quicks = {"x^2", "x^3", "1/x", "sqrt(x)", "ln(x)", "exp(x)",
+ 740:                 "sin(x)", "cos(x)", "tan(x)", "abs(x)", "x^2-4", "sin(x)/x",
+ 741:                 "x^x", "atan(x)"};
+ 742:         for (String q : quicks) {
+ 743:             TextView chip = btn(q, C_TEAL);
+ 744:             LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+ 745:                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 746:             clp.rightMargin = dp(6);
+ 747:             chip.setLayoutParams(clp);
+ 748:             chip.setOnClickListener(v -> {
+ 749:                 exprText = q;
+ 750:                 if (etExpr != null) etExpr.setText(q);
+ 751:                 draw();
+ 752:             });
+ 753:             chips.addView(chip);
+ 754:         }
+ 755:         hs.addView(chips);
+ 756:         c4.addView(hs);
+ 757:         body.addView(c4);
+ 758: 
+ 759:         draw();
+ 760: 
+ 761:         for (int i = 0; i < 3; i++) if (false) tabBtn[i].setText("");
+ 762:         if (swD != null && plot != null && plot.isShowDeriv()) swD.setTextColor(C_AMBER);
+ 763:         if (swT != null && plot != null && plot.isShowTangent()) swT.setTextColor(C_PURPLE);
+ 764: 
+ 765:         plot.setOnPick((x, y, slope) -> updateInfo());
+ 766:     }
+ 767: 
+ 768:     private void draw() {
+ 769:         if (plot == null) return;
+ 770:         String err = plot.setExpr(exprText);
+ 771:         if (err != null) {
+ 772:             if (tvPlotInfo != null) {
+ 773:                 tvPlotInfo.setTextColor(C_RED);
+ 774:                 tvPlotInfo.setText("画不出来：" + err);
+ 775:             }
+ 776:             return;
+ 777:         }
+ 778:         updateInfo();
+ 779:     }
+ 780: 
+ 781:     private void updateInfo() {
+ 782:         if (tvPlotInfo == null || plot == null) return;
+ 783:         Expr.Node f = plot.expr();
+ 784:         if (f == null) { tvPlotInfo.setText("还没输入函数"); return; }
+ 785: 
+ 786:         StringBuilder b = new StringBuilder();
+ 787:         b.append("f(x) = ").append(exprText);
+ 788:         Expr.Node d = plot.deriv();
+ 789:         if (d != null) b.append("\nf′(x) = ").append(Expr.toText(d));
+ 790: 
+ 791:         List<Double> rs = PlotGeom.roots(f, plot.window(), 600);
+ 792:         if (!rs.isEmpty()) {
+ 793:             b.append("\n零点：");
+ 794:             for (int i = 0; i < rs.size() && i < 5; i++) {
+ 795:                 if (i > 0) b.append("，");
+ 796:                 b.append("x=").append(Expr.fmtNum(rs.get(i)));
+ 797:             }
+ 798:             if (rs.size() > 5) b.append(" 等 ").append(rs.size()).append(" 个");
+ 799:         } else {
+ 800:             b.append("\n零点：本窗口内没有");
+ 801:         }
+ 802: 
+ 803:         Double tx = plot.tangentX();
+ 804:         if (tx != null && plot.isShowTangent()) {
+ 805:             double y = PlotGeom.safeEval(f, tx);
+ 806:             double k = PlotGeom.slope(f, tx);
+ 807:             b.append("\n点 x=").append(Expr.fmtNum(tx))
+ 808:                     .append("：f(x)=").append(Expr.fmtNum(y))
+ 809:                     .append("，f′=").append(Expr.fmtNum(k));
+ 810:             if (PlotGeom.isFinite(k) && Math.abs(k) > 1e-9) {
+ 811:                 b.append("，切线 y=").append(Expr.fmtNum(k)).append("x");
+ 812:                 double c = y - k * tx;
+ 813:                 if (c >= 0) b.append("+").append(Expr.fmtNum(c));
+ 814:                 else b.append("−").append(Expr.fmtNum(-c));
+ 815:             } else if (PlotGeom.isFinite(k)) {
+ 816:                 b.append("，切线水平 y=").append(Expr.fmtNum(y));
+ 817:             }
+ 818:         }
+ 819:         tvPlotInfo.setTextColor(C_FG2);
+ 820:         tvPlotInfo.setText(b.toString());
+ 821:     }
+ 822: 
+ 823:     // ══ ② 求导公式对照表 ═════════════════════════════════
+ 824:     private void renderTable() {
+ 825:         TextView intro = new TextView(act);
+ 826:         intro.setText("点任意一行 → 直接画它的图像，并叠出它的导数曲线。"
+ 827:                 + "\n表里每一条都由 MathTest 用「符号求导 + 数值差分」双重验证过，抄错会当场报错。");
+ 828:         intro.setTextSize(11.5f);
+ 829:         intro.setTextColor(C_FG3);
+ 830:         intro.setPadding(dp(4), 0, dp(4), dp(10));
+ 831:         intro.setLineSpacing(dp(3), 1f);
+ 832:         body.addView(intro);
+ 833: 
+ 834:         Map<String, List<DerivTable.Row>> groups = DerivTable.grouped();
+ 835:         for (Map.Entry<String, List<DerivTable.Row>> e : groups.entrySet()) {
+ 836:             LinearLayout c = card(e.getKey() + " · " + e.getValue().size() + " 条");
+ 837:             for (DerivTable.Row r : e.getValue()) c.addView(rowView(r));
+ 838:             body.addView(c);
+ 839:         }
+ 840:     }
+ 841: 
+ 842:     /**
+ 843:      * 带按下态的圆角背景。
+ 844:      *
+ 845:      * 原来每个可点元素都是 GradientDrawable 单色 —— 按下、松手、禁用
+ 846:      * 长得一模一样，手指按下去屏幕毫无变化。真机上用户会说"点了没反应"，
+ 847:      * 其实事件是收到的，只是没有任何视觉确认。
+ 848:      *
+ 849:      * 用 StateListDrawable 给 pressed 一个明显更亮的底色：
+ 850:      * 深色界面上 C_BG3 → C_BG4 的差别肉眼能看出来，又不会太跳。
+ 851:      */
+ 852:     private android.graphics.drawable.Drawable pressable(final int radius) {
+ 853:         GradientDrawable normal = new GradientDrawable();
+ 854:         normal.setCornerRadius(radius);
+ 855:         normal.setColor(C_BG3);
+ 856: 
+ 857:         GradientDrawable pressed = new GradientDrawable();
+ 858:         pressed.setCornerRadius(radius);
+ 859:         // 比常态亮一档：深色底上这个差值足够看清，又不至于像选中态
+ 860:         pressed.setColor(0xFF3C4250);
+ 861:         // 按下时描一圈青色细边，短按也能看到闪一下
+ 862:         pressed.setStroke(dp(1), C_TEAL);
+ 863: 
+ 864:         android.graphics.drawable.StateListDrawable sd =
+ 865:                 new android.graphics.drawable.StateListDrawable();
+ 866:         sd.addState(new int[]{android.R.attr.state_pressed}, pressed);
+ 867:         sd.addState(new int[]{android.R.attr.state_focused}, pressed);
+ 868:         sd.addState(new int[]{}, normal);
+ 869:         return sd;
+ 870:     }
+ 871: 
+ 872:     /**
+ 873:      * 排好版的公式控件。解析失败就退回纯文本 —— 表里的式子都过审计了，
+ 874:      * 但界面不该因为一条数据坏了整块白屏。
+ 875:      */
+ 876:     private View formula(String expr, int color, float sp) {
+ 877:         FormulaView fv = new FormulaView(act);
+ 878:         fv.setTextSize(sp);
+ 879:         fv.setTextColor(color);
+ 880:         int padTop = dp(3);
+ 881:         fv.setPadding(0, padTop, 0, 0);
+ 882:         try {
+ 883:             fv.setExpr(expr);
+ 884:         } catch (Exception e) {
+ 885:             TextView tv = new TextView(act);
+ 886:             tv.setText(expr);
+ 887:             tv.setTextSize(sp);
+ 888:             tv.setTextColor(color);
+ 889:             tv.setTypeface(Typeface.DEFAULT_BOLD);
+ 890:             return tv;
+ 891:         }
+ 892:         return fv;
+ 893:     }
+ 894: 
+ 895:     /** 「↓ 求导」这类过程标注，统一字号与缩进。 */
+ 896:     private TextView hintLabel(String s) {
+ 897:         TextView tv = new TextView(act);
+ 898:         tv.setText(s);
+ 899:         tv.setTextSize(10.5f);
+ 900:         tv.setTextColor(C_FG3);
+ 901:         tv.setPadding(dp(6), dp(2), 0, dp(2));
+ 902:         return tv;
+ 903:     }
+ 904: 
+ 905:     private View rowView(final DerivTable.Row r) {
+ 906:         LinearLayout row = new LinearLayout(act);
+ 907:         row.setOrientation(LinearLayout.VERTICAL);
+ 908:         row.setPadding(dp(8), dp(8), dp(8), dp(8));
+ 909:         GradientDrawable bg = new GradientDrawable();
+ 910:         bg.setCornerRadius(dp(8));
+ 911:         bg.setColor(C_BG3);
+ 912:         row.setBackground(bg);
+ 913:         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+ 914:                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+ 915:         lp.bottomMargin = dp(6);
+ 916:         row.setLayoutParams(lp);
+ 917: 
+ 918:         LinearLayout head = new LinearLayout(act);
+ 919:         head.setOrientation(LinearLayout.HORIZONTAL);
+ 920: 
+ 921:         TextView name = new TextView(act);
+ 922:         name.setText(r.name);
+ 923:         name.setTextSize(12);
+ 924:         name.setTextColor(C_FG3);
+ 925:         head.addView(name, new LinearLayout.LayoutParams(
+ 926:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+ 927: 
+ 928:         TextView go = new TextView(act);
+ 929:         go.setText("画图 ›");
+ 930:         go.setTextSize(11.5f);
+ 931:         go.setTextColor(C_TEAL);
+ 932:         go.setTypeface(Typeface.DEFAULT_BOLD);
+ 933:         go.setPadding(dp(8), 0, dp(2), 0);
+ 934:         go.setOnClickListener(v -> {
+ 935:             exprText = r.expr;
+ 936:             tab = 0;
+ 937:             render();
+ 938:         });
+ 939:         head.addView(go);
+ 940:         row.addView(head);
+ 941: 
+ 942:         // 用 FormulaView 排真公式，不用 Expr.mathText。
+ 943:         //
+ 944:         // mathText 是"能粘回输入框的机器写法"，它会原样输出 sqrt(x)、
+ 945:         // exp(x)、log2(x) —— 用户看的是这个，当然觉得不是人话。
+ 946:         // FormulaView 走 FormulaLayout，sqrt 会画成根号、exp 画成 e 的
+ 947:         // 上标、分式画成真的分数线，这才是课本上的样子。
+ 948:         //
+ 949:         // 注意 r.expr / r.der 仍是机器可解析的字符串，MathTest 照旧拿它们
+ 950:         // 做符号求导与数值差分对照 —— 显示换了，审计一点没减弱。
+ 951:         // 注意这里传的是 r.expr / r.der（机器写法），不是 r.show。
+ 952:         //
+ 953:         // FormulaView 自己就会把 sqrt 排成根号、exp 排成 e 的上标 ——
+ 954:         // 它需要的是能被 Expr 解析的表达式。若传 r.show（"e^(x)"），
+ 955:         // 里面的 e 会被 Expr 当成欧拉数常量折成 2.718282，
+ 956:         // 界面上就会出现 "2.718282^x" —— 审计渲染图当场抓到的。
+ 957:         // r.show / r.showDer 只用于纯文本场合（列表标题、说明）。
+ 958:         row.addView(formula(r.expr, C_FG, 16f));
+ 959:         row.addView(hintLabel("↓ 求导"));
+ 960:         row.addView(formula(r.der, C_AMBER, 16f));
+ 961: 
+ 962:         if (!r.note.isEmpty()) {
+ 963:             TextView note = new TextView(act);
+ 964:             note.setText("· " + r.note);
+ 965:             note.setTextSize(11);
+ 966:             note.setTextColor(C_FG3);
+ 967:             note.setPadding(0, dp(4), 0, 0);
+ 968:             row.addView(note);
+ 969:         }
+ 970:         return row;
+ 971:     }
+ 972: 
+ 973:     // ══ ③ 求导练习 ═══════════════════════════════════════
+ 974:     private void renderPractice() {
+ 975:         if (quizF == null) nextQuiz();
+ 976: 
+ 977:         LinearLayout c1 = card("算它的导数");
+ 978:         TextView tvF = new TextView(act);
+ 979:         tvF.setText("f(x) =  " + Expr.mathText(quizF));
+ 980:         tvF.setTextSize(19);
+ 981:         tvF.setTextColor(C_FG);
+ 982:         tvF.setTypeface(Typeface.DEFAULT_BOLD);
+ 983:         tvF.setPadding(0, dp(4), 0, dp(10));
+ 984:         c1.addView(tvF);
+ 985: 
+ 986:         TextView tvAsk = new TextView(act);
+ 987:         tvAsk.setText("写下 f′(x)：");
+ 988:         tvAsk.setTextSize(12);
+ 989:         tvAsk.setTextColor(C_FG3);
+ 990:         c1.addView(tvAsk);
+ 991: 
+ 992:         final EditText et = new EditText(act);
+ 993:         et.setHint("例如 2x+1、cos(x)、1/x");
+ 994:         et.setHintTextColor(0xFF4E5565);
+ 995:         et.setTextColor(C_FG);
+ 996:         et.setTextSize(16);
+ 997:         et.setBackgroundColor(C_BG3);
+ 998:         et.setPadding(dp(10), dp(8), dp(10), dp(8));
+ 999:         // 同 buildInput 里的修法：setSingleLine 会把高度算死，
+1000:         // 带内边距时文字会顶出框外。
+1001:         et.setMaxLines(1);
+1002:         et.setMinHeight(dp(44));
+1003:         et.setInputType(InputType.TYPE_CLASS_TEXT);
+1004:         c1.addView(et);
+1005: 
+1006:         LinearLayout row = new LinearLayout(act);
+1007:         row.setOrientation(LinearLayout.HORIZONTAL);
+1008:         row.setPadding(0, dp(8), 0, 0);
+1009: 
+1010:         TextView check = btn("对答案", C_BG);
+1011:         GradientDrawable gg = new GradientDrawable();
+1012:         gg.setCornerRadius(dp(8));
+1013:         gg.setColor(C_TEAL);
+1014:         check.setBackground(gg);
+1015:         check.setOnClickListener(v -> {
+1016:             String in = et.getText().toString();
+1017:             quizMsg = judgeDeriv(quizF, in);
+1018:             if (quizMsg.startsWith("✓")) quizRight++;
+1019:             quizAll++;
+1020:             render();
+1021:         });
+1022:         row.addView(check, new LinearLayout.LayoutParams(0,
+1023:                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+1024: 
+1025:         TextView skip = btn("换一题", C_FG2);
+1026:         LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+1027:                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+1028:         slp.leftMargin = dp(8);
+1029:         skip.setLayoutParams(slp);
+1030:         skip.setOnClickListener(v -> { nextQuiz(); quizMsg = ""; render(); });
+1031:         row.addView(skip);
+1032:         c1.addView(row);
+1033:         body.addView(c1);
+1034: 
+1035:         if (!quizMsg.isEmpty()) {
+1036:             LinearLayout c2 = card("结果");
+1037:             TextView t = new TextView(act);
+1038:             t.setText(quizMsg);
+1039:             t.setTextSize(13);
+1040:             t.setTextColor(quizMsg.startsWith("✓") ? C_TEAL : C_RED);
+1041:             t.setLineSpacing(dp(4), 1f);
+1042:             c2.addView(t);
+1043:             body.addView(c2);
+1044:         }
+1045: 
+1046:         LinearLayout c3 = card("本轮");
+1047:         TextView t3 = new TextView(act);
+1048:         t3.setText("做了 " + quizAll + " 题，对 " + quizRight + " 题"
+1049:                 + (quizAll > 0 ? "（正确率 " + (quizRight * 100 / quizAll) + "%）" : ""));
+1050:         t3.setTextSize(12.5f);
+1051:         t3.setTextColor(C_FG2);
+1052:         c3.addView(t3);
+1053:         body.addView(c3);
+1054:     }
+1055: 
+1056:     /** 随机挑一个"求导有意义且不难看"的函数。 */
+1057:     private void nextQuiz() {
+1058:         String[] pool = {
+1059:                 "x^2", "x^3", "x^4", "sin(x)", "cos(x)", "tan(x)",
+1060:                 "exp(x)", "ln(x)", "sqrt(x)", "1/x",
+1061:                 "sin(2x)", "cos(3x)", "exp(2x)", "ln(1+x^2)", "sqrt(1+x^2)",
+1062:                 "x·sin(x)", "x^2·exp(x)", "sin(x)/x", "x^2-4x", "atan(x)",
+1063:                 "x^3-3x", "exp(sin(x))", "tan(x)/2", "2^x"
+1064:         };
+1065:         int i = (int) (Math.random() * pool.length);
+1066:         if (pool[i].equals(quizExpr)) i = (i + 1) % pool.length;
+1067:         quizExpr = pool[i];
+1068:         try { quizF = Expr.parse(quizExpr); } catch (Exception e) { quizF = Expr.parse("x"); }
+1069:     }
+1070: 
+1071:     /**
+1072:      * 判分。不比对文本，比对"数值上是不是同一个函数"：
+1073:      * 学生可能写成 (2)·x 或 x·2 或 2 x，字面不同但都对。
+1074:      * 做法：在 5 个点上比较他的表达式与标准导数；全部接近才算对。
+1075:      * 这样既接受等价写法，也不会把 x 和 2x 判成一样。
+1076:      */
+1077:     private String judgeDeriv(Expr.Node f, String input) {
+1078:         if (input == null || input.trim().isEmpty()) return "还没写";
+1079:         Expr.Node mine;
+1080:         try {
+1081:             mine = Expr.parse(input);
+1082:         } catch (Expr.ExprError e) {
+1083:             return "表达式看不懂：" + e.getMessage();
+1084:         }
+1085:         Expr.Node ref = Expr.diff(f);
+1086:         String refText = Expr.toText(ref);
+1087: 
+1088:         double[] xs = {-2.3, -1.1, -0.4, 0.6, 1.4, 2.2};
+1089:         int tested = 0;
+1090:         for (double x : xs) {
+1091:             double a = Expr.eval(ref, x);
+1092:             double b = Expr.eval(mine, x);
+1093:             if (!PlotGeom.isFinite(a) || !PlotGeom.isFinite(b)) continue;
+1094:             if (Math.abs(a) > 1e6 || Math.abs(b) > 1e6) continue;
+1095:             tested++;
+1096:             double scale = Math.max(1, Math.max(Math.abs(a), Math.abs(b)));
+1097:             if (Math.abs(a - b) > 1e-6 * scale) {
+1098:                 return "✗ 不对。\n正确答案：" + refText
+1099:                         + "\n（你在 x=" + Expr.fmtNum(x) + " 处得到 "
+1100:                         + Expr.fmtNum(b) + "，正确是 " + Expr.fmtNum(a) + "）";
+1101:             }
+1102:         }
+1103:         if (tested == 0) {
+1104:             return "✗ 无法判定：你的表达式和标准答案没有公共定义域。\n正确答案：" + refText;
+1105:         }
+1106:         if (Expr.toText(mine).equals(refText)) {
+1107:             return "✓ 正确，而且写法和标准答案一致：" + refText;
+1108:         }
+1109:         return "✓ 正确（写法不同但等价）。\n你写的：" + Expr.toText(mine)
+1110:                 + "\n标准写法：" + refText;
+1111:     }
+1112: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\MiniPlot.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.content.Context;
+   4: import android.graphics.Canvas;
+   5: import android.graphics.Paint;
+   6: import android.graphics.Path;
+   7: import android.view.View;
+   8: 
+   9: import java.util.List;
+  10: 
+  11: /**
+  12:  * 对照表的缩略曲线。用 PlotGeom 真采样，不是手画的示意图 ——
+  13:  * 用户看到的就是"这个式子在 App 里画出来的样子"。
+  14:  *
+  15:  * 只负责画一小格，不管点击（点击在卡片上）。
+  16:  */
+  17: public class MiniPlot extends View {
+  18: 
+  19:     private Expr.Node node;
+  20:     private PlotGeom.View geom;
+  21:     private final Paint line = new Paint(Paint.ANTI_ALIAS_FLAG);
+  22:     private final Paint axis = new Paint(Paint.ANTI_ALIAS_FLAG);
+  23:     private final Path path = new Path();
+  24: 
+  25:     public MiniPlot(Context c) {
+  26:         super(c);
+  27:         line.setStyle(Paint.Style.STROKE);
+  28:         line.setStrokeWidth(dp(1.7f));
+  29:         line.setStrokeCap(Paint.Cap.ROUND);
+  30:         axis.setStyle(Paint.Style.STROKE);
+  31:         axis.setStrokeWidth(dp(1f));
+  32:         axis.setColor(0x33383F4C);
+  33:     }
+  34: 
+  35:     public void set(Expr.Node n, int color) {
+  36:         node = n;
+  37:         line.setColor(color);
+  38:         requestLayout();
+  39:         invalidate();
+  40:     }
+  41: 
+  42:     private float dp(float v) {
+  43:         return v * getResources().getDisplayMetrics().density;
+  44:     }
+  45: 
+  46:     @Override
+  47:     protected void onMeasure(int wSpec, int hSpec) {
+  48:         int w = MeasureSpec.getSize(wSpec);
+  49:         int h = MeasureSpec.getSize(hSpec);
+  50:         if (w <= 0) w = (int) dp(74);
+  51:         if (h <= 0) h = (int) dp(52);
+  52:         setMeasuredDimension(w, h);
+  53:     }
+  54: 
+  55:     @Override
+  56:     protected void onDraw(Canvas c) {
+  57:         super.onDraw(c);
+  58:         if (node == null) return;
+  59:         int w = getWidth(), h = getHeight();
+  60:         if (w <= 0 || h <= 0) return;
+  61: 
+  62:         // 缩略图必须自己裁边界。
+  63:         //
+  64:         // View 默认不会裁同伴：exp(x)、x^2 这类曲线在小窗口里很快就
+  65:         // 冲出顶部，不裁的话会画到隔壁卡片上 —— 审计渲染图里
+  66:         // 抛物线和指数线直接压到了下一格的文字上。
+  67:         c.save();
+  68:         c.clipRect(0, 0, w, h);
+  69: 
+  70:         // 每格都重新建 View：范围固定，才能横向比较形状
+  71:         geom = new PlotGeom.View(-6, 6, -4, 4, w, h);
+  72: 
+  73:         // 坐标轴
+  74:         float ax = (float) geom.px(0), ay = (float) geom.py(0);
+  75:         if (ay >= 0 && ay <= h) c.drawLine(0, ay, w, ay, axis);
+  76:         if (ax >= 0 && ax <= w) c.drawLine(ax, 0, ax, h, axis);
+  77: 
+  78:         // 曲线
+  79:         List<PlotGeom.Seg> segs = PlotGeom.sample(node, geom, 1);
+  80:         for (PlotGeom.Seg s : segs) {
+  81:             path.reset();
+  82:             boolean started = false;
+  83:             for (int i = 0; i < s.pts.size(); i++) {
+  84:                 double[] p = s.pts.get(i);
+  85:                 float x = (float) geom.px(p[0]);
+  86:                 float y = (float) geom.py(p[1]);
+  87:                 // 冲出画面太多的点直接跳过，否则长直线会画到格子外面
+  88:                 if (Math.abs(y) > h * 6) { started = false; continue; }
+  89:                 if (!started) { path.moveTo(x, y); started = true; }
+  90:                 else path.lineTo(x, y);
+  91:             }
+  92:             c.drawPath(path, line);
+  93:         }
+  94:         c.restore();
+  95:     }
+  96: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\Plan.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import org.json.JSONArray;
+   4: import org.json.JSONObject;
+   5: 
+   6: import java.util.ArrayList;
+   7: import java.util.HashSet;
+   8: import java.util.LinkedHashMap;
+   9: import java.util.List;
+  10: import java.util.Map;
+  11: import java.util.Set;
+  12: 
+  13: /**
+  14:  * 计划数据模型。对应 assets/plan.json。
+  15:  *
+  16:  * 设计原则：只解析用得到的字段，不认识的字段一律忽略——
+  17:  * 这样以后 plan.json 加东西，这个 App 不会崩。
+  18:  */
+  19: public class Plan {
+  20: 
+  21:     public static class Meta {
+  22:         public String examDate = "";
+  23:         public String startDate = "";
+  24:         public int daysToExam;
+  25:         public int vocabTotal;
+  26:     }
+  27: 
+  28:     public static class Subject {
+  29:         public String id = "";
+  30:         public String name = "";
+  31:         public String color = "#888888";
+  32:         // bookPages 和 pdfOffset 已删：只解析、产品代码从没读过，
+  33:         // 是死参数。页偏移在生成 plan.json 时就已经算进 pdfStart，
+  34:         // 运行时再算一遍属于两处真相。
+  35:     }
+  36: 
+  37:     public static class Chapter {
+  38:         public String id = "";
+  39:         public String subject = "";
+  40:         public String name = "";
+  41:         public String tier = "";
+  42:         public int startPage;
+  43:         public int endPage;
+  44:         public int estMin;
+  45:         public Integer pdfStart;
+  46:     }
+  47: 
+  48:     public static class Task {
+  49:         public String subject = "";
+  50:         public String chapterId = "";
+  51:         public String kind = "learn";     // learn | other（pract 练习册已移除）
+  52:         public String note = "";
+  53:         public int startPage;
+  54:         public int endPage;
+  55:         public int min;
+  56:         public Integer pdfStart;
+  57:         /**
+  58:          * 最终存储 id。在 parse 阶段一次性分配，之后全部复用。
+  59:          * 保证：① 同一份 plan.json 无论解析多少次都一致 ② 同一天内绝不重复
+  60:          */
+  61:         public String id = "";
+  62: 
+  63:         /**
+  64:          * 稳定身份，写死在 plan.json 里，生成一次后永不变。
+  65:          *
+  66:          * 和 id 的区别很重要：id 是 assignId() 按内容算出来的哈希，
+  67:          * 我把「进制转换 10 题」改成「进制转换10题」，哈希就变，
+  68:          * 用户所有相关勾选全部失联 —— 这在单机时代是本地丢一点，
+  69:          * 上了云就是所有人的进度对不上号。
+  70:          *
+  71:          * uid 由 build/gen_uid.py 一次性写进 JSON，之后任何文案改动
+  72:          * 都不动它。云同步、排行榜一律以 uid 为准。
+  73:          *
+  74:          * 注意：跨天可以有相同 uid（同一章三轮螺旋回访是故意的），
+  75:          * 存储键是 date|uid，所以不会串。
+  76:          */
+  77:         public String uid = "";
+  78: 
+  79:         /**
+  80:          * 题库落点。不为 null 时说明这个任务有真题目可做。
+  81:          * 目前用到两个键：
+  82:          *   subject  学科 math|comp|eng
+  83:          *   limit    最多抽几道
+  84:          *   year     指定年份（真题任务）
+  85:          */
+  86:         public String bankSubject = "";
+  87:         public int bankLimit;
+  88:         public int bankYear;
+  89:     }
+  90: 
+  91:     /** 一章的必背卡：几条能直接背下来的结论 + 一个考点。 */
+  92:     public static class Recall {
+  93:         public List<String> points = new ArrayList<>();
+  94:         public String exam = "";
+  95:     }
+  96: 
+  97:     public static class Review {
+  98:         public String id = "";
+  99:         public String chapterId = "";
+ 100:         public String subject = "";
+ 101:         public String kind = "";          // R1..R4
+ 102:         public String due = "";
+ 103:         public int min;
+ 104:     }
+ 105: 
+ 106:     public static class Day {
+ 107:         public String date = "";
+ 108:         public String weekday = "";
+ 109:         public String phase = "";
+ 110:         public String round = "";
+ 111:         public String reviewHint = "";
+ 112:         public int daysToExam;
+ 113:         public String vocab;              // 原始 JSON 片段，可能为 null
+ 114:         // 结构化的词汇区间（v1.2 起）：
+ 115:         //   vocabFrom..vocabTo  = 当天新词
+ 116:         //   vocabReview         = 该复习的旧区间 [[from,to], ...]
+ 117:         public int vocabFrom = -1;
+ 118:         public int vocabTo = -1;
+ 119:         public String vocabReviewJson;    // 原始 JSON 数组字符串
+ 120:         public List<Task> tasks = new ArrayList<>();
+ 121:         public List<Review> reviews = new ArrayList<>();
+ 122:     }
+ 123: 
+ 124:     /**
+ 125:      * 每章的「今日必背」卡。
+ 126:      *
+ 127:      * 用户原话："不用默写毕竟手机上怎么默写，把答案写出来直接提醒用户
+ 128:      * 答案是这个记住就行了"。所以检索从"默写"改成了"直接给答案背诵"。
+ 129:      * 键是 chapterId，值是答案点（每行一条）+ 一个考点。
+ 130:      */
+ 131:     public Map<String, Recall> recall = new LinkedHashMap<>();
+ 132: 
+ 133:     public Meta meta = new Meta();
+ 134:     public Map<String, Subject> subjects = new LinkedHashMap<>();
+ 135:     public Map<String, Chapter> chapters = new LinkedHashMap<>();
+ 136:     public List<Day> days = new ArrayList<>();
+ 137: 
+ 138:     // ── 解析 ────────────────────────────────────────────
+ 139:     public static Plan parse(String raw) {
+ 140:         Plan p = new Plan();
+ 141:         try {
+ 142:             JSONObject root = new JSONObject(raw);
+ 143: 
+ 144:             JSONObject m = root.optJSONObject("meta");
+ 145:             if (m != null) {
+ 146:                 p.meta.examDate = m.optString("examDate", "");
+ 147:                 p.meta.startDate = m.optString("startDate", "");
+ 148:                 p.meta.daysToExam = m.optInt("daysToExam", 0);
+ 149:                 p.meta.vocabTotal = m.optInt("vocabTotal", 0);
+ 150:             }
+ 151: 
+ 152:             // recall：章 id → 必背卡。缺失不算错，界面会跳过。
+ 153:             JSONObject rc = root.optJSONObject("recall");
+ 154:             if (rc != null) {
+ 155:                 java.util.Iterator<String> it = rc.keys();
+ 156:                 while (it.hasNext()) {
+ 157:                     String cid = it.next();
+ 158:                     JSONObject o = rc.optJSONObject(cid);
+ 159:                     if (o == null) continue;
+ 160:                     Recall r = new Recall();
+ 161:                     JSONArray pts = o.optJSONArray("points");
+ 162:                     if (pts != null) {
+ 163:                         for (int i = 0; i < pts.length(); i++) {
+ 164:                             String s = pts.optString(i, "").trim();
+ 165:                             if (!s.isEmpty()) r.points.add(s);
+ 166:                         }
+ 167:                     }
+ 168:                     r.exam = o.optString("exam", "").trim();
+ 169:                     p.recall.put(cid, r);
+ 170:                 }
+ 171:             }
+ 172: 
+ 173:             JSONArray subs = root.optJSONArray("subjects");
+ 174:             if (subs != null) {
+ 175:                 for (int i = 0; i < subs.length(); i++) {
+ 176:                     JSONObject o = subs.getJSONObject(i);
+ 177:                     Subject s = new Subject();
+ 178:                     s.id = o.optString("id");
+ 179:                     s.name = o.optString("name");
+ 180:                     s.color = o.optString("color", "#888888");
+ 181: 
+ 182:                     if (!s.id.isEmpty()) p.subjects.put(s.id, s);
+ 183:                 }
+ 184:             }
+ 185: 
+ 186:             JSONArray chs = root.optJSONArray("chapters");
+ 187:             if (chs != null) {
+ 188:                 for (int i = 0; i < chs.length(); i++) {
+ 189:                     JSONObject o = chs.getJSONObject(i);
+ 190:                     Chapter c = new Chapter();
+ 191:                     c.id = o.optString("id");
+ 192:                     c.subject = o.optString("subject");
+ 193:                     c.name = o.optString("name");
+ 194:                     c.tier = o.optString("tier");
+ 195:                     c.startPage = o.optInt("startPage");
+ 196:                     c.endPage = o.optInt("endPage");
+ 197:                     c.estMin = o.optInt("estMin");
+ 198:                     c.pdfStart = o.isNull("pdfStart") ? null : o.optInt("pdfStart");
+ 199: 
+ 200:                     if (!c.id.isEmpty()) p.chapters.put(c.id, c);
+ 201:                 }
+ 202:             }
+ 203: 
+ 204:             JSONArray ds = root.optJSONArray("days");
+ 205:             if (ds != null) {
+ 206:                 for (int i = 0; i < ds.length(); i++) {
+ 207:                     JSONObject o = ds.getJSONObject(i);
+ 208:                     Day d = new Day();
+ 209:                     d.date = o.optString("date");
+ 210:                     d.weekday = o.optString("weekday");
+ 211:                     d.phase = o.optString("phase");
+ 212:                     d.round = o.optString("round");
+ 213:                     d.reviewHint = o.optString("reviewHint", "");
+ 214:                     d.daysToExam = o.optInt("daysToExam");
+ 215:                     d.vocab = o.isNull("vocab") ? null : String.valueOf(o.opt("vocab"));
+ 216:                     // 结构化词汇区间
+ 217:                     JSONObject vo = o.optJSONObject("vocab");
+ 218:                     if (vo != null) {
+ 219:                         d.vocabFrom = vo.optInt("from", -1);
+ 220:                         d.vocabTo = vo.optInt("to", -1);
+ 221:                     }
+ 222:                     JSONArray vr = o.optJSONArray("vocabReview");
+ 223:                     if (vr != null && vr.length() > 0) {
+ 224:                         d.vocabReviewJson = vr.toString();
+ 225:                     }
+ 226: 
+ 227:                     JSONArray ts = o.optJSONArray("tasks");
+ 228:                     if (ts != null) {
+ 229:                         // 同一天内去重：learn 用章节+起始页，other 用 note 全量哈希
+ 230:                         Set<String> usedIds = new HashSet<>();
+ 231:                         for (int j = 0; j < ts.length(); j++) {
+ 232:                             JSONObject t = ts.getJSONObject(j);
+ 233:                             Task k = new Task();
+ 234:                             k.subject = t.optString("subject");
+ 235:                             k.chapterId = t.optString("chapterId");
+ 236:                             k.kind = t.optString("kind", "learn");
+ 237:                             k.note = t.optString("note", "");
+ 238:                             k.startPage = t.optInt("startPage");
+ 239:                             k.endPage = t.optInt("endPage");
+ 240:                             k.min = t.optInt("min");
+ 241:                             k.pdfStart = t.isNull("pdfStart") ? null : t.optInt("pdfStart");
+ 242:                             // 题库落点（可为 null：不是做题类任务）
+ 243:                             JSONObject bk = t.optJSONObject("bank");
+ 244:                             if (bk != null) {
+ 245:                                 k.bankSubject = bk.optString("subject", k.subject);
+ 246:                                 k.bankLimit = bk.optInt("limit", 10);
+ 247:                                 k.bankYear = bk.optInt("year", 0);
+ 248:                             }
+ 249:                             k.uid = t.optString("uid", "");
+ 250:                             k.id = k.uid.isEmpty() ? assignId(k, usedIds, d.date) : k.uid;
+ 251:                             usedIds.add(k.id);
+ 252:                             d.tasks.add(k);
+ 253:                         }
+ 254:                     }
+ 255: 
+ 256:                     JSONArray rs = o.optJSONArray("reviews");
+ 257:                     if (rs != null) {
+ 258:                         for (int j = 0; j < rs.length(); j++) {
+ 259:                             d.reviews.add(parseReview(rs.getJSONObject(j)));
+ 260:                         }
+ 261:                     }
+ 262:                     p.days.add(d);
+ 263:                 }
+ 264:             }
+ 265:         } catch (Exception e) {
+ 266:             throw new RuntimeException("plan.json 解析失败：" + e.getMessage(), e);
+ 267:         }
+ 268:         return p;
+ 269:     }
+ 270: 
+ 271:     static Review parseReview(JSONObject o) {
+ 272:         Review r = new Review();
+ 273:         r.id = o.optString("id");
+ 274:         r.chapterId = o.optString("chapterId");
+ 275:         r.subject = o.optString("subject");
+ 276:         r.kind = o.optString("kind");
+ 277:         r.due = o.optString("due");
+ 278:         r.min = o.optInt("min");
+ 279:         return r;
+ 280:     }
+ 281: 
+ 282:     // ── 派生逻辑 ─────────────────────────────────────────
+ 283:     public Day dayByDate(String date) {
+ 284:         for (Day d : days) if (d.date.equals(date)) return d;
+ 285:         return null;
+ 286:     }
+ 287: 
+ 288:     public Chapter chapter(String id) {
+ 289:         return chapters.get(id);
+ 290:     }
+ 291: 
+ 292:     /**
+ 293:      * 查科目。查不到返回 null。
+ 294:      *
+ 295:      * 原来查不到会临时造一个 name=id 的假科目 —— 数学科从 plan.json
+ 296:      * 删掉之后，这个假科目让"math 已移除"的断言永远通过不了，
+ 297:      * 界面上也会冒出空名字。数据里没有就是没有，别编。
+ 298:      */
+ 299:     public Subject subject(String id) {
+ 300:         return subjects.get(id);
+ 301:     }
+ 302: 
+ 303:     /**
+ 304:      * 分配任务 id。
+ 305:      *
+ 306:      * learn：L-科目-章节-起始页。跨天会重复，这是「三轮螺旋」故意的同章节回访——
+ 307:      *        存储键是 date|id，所以不会串。
+ 308:      * other：O-科目-<note 的稳定哈希>。原来只取 note 前 12 字，
+ 309:      *        而差异恰好出现在后半段（"练习册《连续与间断》p21" vs "p22-26"），
+ 310:      *        导致同一天两个不同任务撞成同一个 id → 勾一个另一个也变勾上。
+ 311:      *        改用全量哈希 + 重名计数兜底。
+ 312:      */
+ 313:     static String assignId(Task t, Set<String> usedInDay, String date) {
+ 314:         String base;
+ 315:         if ("learn".equals(t.kind) && t.startPage > 0) {
+ 316:             base = "L-" + t.subject + "-" + t.chapterId + "-" + t.startPage;
+ 317:         } else {
+ 318:             base = "O-" + t.subject + "-" + fnv(t.note + "|" + t.startPage + "-" + t.endPage);
+ 319:         }
+ 320:         // 万一还是撞（note 完全相同的两条），加序号，绝不静默合并
+ 321:         String id = base;
+ 322:         int n = 2;
+ 323:         while (usedInDay.contains(id)) {
+ 324:             id = base + "#" + n;
+ 325:             n++;
+ 326:         }
+ 327:         usedInDay.add(id);
+ 328:         return id;
+ 329:     }
+ 330: 
+ 331:     /** FNV-1a 32 位，输出 8 位十六进制。用来给长文本生成短而稳定的 id 片段。 */
+ 332:     static String fnv(String s) {
+ 333:         int h = 0x811c9dc5;
+ 334:         for (int i = 0; i < s.length(); i++) {
+ 335:             h ^= s.charAt(i);
+ 336:             h *= 0x01000193;
+ 337:         }
+ 338:         return String.format("%08x", h);
+ 339:     }
+ 340: 
+ 341:     /** 取任务 id（已在 parse 时分配）。 */
+ 342:     public static String taskId(Task t) {
+ 343:         return t.id;
+ 344:     }
+ 345: 
+ 346:     /** 某天全部需要勾选的 id（用于判断“是否全勾完”才能推进）。 */
+ 347:     public static List<String> dayTaskIds(Day d) {
+ 348:         List<String> ids = new ArrayList<>();
+ 349:         for (Task t : d.tasks) ids.add(taskId(t));
+ 350:         if (d.vocab != null) ids.add("V-" + d.date);
+ 351:         for (Review r : d.reviews) ids.add("R-" + r.id);
+ 352:         return ids;
+ 353:     }
+ 354: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\PlotGeom.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import java.util.ArrayList;
+   4: import java.util.List;
+   5: 
+   6: /**
+   7:  * 绘图几何 —— 纯数字，不碰 Android。
+   8:  *
+   9:  * 为什么要单独抽出来：
+  10:  *   画函数图像最容易出的错不是"画不出来"，而是
+  11:  *   ① y 轴范围没算好，曲线全被裁掉  ② 渐近线两侧被连成一条竖线
+  12:  *   ③ 高倍缩放时采样点不够，光滑曲线变锯齿
+  13:  *   这些都能在电脑上用数字检查，不必装模拟器。verify.py 的 MathTest 就在查这些。
+  14:  *
+  15:  * 坐标约定：
+  16:  *   数学坐标 (x, y) → 画布像素 (px, py)，px 向右增，py 向下增
+  17:  *   view 对象里保存的是数学窗口 [xMin,xMax] × [yMin,yMax]
+  18:  */
+  19: public class PlotGeom {
+  20: 
+  21:     /** 数学窗口 + 画布尺寸。 */
+  22:     public static class View {
+  23:         public double xMin = -6, xMax = 6, yMin = -4, yMax = 4;
+  24:         public int w = 1080, h = 900;
+  25: 
+  26:         public View() {}
+  27: 
+  28:         public View(double xMin, double xMax, double yMin, double yMax, int w, int h) {
+  29:             this.xMin = xMin; this.xMax = xMax;
+  30:             this.yMin = yMin; this.yMax = yMax;
+  31:             this.w = w; this.h = h;
+  32:         }
+  33: 
+  34:         public double spanX() { return xMax - xMin; }
+  35:         public double spanY() { return yMax - yMin; }
+  36: 
+  37:         public double px(double x) {
+  38:             return (x - xMin) / (xMax - xMin) * w;
+  39:         }
+  40: 
+  41:         public double py(double y) {
+  42:             return (yMax - y) / (yMax - yMin) * h;
+  43:         }
+  44: 
+  45:         public double toX(double pxv) { return xMin + pxv / w * (xMax - xMin); }
+  46:         public double toY(double pyv) { return yMax - pyv / h * (yMax - yMin); }
+  47: 
+  48:         /** 等比：让 1 个数学单位在横竖两个方向长度相同（圆看起来才是圆的）。 */
+  49:         public void makeSquare() {
+  50:             double cx = (xMin + xMax) / 2, cy = (yMin + yMax) / 2;
+  51:             double unitX = spanX() / w, unitY = spanY() / h;
+  52:             double u = Math.max(unitX, unitY);
+  53:             double hx = u * w / 2, hy = u * h / 2;
+  54:             xMin = cx - hx; xMax = cx + hx;
+  55:             yMin = cy - hy; yMax = cy + hy;
+  56:         }
+  57: 
+  58:         /** 以 (cx,cy) 为中心按 factor 缩放；factor<1 放大。 */
+  59:         public void zoom(double cx, double cy, double factor) {
+  60:             xMin = cx + (xMin - cx) * factor;
+  61:             xMax = cx + (xMax - cx) * factor;
+  62:             yMin = cy + (yMin - cy) * factor;
+  63:             yMax = cy + (yMax - cy) * factor;
+  64:         }
+  65: 
+  66:         public void pan(double dxMath, double dyMath) {
+  67:             xMin += dxMath; xMax += dxMath;
+  68:             yMin += dyMath; yMax += dyMath;
+  69:         }
+  70: 
+  71:         public View copy() { return new View(xMin, xMax, yMin, yMax, w, h); }
+  72:     }
+  73: 
+  74:     /**
+  75:      * 一段连续曲线。断点（无定义 / 跳到无穷 / 陡到不像话）会切成多段，
+  76:      * 这样 1/x 在 x=0 两侧不会被一条竖线连起来。
+  77:      */
+  78:     public static class Seg {
+  79:         public final List<double[]> pts = new ArrayList<double[]>();  // 每项 {x, y}
+  80:     }
+  81: 
+  82:     /** 一行求值结果，null 意义是"这里没有点"。 */
+  83:     public static double safeEval(Expr.Node n, double x) {
+  84:         try { return Expr.eval(n, x); } catch (Exception e) { return Double.NaN; }
+  85:     }
+  86: 
+  87:     /**
+  88:      * 采样 + 断点切分。
+  89:      *
+  90:      * @param n     表达式
+  91:      * @param v     窗口
+  92:      * @param stepPx 每隔几个像素取一个样（1 = 每像素，2 = 隔一个）
+  93:      * @return 若干段；每段点已经按 x 递增
+  94:      *
+  95:      * 断点判定（三条都要）：
+  96:      *   ① 值非有限（NaN/±Inf）
+  97:      *   ② |y| 超出窗口 40 倍（画出来等于一条竖线，无信息）
+  98:      *   ③ 相邻两点 |Δy| > 窗口高度 × 8 且 |Δx| 很小 —— 典型渐近线穿越
+  99:      *      注意 tan(x) 这类是「真跳」，而 sin(1/x) 在 0 附近是「抖」，
+ 100:      *      两者都以断点处理更安全：宁可断开，不要假连线。
+ 101:      */
+ 102:     public static List<Seg> sample(Expr.Node n, View v, int stepPx) {
+ 103:         if (stepPx < 1) stepPx = 1;
+ 104:         List<Seg> out = new ArrayList<Seg>();
+ 105:         Seg cur = null;
+ 106:         double limit = Math.max(Math.abs(v.yMin), Math.abs(v.yMax)) * 40 + 1e6 * 0;
+ 107:         double prevX = Double.NaN, prevY = Double.NaN;
+ 108:         int steps = Math.max(2, v.w / stepPx);
+ 109:         for (int i = 0; i <= steps; i++) {
+ 110:             double x = v.toX((double) i * v.w / steps);
+ 111:             double y = safeEval(n, x);
+ 112:             boolean bad = !isFinite(y) || Math.abs(y) > limit;
+ 113:             if (bad) {
+ 114:                 cur = null;
+ 115:                 prevX = x; prevY = Double.NaN;
+ 116:                 continue;
+ 117:             }
+ 118:             if (cur != null && isFinite(prevY)) {
+ 119:                 double dy = Math.abs(y - prevY);
+ 120:                 double dx = Math.abs(x - prevX);
+ 121:                 if (dy > v.spanY() * 8 && dx < v.spanX() * 0.02) {
+ 122:                     cur = null;   // 疑似穿过渐近线，断开
+ 123:                 }
+ 124:             }
+ 125:             if (cur == null) { cur = new Seg(); out.add(cur); }
+ 126:             cur.pts.add(new double[]{x, y});
+ 127:             prevX = x; prevY = y;
+ 128:         }
+ 129:         // 丢掉只有一个点的碎段（画不出线，只会在屏幕上点一个像素）
+ 130:         List<Seg> keep = new ArrayList<Seg>();
+ 131:         for (Seg s : out) if (s.pts.size() >= 2) keep.add(s);
+ 132:         return keep;
+ 133:     }
+ 134: 
+ 135:     public static boolean isFinite(double v) {
+ 136:         return !Double.isNaN(v) && !Double.isInfinite(v);
+ 137:     }
+ 138: 
+ 139:     /**
+ 140:      * 自动选 y 范围：先用 [-4,4]，再看曲线实际落在哪。
+ 141:      * 只统计「窗口内、连续性合理」的值，避免 1/x 在 0 附近把范围撑到无穷。
+ 142:      */
+ 143:     public static double[] autoYRange(Expr.Node n, double xMin, double xMax, int samples) {
+ 144:         if (samples < 16) samples = 16;
+ 145:         double[] vs = new double[samples + 1];
+ 146:         int cnt = 0;
+ 147:         for (int i = 0; i <= samples; i++) {
+ 148:             double x = xMin + (xMax - xMin) * i / samples;
+ 149:             double y = safeEval(n, x);
+ 150:             if (isFinite(y) && Math.abs(y) < 1e6) vs[cnt++] = y;
+ 151:         }
+ 152:         if (cnt == 0) return new double[]{-4, 4};
+ 153:         double[] a = new double[cnt];
+ 154:         System.arraycopy(vs, 0, a, 0, cnt);
+ 155:         java.util.Arrays.sort(a);
+ 156:         // 用 5% / 95% 分位，而不是极值：极值往往是渐近线附近的离群点
+ 157:         double lo = a[(int) Math.floor(cnt * 0.05)];
+ 158:         double hi = a[(int) Math.floor(cnt * 0.95)];
+ 159:         if (!isFinite(lo) || !isFinite(hi)) return new double[]{-4, 4};
+ 160:         if (hi - lo < 1e-9) { lo -= 2; hi += 2; }
+ 161:         double pad = (hi - lo) * 0.35;
+ 162:         lo -= pad; hi += pad;
+ 163:         // 至少留 2 个单位高度，免得平函数被放大成一条噪声
+ 164:         double mid = (lo + hi) / 2;
+ 165:         if (hi - lo < 4) { lo = mid - 2; hi = mid + 2; }
+ 166:         // 极端情况兜底
+ 167:         if (hi - lo > 4000) { mid = (lo + hi) / 2; lo = mid - 2000; hi = mid + 2000; }
+ 168:         return new double[]{lo, hi};
+ 169:     }
+ 170: 
+ 171:     /**
+ 172:      * 选「好看的刻度间隔」：1、2、5 × 10^k，目标是每格约 targetPx 像素。
+ 173:      * 网格不贴这个规则会出现 0.33333 这种刻度，没法读。
+ 174:      */
+ 175:     public static double niceStep(double span, int px, double targetPx) {
+ 176:         if (span <= 0 || px <= 0) return 1;
+ 177:         double raw = span / px * targetPx;         // 期望的每格数学长度
+ 178:         if (raw <= 0 || !isFinite(raw)) return 1;
+ 179:         double mag = Math.pow(10, Math.floor(Math.log10(raw)));
+ 180:         double norm = raw / mag;
+ 181:         double nice;
+ 182:         if (norm <= 1) nice = 1;
+ 183:         else if (norm <= 2) nice = 2;
+ 184:         else if (norm <= 5) nice = 5;
+ 185:         else nice = 10;
+ 186:         return nice * mag;
+ 187:     }
+ 188: 
+ 189:     /** 刻度文字：避免 0.30000000000000004 这种浮点噪声。 */
+ 190:     public static String tickLabel(double v, double step) {
+ 191:         if (Math.abs(v) < step * 1e-6) return "0";
+ 192:         int dec = 0;
+ 193:         double s = step;
+ 194:         while (dec < 6 && Math.abs(s - Math.rint(s)) > 1e-9) { s *= 10; dec++; }
+ 195:         String t = String.format(java.util.Locale.US, "%." + dec + "f", v);
+ 196:         if (t.contains(".")) {
+ 197:             while (t.endsWith("0")) t = t.substring(0, t.length() - 1);
+ 198:             if (t.endsWith(".")) t = t.substring(0, t.length() - 1);
+ 199:         }
+ 200:         return t;
+ 201:     }
+ 202: 
+ 203:     /**
+ 204:      * 某条水平线是否落在窗口里（画 x 轴 / 网格线用），返回像素 y 或 NaN。
+ 205:      * 用 NaN 而不是 -1 当"没有"：像素坐标可能真的等于 -1。
+ 206:      */
+ 207:     public static double pyOf(View v, double y) {
+ 208:         if (y < Math.min(v.yMin, v.yMax) || y > Math.max(v.yMin, v.yMax)) return Double.NaN;
+ 209:         return v.py(y);
+ 210:     }
+ 211: 
+ 212:     public static double pxOf(View v, double x) {
+ 213:         if (x < v.xMin || x > v.xMax) return Double.NaN;
+ 214:         return v.px(x);
+ 215:     }
+ 216: 
+ 217:     /** 求某点切线斜率（数值中心差分），用于「切线」显示。 */
+ 218:     public static double slope(Expr.Node n, double x) {
+ 219:         double h = 1e-6 * Math.max(1, Math.abs(x));
+ 220:         double y1 = safeEval(n, x + h), y0 = safeEval(n, x - h);
+ 221:         if (!isFinite(y1) || !isFinite(y0)) return Double.NaN;
+ 222:         return (y1 - y0) / (2 * h);
+ 223:     }
+ 224: 
+ 225:     /**
+ 226:      * 找窗口内的零点（变号法 + 二分细化）。
+ 227:      * 用来在图上标「根」，比只画线有用得多。
+ 228:      */
+ 229:     public static List<Double> roots(Expr.Node n, View v, int samples) {
+ 230:         List<Double> out = new ArrayList<Double>();
+ 231:         if (samples < 32) samples = 32;
+ 232:         double px0 = Double.NaN;
+ 233:         double py0 = Double.NaN;
+ 234:         for (int i = 0; i <= samples; i++) {
+ 235:             double x = v.xMin + v.spanX() * i / samples;
+ 236:             double y = safeEval(n, x);
+ 237:             if (!isFinite(y)) { px0 = Double.NaN; continue; }
+ 238:             if (Math.abs(y) < 1e-12) { addRoot(out, x); px0 = x; py0 = y; continue; }
+ 239:             if (isFinite(py0) && (py0 > 0) != (y > 0)) {
+ 240:                 double lo = px0, hi = x;
+ 241:                 for (int k = 0; k < 60; k++) {
+ 242:                     double mid = (lo + hi) / 2;
+ 243:                     double ym = safeEval(n, mid);
+ 244:                     if (!isFinite(ym)) break;
+ 245:                     if ((ym > 0) == (py0 > 0)) lo = mid;
+ 246:                     else hi = mid;
+ 247:                 }
+ 248:                 addRoot(out, (lo + hi) / 2);
+ 249:             }
+ 250:             px0 = x; py0 = y;
+ 251:         }
+ 252:         return out;
+ 253:     }
+ 254: 
+ 255:     static void addRoot(List<Double> out, double x) {
+ 256:         for (Double d : out) if (Math.abs(d - x) < 1e-6) return;
+ 257:         out.add(x);
+ 258:     }
+ 259: }
+===== FILE: E:\小黑盒运营\cq-zhuanshengbens\mobile\src\com\zsb\plan\PlotView.java =====
+   1: package com.zsb.plan;
+   2: 
+   3: import android.annotation.SuppressLint;
+   4: import android.content.Context;
+   5: import android.graphics.Canvas;
+   6: import android.graphics.Color;
+   7: import android.graphics.Paint;
+   8: import android.graphics.Path;
+   9: import android.graphics.Typeface;
+  10: import android.util.AttributeSet;
+  11: import android.view.MotionEvent;
+  12: import android.view.View;
+  13: 
+  14: import java.util.List;
+  15: 
+  16: /**
+  17:  * 函数图像画布。
+  18:  *
+  19:  * 关键决定（每一条都有踩坑理由）：
+  20:  *  · 所有几何计算交给 PlotGeom（纯 Java），这里只负责"把点变成线"
+  21:  *    → 电脑上能跑同一套逻辑做审计，不必开模拟器
+  22:  *  · 曲线按段画 Path，段与段之间 moveTo 而不是 lineTo
+  23:  *    → 1/x、tan(x) 在渐近线处不会被连成一条竖线
+  24:  *  · 采样密度按屏幕宽度算（每像素一个点），放大时自动加密
+  25:  *    → 否则放大后 sin(10x) 会变成锯齿
+  26:  *  · 触摸用矩阵式缩放（绕双指中心），不是简单 scale()
+  27:  *  · 坐标刻度文字用 PlotGeom.tickLabel 去掉浮点噪声（不出现 0.30000000000004）
+  28:  */
+  29: public class PlotView extends View {
+  30: 
+  31:     private static final int C_BG = 0xFF101319;
+  32:     private static final int C_GRID = 0xFF20242E;
+  33:     private static final int C_AXIS = 0xFF4A5364;
+  34:     private static final int C_TICK = 0xFF6B7282;
+  35:     private static final int C_CURVE = 0xFF3ECFAF;
+  36:     private static final int C_DERIV = 0xFFE0A94A;
+  37:     private static final int C_ROOT = 0xFFE05A54;
+  38:     private static final int C_TANGENT = 0xFF7C6CF0;
+  39: 
+  40:     private final PlotGeom.View view = new PlotGeom.View();
+  41:     private final Paint pGrid = new Paint();
+  42:     private final Paint pAxis = new Paint();
+  43:     private final Paint pCurve = new Paint();
+  44:     private final Paint pDeriv = new Paint();
+  45:     private final Paint pTick = new Paint();
+  46:     private final Paint pRoot = new Paint();
+  47:     private final Paint pTangent = new Paint();
+  48: 
+  49:     private Expr.Node f;        // 当前函数
+  50:     private Expr.Node df;       // 它的导数（自动算，可关闭显示）
+  51:     private boolean showDeriv = false;
+  52:     private boolean showTangent = false;
+  53: 
+  54:     // 触摸状态
+  55:     private float lastX, lastY;
+  56:     private boolean dragging = false;
+  57:     private double pinchBase = 0;
+  58:     private double pinchCx, pinchCy;
+  59: 
+  60:     /** 单指长按/点按选中 x，用于显示切线。回调给外部显示数值。 */
+  61:     public interface OnPick {
+  62:         void onPick(double x, double y, double slope);
+  63:     }
+  64: 
+  65:     private OnPick onPick;
+  66: 
+  67:     public PlotView(Context c) { this(c, null); }
+  68: 
+  69:     public PlotView(Context c, AttributeSet a) {
+  70:         super(c, a);
+  71:         setBackgroundColor(C_BG);
+  72:         pGrid.setColor(C_GRID);
+  73:         pGrid.setStrokeWidth(dp(1));
+  74:         pGrid.setStyle(Paint.Style.STROKE);
+  75: 
+  76:         pAxis.setColor(C_AXIS);
+  77:         pAxis.setStrokeWidth(dp(1.2f));
+  78:         pAxis.setStyle(Paint.Style.STROKE);
+  79: 
+  80:         pCurve.setColor(C_CURVE);
+  81:         pCurve.setStrokeWidth(dp(2.2f));
+  82:         pCurve.setStyle(Paint.Style.STROKE);
+  83:         pCurve.setAntiAlias(true);
+  84:         pCurve.setStrokeJoin(Paint.Join.ROUND);
+  85:         pCurve.setStrokeCap(Paint.Cap.ROUND);
+  86: 
+  87:         pDeriv.setColor(C_DERIV);
+  88:         pDeriv.setStrokeWidth(dp(1.4f));
+  89:         pDeriv.setStyle(Paint.Style.STROKE);
+  90:         pDeriv.setAntiAlias(true);
+  91:         pDeriv.setPathEffect(new android.graphics.DashPathEffect(
+  92:                 new float[]{dp(6), dp(4)}, 0));
+  93: 
+  94:         pTick.setColor(C_TICK);
+  95:         pTick.setTextSize(dp(10));
+  96:         pTick.setAntiAlias(true);
+  97:         pTick.setTypeface(Typeface.MONOSPACE);
+  98: 
+  99:         pRoot.setColor(C_ROOT);
+ 100:         pRoot.setStyle(Paint.Style.FILL);
+ 101:         pRoot.setAntiAlias(true);
+ 102: 
+ 103:         pTangent.setColor(C_TANGENT);
+ 104:         pTangent.setStrokeWidth(dp(1.6f));
+ 105:         pTangent.setStyle(Paint.Style.STROKE);
+ 106:         pTangent.setAntiAlias(true);
+ 107:     }
+ 108: 
+ 109:     public void setOnPick(OnPick o) { this.onPick = o; }
+ 110: 
+ 111:     public PlotGeom.View window() { return view; }
+ 112: 
+ 113:     /** 设置函数。传 null 表示清空。返回错误文案，成功返回 null。 */
+ 114:     public String setExpr(String text) {
+ 115:         if (text == null || text.trim().isEmpty()) {
+ 116:             f = null; df = null; invalidate();
+ 117:             return null;
+ 118:         }
+ 119:         try {
+ 120:             Expr.Node n = Expr.parse(text);
+ 121:             f = n;
+ 122:             try { df = Expr.diff(n); } catch (Exception e) { df = null; }
+ 123:             double[] yr = PlotGeom.autoYRange(n, view.xMin, view.xMax, 400);
+ 124:             view.yMin = yr[0];
+ 125:             view.yMax = yr[1];
+ 126:             view.makeSquare();
+ 127:             invalidate();
+ 128:             return null;
+ 129:         } catch (Expr.ExprError e) {
+ 130:             return e.getMessage();
+ 131:         } catch (Exception e) {
+ 132:             return "表达式看不懂：" + e.getClass().getSimpleName();
+ 133:         }
+ 134:     }
+ 135: 
+ 136:     public void setShowDeriv(boolean b) { showDeriv = b; invalidate(); }
+ 137:     public void setShowTangent(boolean b) { showTangent = b; invalidate(); }
+ 138:     public boolean isShowDeriv() { return showDeriv; }
+ 139:     public boolean isShowTangent() { return showTangent; }
+ 140:     public Expr.Node expr() { return f; }
+ 141:     public Expr.Node deriv() { return df; }
+ 142: 
+ 143:     public void zoomBy(double factor) {
+ 144:         view.zoom((view.xMin + view.xMax) / 2, (view.yMin + view.yMax) / 2, factor);
+ 145:         view.makeSquare();
+ 146:         invalidate();
+ 147:     }
+ 148: 
+ 149:     public void resetView() {
+ 150:         view.xMin = -6; view.xMax = 6; view.yMin = -4; view.yMax = 4;
+ 151:         if (f != null) {
+ 152:             double[] yr = PlotGeom.autoYRange(f, -6, 6, 400);
+ 153:             view.yMin = yr[0]; view.yMax = yr[1];
+ 154:         }
+ 155:         view.makeSquare();
+ 156:         invalidate();
+ 157:     }
+ 158: 
+ 159:     /** 精确跳到一个 x 位置（结果面板的"看某点"用）。 */
+ 160:     public void centerOn(double x) {
+ 161:         double half = view.spanX() / 2;
+ 162:         view.xMin = x - half;
+ 163:         view.xMax = x + half;
+ 164:         invalidate();
+ 165:     }
+ 166: 
+ 167:     @Override
+ 168:     protected void onSizeChanged(int w, int h, int ow, int oh) {
+ 169:         super.onSizeChanged(w, h, ow, oh);
+ 170:         if (w > 0 && h > 0) {
+ 171:             view.w = w;
+ 172:             view.h = h;
+ 173:             if (f == null) {
+ 174:                 view.xMin = -6; view.xMax = 6; view.yMin = -4; view.yMax = 4;
+ 175:                 view.makeSquare();
+ 176:             } else {
+ 177:                 view.makeSquare();
+ 178:             }
+ 179:         }
+ 180:     }
+ 181: 
+ 182:     @Override
+ 183:     protected void onDraw(Canvas c) {
+ 184:         super.onDraw(c);
+ 185:         if (view.w <= 0 || view.h <= 0) return;
+ 186: 
+ 187:         drawGrid(c);
+ 188:         if (showDeriv && df != null) drawCurve(c, df, pDeriv, 1);
+ 189:         if (f != null) drawCurve(c, f, pCurve, 1);
+ 190:         if (f != null) drawRoots(c);
+ 191:         if (showTangent && f != null) drawTangent(c);
+ 192:         drawAxisLabels(c);
+ 193:     }
+ 194: 
+ 195:     // ── 网格与坐标轴 ──────────────────────────────────────
+ 196:     private void drawGrid(Canvas c) {
+ 197:         double stepX = PlotGeom.niceStep(view.spanX(), view.w, dp(72));
+ 198:         double stepY = PlotGeom.niceStep(view.spanY(), view.h, dp(64));
+ 199: 
+ 200:         // 竖线
+ 201:         double x0 = Math.ceil(view.xMin / stepX) * stepX;
+ 202:         for (double x = x0; x <= view.xMax + stepX * 1e-9; x += stepX) {
+ 203:             float px = (float) view.px(x);
+ 204:             c.drawLine(px, 0, px, view.h, isZeroLine(x, stepX) ? pAxis : pGrid);
+ 205:         }
+ 206:         // 横线
+ 207:         double y0 = Math.ceil(view.yMin / stepY) * stepY;
+ 208:         for (double y = y0; y <= view.yMax + stepY * 1e-9; y += stepY) {
+ 209:             float py = (float) view.py(y);
+ 210:             c.drawLine(0, py, view.w, py, isZeroLine(y, stepY) ? pAxis : pGrid);
+ 211:         }
+ 212:     }
+ 213: 
+ 214:     private boolean isZeroLine(double v, double step) {
+ 215:         return Math.abs(v) < step * 1e-6;
+ 216:     }
+ 217: 
+ 218:     private void drawAxisLabels(Canvas c) {
+ 219:         double stepX = PlotGeom.niceStep(view.spanX(), view.w, dp(72));
+ 220:         double stepY = PlotGeom.niceStep(view.spanY(), view.h, dp(64));
+ 221: 
+ 222:         float axisY = (float) view.py(0);
+ 223:         if (axisY < 0 || axisY > view.h) axisY = view.h - dp(4);
+ 224:         float axisX = (float) view.px(0);
+ 225:         if (axisX < 0 || axisX > view.w) axisX = dp(40);
+ 226: 
+ 227:         double x0 = Math.ceil(view.xMin / stepX) * stepX;
+ 228:         for (double x = x0; x <= view.xMax + stepX * 1e-9; x += stepX) {
+ 229:             if (isZeroLine(x, stepX)) continue;
+ 230:             float px = (float) view.px(x);
+ 231:             String t = PlotGeom.tickLabel(x, stepX);
+ 232:             pTick.setTextAlign(Paint.Align.CENTER);
+ 233:             c.drawText(t, px, axisY + dp(14), pTick);
+ 234:         }
+ 235: 
+ 236:         double y0 = Math.ceil(view.yMin / stepY) * stepY;
+ 237:         for (double y = y0; y <= view.yMax + stepY * 1e-9; y += stepY) {
+ 238:             if (isZeroLine(y, stepY)) continue;
+ 239:             float py = (float) view.py(y);
+ 240:             String t = PlotGeom.tickLabel(y, stepY);
+ 241:             pTick.setTextAlign(Paint.Align.LEFT);
+ 242:             c.drawText(t, axisX + dp(4), py + dp(4), pTick);
+ 243:         }
+ 244:         // 原点
+ 245:         pTick.setTextAlign(Paint.Align.RIGHT);
+ 246:         c.drawText("O", axisX - dp(3), axisY + dp(13), pTick);
+ 247:     }
+ 248: 
+ 249:     // ── 曲线 ──────────────────────────────────────────────
+ 250:     /**
+ 251:      * 画曲线。必须把画布边框裁死。
+ 252:      *
+ 253:      * 为什么：tan(x) 靠近渐近线时，采样点会跑到纵向几百倍画布外。
+ 254:      * 不裁的话 Canvas 仍会把这些线画出去 —— 在控件内部看不出来，
+ 255:      * 但只要控件不是全屏（对话框、卡片、截图），
+ 256:      * 就会在相邻区域看到莫名其妙的竖线。这是视觉审计抓到的真 bug。
+ 257:      */
+ 258:     private void drawCurve(Canvas c, Expr.Node n, Paint p, int stepPx) {
+ 259:         List<PlotGeom.Seg> segs = PlotGeom.sample(n, view, stepPx);
+ 260:         int save = c.save();
+ 261:         c.clipRect(0, 0, view.w, view.h);
+ 262:         for (PlotGeom.Seg s : segs) {
+ 263:             Path path = new Path();
+ 264:             boolean started = false;
+ 265:             for (int i = 0; i < s.pts.size(); i++) {
+ 266:                 double mx = s.pts.get(i)[0], my = s.pts.get(i)[1];
+ 267:                 float px = (float) view.px(mx);
+ 268:                 float py = (float) view.py(my);
+ 269:                 // 横向也裁：点必须在 x 范围内
+ 270:                 if (px < -view.w || px > view.w * 2) {
+ 271:                     started = false;
+ 272:                     continue;
+ 273:                 }
+ 274:                 // 纵向裁到画布外合理倍数内：超出部分没信息，还会拖慢绘制。
+ 275:                 // 这里用 1 倍而不是 2 倍 —— 超出一个画布高度就已经画不出可见内容了。
+ 276:                 if (py < -view.h || py > view.h * 2) {
+ 277:                     started = false;
+ 278:                     continue;
+ 279:                 }
+ 280:                 if (!started) { path.moveTo(px, py); started = true; }
+ 281:                 else path.lineTo(px, py);
+ 282:             }
+ 283:             c.drawPath(path, p);
+ 284:         }
+ 285:         c.restoreToCount(save);
+ 286:     }
+ 287: 
+ 288:     private void drawRoots(Canvas c) {
+ 289:         List<Double> rs = PlotGeom.roots(f, view, 800);
+ 290:         for (Double r : rs) {
+ 291:             float px = (float) view.px(r);
+ 292:             float py = (float) view.py(0);
+ 293:             c.drawCircle(px, py, dp(3.4f), pRoot);
+ 294:         }
+ 295:     }
+ 296: 
+ 297:     private void drawTangent(Canvas c) {
+ 298:         if (tangentX == null) return;
+ 299:         double x = tangentX;
+ 300:         double y = PlotGeom.safeEval(f, x);
+ 301:         double k = PlotGeom.slope(f, x);
+ 302:         if (!PlotGeom.isFinite(y) || !PlotGeom.isFinite(k)) return;
+ 303:         // 在可视范围内画切线
+ 304:         double xa = view.xMin, xb = view.xMax;
+ 305:         double ya = y + k * (xa - x);
+ 306:         double yb = y + k * (xb - x);
+ 307:         c.drawLine((float) view.px(xa), (float) view.py(ya),
+ 308:                 (float) view.px(xb), (float) view.py(yb), pTangent);
+ 309:         c.drawCircle((float) view.px(x), (float) view.py(y), dp(4), pRoot);
+ 310:     }
+ 311: 
+ 312:     private Double tangentX = null;
+ 313: 
+ 314:     public Double tangentX() { return tangentX; }
+ 315: 
+ 316:     public void setTangentX(Double x) {
+ 317:         tangentX = x;
+ 318:         invalidate();
+ 319:     }
+ 320: 
+ 321:     // ── 手势 ──────────────────────────────────────────────
+ 322:     @SuppressLint("ClickableViewAccessibility")
+ 323:     @Override
+ 324:     public boolean onTouchEvent(MotionEvent e) {
+ 325:         switch (e.getActionMasked()) {
+ 326:             case MotionEvent.ACTION_DOWN:
+ 327:                 lastX = e.getX(); lastY = e.getY();
+ 328:                 dragging = true;
+ 329:                 return true;
+ 330:             case MotionEvent.ACTION_MOVE:
+ 331:                 if (e.getPointerCount() >= 2) {
+ 332:                     double d = spacing(e);
+ 333:                     if (pinchBase > 0) {
+ 334:                         double factor = pinchBase / d;
+ 335:                         if (factor < 0.5) factor = 0.5;
+ 336:                         if (factor > 2) factor = 2;
+ 337:                         view.zoom(pinchCx, pinchCy, factor);
+ 338:                         view.makeSquare();
+ 339:                     }
+ 340:                     pinchBase = d;
+ 341:                     invalidate();
+ 342:                 } else if (dragging) {
+ 343:                     double dxMath = view.toX(0) - view.toX(lastX - e.getX());
+ 344:                     double dyMath = view.toY(0) - view.toY(lastY - e.getY());
+ 345:                     // 用像素差直接换算，避免 toX(0) 这类边界值带来的偏差
+ 346:                     dxMath = -(e.getX() - lastX) * view.spanX() / view.w;
+ 347:                     dyMath = (e.getY() - lastY) * view.spanY() / view.h;
+ 348:                     view.pan(dxMath, dyMath);
+ 349:                     lastX = e.getX(); lastY = e.getY();
+ 350:                     invalidate();
+ 351:                 }

@@ -159,10 +159,18 @@ public class Store extends StateLogic {
     /** 老版本把整份 JSON 存在 SharedPreferences；有就迁进来。 */
     private void migrateLegacy() {
         try {
-            if (db.getReadableDatabase().rawQuery(
-                    "SELECT v FROM kv WHERE k='migrated'", null).getCount() > 0) {
-                return;   // 已经迁过
+            // 游标必须显式关闭。链式 .getCount() 用完就丢，
+            // 每次冷启动都泄漏一个 Cursor + 文件描述符，
+            // GC 时打 "Finalizing a Cursor that has not been deactivated or closed"。
+            android.database.Cursor c0 = db.getReadableDatabase().rawQuery(
+                    "SELECT v FROM kv WHERE k='migrated'", null);
+            boolean migrated;
+            try {
+                migrated = c0.getCount() > 0;
+            } finally {
+                c0.close();
             }
+            if (migrated) return;   // 已经迁过
             String old = legacy.getString("state_json", null);
             if (old == null || old.length() < 10) return;
             deserialize(old);        // 填进内存
@@ -322,6 +330,22 @@ public class Store extends StateLogic {
     }
 
     /** 立即写盘。切后台 / 退出前必须调，否则最后 700ms 的输入会丢。 */
+    /**
+     * 覆写 StateLogic 的导入：**导入后必须立刻落库**。
+     *
+     * 基类只把数据填进内存集合（done / completed / 笔记），不碰 SQLite。
+     * 而 UI 上勾单个任务走的是 setDone() 这种单行 INSERT/DELETE，
+     * 也不会触发全量 writeNow()。于是「导入进度码」之后只要进程被杀、
+     * 或者用户先勾了一个任务的再重启，导入的内容就整批丢了 ——
+     * 但当时 Toast 明明写着"已导入 N 条勾选"。
+     */
+    @Override
+    public int importJson(String raw) throws Exception {
+        int n = super.importJson(raw);
+        writeNow();
+        return n;
+    }
+
     public void flush() {
         if (savePending) {
             saveHandler.removeCallbacks(saveTask);

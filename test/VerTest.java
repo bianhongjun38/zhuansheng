@@ -46,6 +46,13 @@ public class VerTest {
             int maj = p.length > 0 ? Integer.parseInt(p[0]) : 0;
             int min = p.length > 1 ? Integer.parseInt(p[1]) : 0;
             int pat = p.length > 2 ? Integer.parseInt(p[2]) : 0;
+            // 每段按 100 进制挤压若越界会与更高版本碰撞（1.5.100 == 1.6.0），
+            // 越界时退回大端拼接，保证严格大于任何合法的小版本号。
+            if (maj >= 100 || min >= 100 || pat >= 100) {
+                return maj * 1000000L > Integer.MAX_VALUE
+                        ? Integer.MAX_VALUE
+                        : (int) (maj * 1000000L + min * 10000L + pat);
+            }
             return maj * 10000 + min * 100 + pat;
         } catch (Exception e) {
             return 0;
