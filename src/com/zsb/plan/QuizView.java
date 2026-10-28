@@ -284,12 +284,15 @@ public class QuizView {
         JSONArray opts = q.optJSONArray("o");
         int n = opts == null ? 0 : opts.length();
 
+        // 解析可信度护栏，见 trustedSol()
+        String sol = trustedSol(q);
+
         if (ans < 0) {
             // 没答案：只标记"已选"，不判对错 —— 不编造答案
             paint(row, C_AMBER);
             tvSol.setVisibility(View.VISIBLE);
             tvSol.setText("这道题暂未收录答案，先自己判断。"
-                    + (q.optString("sol", "").isEmpty() ? "" : "\n\n" + q.optString("sol")));
+                    + (sol.isEmpty() ? "" : "\n\n" + sol));
         } else {
             // 把所有选项该上的色都上齐
             for (int i = 0; i < n; i++) {
@@ -304,7 +307,6 @@ public class QuizView {
                 wrong.add(q);
                 store.addWrong(q.optString("id"), q.optString("subjectSafe", ""), q.optString("q"), "");
             }
-            String sol = q.optString("sol", "");
             tvSol.setVisibility(View.VISIBLE);
             tvSol.setText(pick == ans
                     ? ("答对了。" + (sol.isEmpty() ? "" : "\n\n" + sol))
@@ -405,4 +407,72 @@ public class QuizView {
     }
 
     public boolean isShowing() { return dlg != null && dlg.isShowing(); }
+
+    /**
+     * 解析可信度护栏 —— 2026-10-28 事故的直接防线。
+     *
+     * 当时的现象：题干问"500 个 32*32 点阵需要多少容量"，下面挂的解析却在讲
+     * "中英文切换的快捷键是 Ctrl+Space"。根因是 PDF 转题库时题号与解析块错位，
+     * 解析被成段挂到了别的题上（comp.json 里 2007 年的解析有 89% 实际是 2013 年的）。
+     * 离线已清洗掉 129 条错配，这里再加一道运行时护栏：
+     * 解析必须和本题有实质重合才显示，否则宁可不显示 ——
+     * 空解析只是少点信息，错解析直接教错。
+     *
+     * 判定（任一成立才算可信）：
+     *   A. 解析含题干 >=8 字的连续原文（是连续片段，不是零散词）
+     *   B. 解析含正确选项的完整文本（>=4 字）
+     */
+    private static String trustedSol(JSONObject q) {
+        String sol = q.optString("sol", "");
+        if (sol.trim().isEmpty()) return "";
+        String stem = normText(q.optString("q", ""));
+        String solN = normText(sol);
+        if (stem.isEmpty() || solN.isEmpty()) return sol;
+
+        if (longestRun(stem, solN) >= 8) return sol;
+
+        int ai = q.optInt("a", -1);
+        JSONArray os = q.optJSONArray("o");
+        if (os != null && ai >= 0 && ai < os.length()) {
+            String on = normText(os.optString(ai, ""));
+            if (on.length() >= 4 && solN.contains(on)) return sol;
+        }
+
+        // C. 弱条件：题干里有 >=6 字与解析重合（实际数据里只有两条靠这条放行，
+        //    都是"下图所示"这类题干不含答案线索的正确解析）。门槛刻意留高，
+        //    错配样本的这条分数都 <0.10，拦得住。
+        if (longestRun(solN, stem) >= 6 && solN.length() >= 15) {
+            int hit = 0;
+            for (int i = 0; i + 6 <= stem.length(); i++) {
+                if (solN.contains(stem.substring(i, i + 6))) { hit++; }
+            }
+            if (hit * 100 / Math.max(1, stem.length()) >= 12) return sol;
+        }
+        return "";
+    }
+
+    /** 去掉空白与标点，只留实义字符，用于比对。 */
+    private static String normText(String s) {
+        if (s == null) return "";
+        StringBuilder b = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isWhitespace(c)) continue;
+            if ("\uFF0C\u3002\u3001\uFF1B\uFF1A\uFF1F\uFF01\uFF08\uFF09\u201C\u201D\u2018\u2019\u00B7\u2026\u2014,.;:?!()[]\"'*=_".indexOf(c) >= 0) continue;
+            b.append(c);
+        }
+        return b.toString();
+    }
+
+    /** a 的最长连续子串有多长出现在 b 里。 */
+    private static int longestRun(String a, String b) {
+        int best = 0;
+        for (int i = 0; i < a.length(); i++) {
+            if (a.length() - i <= best) break;
+            for (int L = a.length() - i; L > best; L--) {
+                if (b.contains(a.substring(i, i + L))) { best = L; break; }
+            }
+        }
+        return best;
+    }
 }
