@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.5.7",
-  "versionInt": 10507,
-  "versionCode": 31,
-  "notes": "v1.5.7（versionCode 31）",
+  "versionName": "1.5.9",
+  "versionInt": 10509,
+  "versionCode": 33,
+  "notes": "v1.5.9（versionCode 33）",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.5.7.apk",
+    "name": "zhuansheng-v1.5.9.apk",
     "size": 3824360,
-    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.5.7.apk"
+    "url": "https://app.xxjcloudns.kdns.fr/zhuansheng-v1.5.9.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.7"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.9"
   }
 }

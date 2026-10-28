@@ -169,6 +169,24 @@ def main():
         dl_line = ("<p style='color:#E0A94A'>安装包 %.2f MB，超过 Pages 单文件"
                    "上限，请从 GitHub Release 下载。</p>" % (size / 1048576))
 
+    # 教材 PDF 也放在 Pages（每本最大 5.3 MB，离 24 MB 余量还远）。
+    # 单独列出来，是因为 App 内首次看原图才按需拉，用户想直接用浏览器看也方便。
+    books = []
+    bdir = os.path.join(PAGES, "books")
+    if os.path.isdir(bdir):
+        for f in sorted(os.listdir(bdir)):
+            if not f.endswith(".pdf"):
+                continue
+            label = {"comp_book.pdf": "计算机", "eng_book.pdf": "英语",
+                     "math_book.pdf": "数学"}.get(f, f[:-4])
+            books.append("<a href='books/%s' style='color:#7C6CF0'>%s</a>"
+                         % (f, label))
+    books_line = ""
+    if books:
+        books_line = ("<p style='color:#8A90A0;font-size:13px;margin-top:18px'>"
+                      "教材 PDF（App 内也可直接看）：%s</p>" % "　".join(books))
+
+
     with open(os.path.join(PAGES, "index.html"), "w", encoding="utf-8") as f:
         f.write(
             "<!doctype html><meta charset=utf-8>"
@@ -183,7 +201,8 @@ def main():
             "安装未知应用即可。</p>"
             "<p style='color:#8A90A0;font-size:12px'>机器可读清单："
             "<a href='update.json' style='color:#7C6CF0'>update.json</a></p>"
-            % (vname, size / 1048576, vcode, dl_line))
+            "%s"
+            % (vname, size / 1048576, vcode, dl_line, books_line))
 
     print("  APK      %s  (%.2f MB)%s"
           % (apk_name, size / 1048576, "" if host else "  [未上传 Pages]"))

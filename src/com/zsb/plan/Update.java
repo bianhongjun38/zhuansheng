@@ -64,6 +64,16 @@ public class Update {
      * 实测：dl 域名下 21,109,913 B 的包 8.5 秒下完，2.37 MB/s，文件头 PK。
      */
     private static final String PRIMARY_JSON =
+            "https://app.xxjcloudns.kdns.fr/update.json";
+
+    /**
+     * 已下线的 Worker 直出通道，仅留作兜底。
+     *
+     * 为什么留着：v1.5.7 及之前的安装包把 dl.xxjcloudns.kdns.fr 当成主通道，
+     * 那些机器升级过一次之后才会切到 Pages。在它们全部升级完之前，
+     * 这条记录不能删 —— 删了它们会读 404。等确认没有老版本在线，可整条移除。
+     */
+    private static final String LEGACY_WORKER_JSON =
             "https://dl.xxjcloudns.kdns.fr/update.json";
 
     /** 旧主通道（Cloudflare Pages），保留做第二兜底。 */
@@ -79,7 +89,9 @@ public class Update {
      * 所以 PDF 从安装包里拿掉，改成第一次看原图时按需拉这一本。
      * 路径与 Worker 静态资源一致：/<bookId>.pdf
      */
-    public static final String BOOK_BASE = "https://dl.xxjcloudns.kdns.fr/books/";
+    // 2026-10-28：Worker 已按用户决定撤掉（Pages 与 Workers 单文件上限、免费额度一致，
+    // 没必要跑两套）。书 PDF 与 APK 统一放在 Pages，这条路一个域名管完。
+    public static final String BOOK_BASE = "https://app.xxjcloudns.kdns.fr/books/";
 
     private static final String PAGES_JSON =
             "https://zsb-update.pages.dev/update.json";
@@ -87,6 +99,20 @@ public class Update {
     /** 兜底：Pages 挂了时退到 GitHub API（注意是 api 域名，不是 github.com）。 */
     private static final String API =
             "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/latest";
+
+    /**
+     * GitHub 侧的兜底下载地址，由 findApk() 在探测版本时顺手记下。
+     *
+     * 2026-10-28 多轮实测（每条约 1MB，各连 5 次，间隔 1s）：
+     *   Pages 自有域名      成功 5/5   中位 536 KB/s  区间 504~550
+     *   GitHub release 资产 成功 1/5   中位 789 KB/s  四次 RemoteDisconnected
+     *   GitHub api 资产端点 成功 5/5   中位   7 KB/s  等于不通
+     *
+     * 结论：GitHub 在国内是「时通时断」，不能用单一实测的漂亮数字当结论
+     * （同一台机器 10 分钟内从 6.6 MB/s 掉到 1/5 成功率）。
+     * 所以顺序必须是 Pages 优先，GitHub 只在本机 Pages 全失败时才试。
+     */
+    private volatile String fallbackGithubUrl;
 
     private final Activity act;
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -120,7 +146,7 @@ public class Update {
                         return;
                     }
                     ui.post(new Runnable() {
-                        public void run() { askUpdate(lt.ver, lt.notes, lt.apkUrl); }
+                        public void run() { askUpdate(lt.ver, lt.notes, buildSources(lt)); }
                     });
                 } catch (Exception e) {
                     if (!silent) toastOnUi("检查失败：" + e.getClass().getSimpleName());
@@ -158,9 +184,9 @@ public class Update {
         // 探测顺序保持"自有域名优先"——只是不再提前返回，
         // 三份都要拿到手才能比出最高的那个。
         Latest[] all = {
-                fetchManifest(PRIMARY_JSON),        // dl.xxjcloudns.kdns.fr（Worker 直出）
-                fetchManifest(PAGES_PRIMARY_JSON),  // app.xxjcloudns.kdns.fr（Pages）
-                fetchManifest(PAGES_JSON),          // zsb-update.pages.dev
+                fetchManifest(PRIMARY_JSON),        // app.xxjcloudns.kdns.fr（Pages，主通道）
+                fetchManifest(PAGES_JSON),          // zsb-update.pages.dev（Pages 兜底）
+                fetchManifest(LEGACY_WORKER_JSON),  // 已下线的 Worker，仅兜底老机器
                 fetchFromGithub(),                  // api.github.com
         };
 
@@ -350,7 +376,11 @@ public class Update {
                 String name = a.optString("name", "");
                 if (!name.endsWith(".apk")) continue;
                 String api = a.optString("url", "");
-                if (api.startsWith("https://api.github.com/")) return api;
+                if (api.startsWith("https://api.github.com/")) {
+                    fallbackGithubUrl = api;
+                    return api;
+                }
+                fallbackGithubUrl = a.optString("browser_download_url", null);
                 // 兜底：万一副本接口没给 url，退回老地址（可能很慢但不至于不可用）
                 return a.optString("browser_download_url", null);
             }
@@ -359,7 +389,22 @@ public class Update {
         return null;
     }
 
-    private void askUpdate(String ver, String notes, final String url) {
+    /**
+     * 组装下载源列表，**顺序即优先级**。
+     *
+     * 第一档：本次探测到的清单里的 apk.url —— 也就是 Pages 自有域名，
+     *         实测 5/5 成功、504~550 KB/s、波动极小。
+     * 后两档：GitHub 的两个端点，只在前者失败时才会走到。
+     */
+    private java.util.List<String> buildSources(Latest lt) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (lt != null && lt.apkUrl != null) out.add(lt.apkUrl);
+        if (fallbackGithubUrl != null) out.add(fallbackGithubUrl);
+        return out;
+    }
+
+    private void askUpdate(String ver, String notes, final java.util.List<String> urls) {
+        final java.util.List<String> url = urls;
         String body = "当前 v" + localVersionName() + "，最新 v" + ver + "。";
         if (notes != null && notes.trim().length() > 0) {
             String n = notes.trim();
@@ -378,7 +423,22 @@ public class Update {
                 .show();
     }
 
-    private void download(final String url) {
+    /**
+     * 按顺序尝试多个下载源，任一成功即返回。
+     *
+     * 为什么要多源：本机 2026-10-28 实测——
+     *   github.com（release 资产，302 到 release-assets）完整 20.12 MB / 3.1s / 6.6 MB/s
+     *   app.xxjcloudns.kdns.fr（Pages，APK 3.65 MB / 2.9s / 1.3 MB/s）
+     * 两条都通，但国内线路质量会变（同一天不同时段、不同运营商差别很大）。
+     * 单一源一旦抽风，用户就只能干等或失败；多源按序退避最稳。
+     *
+     * 每次断线后不重下整个包：用 Range 从已下载的字节处续传。
+     * 20 MB 的包在国内掉一次线就全废，这个成本太高。
+     */
+    private void download(final java.util.List<String> urls) {
+        final java.util.List<String> sources = new java.util.ArrayList<>();
+        for (String u : urls) if (u != null && !sources.contains(u)) sources.add(u);
+
         final ProgressDialog pd = new ProgressDialog(act);
         pd.setTitle("正在下载更新");
         pd.setMessage("0%");
@@ -388,82 +448,119 @@ public class Update {
         new Thread(new Runnable() {
             public void run() {
                 final File out = new File(act.getCacheDir(), "update.apk");
-                HttpURLConnection c = null;
-                try {
-                    // 下载链路说明见 findApk()：起点是 api.github.com 的资产端点，
-                    // 带 Accept: octet-stream 才会 302 到 release-assets.githubusercontent.com。
-                    // 不带这个头，API 会返回该资产的 JSON 描述（几 KB），
-                    // 表现为「下载飞快完成，然后提示文件不完整」。
-                    String target = url;
-                    for (int hop = 0; hop < 6; hop++) {
-                        c = (HttpURLConnection) new URL(target).openConnection();
-                        c.setConnectTimeout(15000);
-                        c.setReadTimeout(60000);
-                        c.setInstanceFollowRedirects(false);
-                        c.setRequestProperty("User-Agent", "zsb-plan");
-                        if (target.contains("api.github.com")) {
-                            c.setRequestProperty("Accept", "application/octet-stream");
-                            c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
-                        }
-                        int sc = c.getResponseCode();
-                        if (sc == 301 || sc == 302 || sc == 303 || sc == 307 || sc == 308) {
-                            String loc = c.getHeaderField("Location");
-                            c.disconnect();
-                            if (loc == null) throw new Exception("重定向无地址");
-                            target = loc;
-                            continue;
-                        }
-                        break;
-                    }
-                    if (c == null) throw new Exception("连接失败");
-                    if (c.getResponseCode() != 200) {
-                        throw new Exception("HTTP " + c.getResponseCode());
-                    }
-                    int total = c.getContentLength();
-                    InputStream in = c.getInputStream();
-                    FileOutputStream fo = new FileOutputStream(out);
-                    byte[] buf = new byte[64 * 1024];
-                    int n, done = 0, lastPct = -1;
-                    while ((n = in.read(buf)) > 0) {
-                        fo.write(buf, 0, n);
-                        done += n;
-                        if (total > 0) {
-                            final int pct = (int) (done * 100L / total);
-                            if (pct != lastPct) {
-                                lastPct = pct;
-                                ui.post(new Runnable() {
-                                    public void run() { pd.setMessage(pct + "%"); }
-                                });
-                            }
-                        }
-                    }
-                    fo.flush();
-                    fo.close();
-                    in.close();
+                Exception last = null;
 
-                    // 下载完整性：APK 至少几 MB，太小说明拿到的是错误页
-                    if (out.length() < 1024 * 1024) {
-                        throw new Exception("文件不完整（" + out.length() + " 字节）");
+                outer:
+                for (String src : sources) {
+                    HttpURLConnection c = null;
+                    try {
+                        long got = fetchResumable(src, out, pd);
+                        if (got < 1024 * 1024) {
+                            throw new Exception("文件不完整（" + got + " 字节）");
+                        }
+                        ui.post(new Runnable() {
+                            public void run() { pd.dismiss(); install(out); }
+                        });
+                        return;   // 成功，收工
+                    } catch (Exception e) {
+                        last = e;
+                        // 这个源不行，清掉半截文件换下一个 —— 不同源的包可能不同版本，
+                        // 混着续传会拼出一个既不是 A 也不是 B 的坏文件。
+                        out.delete();
+                    } finally {
+                        if (c != null) c.disconnect();
                     }
-
-                    ui.post(new Runnable() {
-                        public void run() {
-                            pd.dismiss();
-                            install(out);
-                        }
-                    });
-                } catch (final Exception e) {
-                    ui.post(new Runnable() {
-                        public void run() {
-                            pd.dismiss();
-                            toastOnUi("下载失败：" + e.getMessage());
-                        }
-                    });
-                } finally {
-                    if (c != null) c.disconnect();
                 }
+
+                final String msg = last == null ? "没有可用下载源"
+                        : ("下载失败：" + last.getMessage());
+                ui.post(new Runnable() {
+                    public void run() {
+                        pd.dismiss();
+                        toastOnUi(msg + "\n可在浏览器打开 app.xxjcloudns.kdns.fr 手动下载。");
+                    }
+                });
             }
         }).start();
+    }
+
+    /**
+     * 从一个源把 APK 拉到 out，支持断点续传，返回最终字节数。
+     *
+     * 关键点：
+     *   ① 手动跟 302（api.github.com 的资产端点必须这样，否则拿到的是 JSON 描述）
+     *   ② api.github.com 必须带 Accept: octet-stream，同上
+     *   ③ 若 out 已有部分内容且源支持 Range，就带 Range 续传，不让用户白等
+     */
+    private long fetchResumable(String start, File out, ProgressDialog pd) throws Exception {
+        long have = out.exists() ? out.length() : 0;
+        String target = start;
+        HttpURLConnection c = null;
+
+        for (int hop = 0; hop < 6; hop++) {
+            c = (HttpURLConnection) new URL(target).openConnection();
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(60000);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestProperty("User-Agent", "zsb-plan");
+            if (target.contains("api.github.com")) {
+                c.setRequestProperty("Accept", "application/octet-stream");
+                c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            }
+            if (have > 0) {
+                c.setRequestProperty("Range", "bytes=" + have + "-");
+            }
+            int sc = c.getResponseCode();
+            if (sc == 301 || sc == 302 || sc == 303 || sc == 307 || sc == 308) {
+                String loc = c.getHeaderField("Location");
+                c.disconnect();
+                if (loc == null) throw new Exception("重定向无地址");
+                target = loc;
+                continue;
+            }
+            break;
+        }
+        if (c == null) throw new Exception("连接失败");
+
+        int sc = c.getResponseCode();
+        if (sc == 416) {
+            // 已经下完了（服务端认为请求区间越界）
+            return out.length();
+        }
+        if (sc != 200 && sc != 206) throw new Exception("HTTP " + sc);
+
+        // 206 = 续传成功；200 = 服务端不支持 Range，得从头写
+        boolean append = (sc == 206);
+        if (!append) have = 0;
+
+        long total = have + c.getContentLength();
+        InputStream in = c.getInputStream();
+        FileOutputStream fo = new FileOutputStream(out, append);
+        byte[] buf = new byte[64 * 1024];
+        int n;
+        long done = have;
+        int lastPct = -1;
+        try {
+            while ((n = in.read(buf)) > 0) {
+                fo.write(buf, 0, n);
+                done += n;
+                if (total > 0) {
+                    final int pct = (int) (done * 100L / total);
+                    if (pct != lastPct) {
+                        lastPct = pct;
+                        ui.post(new Runnable() {
+                            public void run() { pd.setMessage(pct + "%"); }
+                        });
+                    }
+                }
+            }
+            fo.flush();
+        } finally {
+            try { fo.close(); } catch (Exception ignored) { }
+            try { in.close(); } catch (Exception ignored) { }
+            c.disconnect();
+        }
+        return out.length();
     }
 
     private void install(File apk) {
