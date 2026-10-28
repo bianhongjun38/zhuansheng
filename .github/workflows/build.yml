@@ -96,6 +96,25 @@ jobs:
           path: build/*.apk
           retention-days: 90
 
+
+      # Release 附件是**累加**语义：softprops/action-gh-release 碰到已存在的
+      # Release 只会补传新文件，不会剔掉旧的。所以同一个 tag 被推两次
+      # （先推错 commit、删了再推），Release 底下就会同时躺着两个版本的 APK
+      # —— 实测 2026-10-28 的 v1.5.42 下面就同时有 1.5.40 和 1.5.42，
+      # 而且旧的排在前面。客户端按附件名挑最高版本能挡住，但人点 Release
+      # 页面就会下错。发布前先把本 Release 已有的 .apk 附件清干净。
+      - name: 清掉本 Release 已有的 APK 附件
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          IDS=$(gh release view "$TAG" --json assets \
+                -q '.assets[] | select(.name | endswith(".apk")) | .databaseId' 2>/dev/null || true)
+          for id in $IDS; do
+            echo "删除旧附件 id=$id"
+            gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
+          done
       - name: 发 Release（仅打 tag 时）
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
