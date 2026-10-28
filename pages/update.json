@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.5.15",
-  "versionInt": 10515,
-  "versionCode": 39,
-  "notes": "v1.5.15（versionCode 39）",
+  "versionName": "1.5.24",
+  "versionInt": 10524,
+  "versionCode": 48,
+  "notes": "v1.5.24（versionCode 48）",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.5.15.apk",
-    "size": 3820264,
-    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.15.apk"
+    "name": "zhuansheng-v1.5.24.apk",
+    "size": 4197163,
+    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.24.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.15"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.24"
   }
 }

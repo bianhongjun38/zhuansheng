@@ -202,7 +202,12 @@ def check_keystore():
 
 def main():
     bump = "--bump" in sys.argv
+    # --debug：出 debuggable 包，可用 adb run-as 直接读写存档。
+    # 只在本地验证时用；发版永远不带这个参数（生产包必须不可调试）。
+    debug = "--debug" in sys.argv
     vcode, vname = read_version(bump)
+    if debug:
+        print("! 调试构建：application 标记为 debuggable，不要拿去发版")
     print("=" * 62)
     print("  原生 Android APK 构建 · %s v%s (code %d)" % (APP_NAME, vname, vcode))
     print("=" * 62)
@@ -256,6 +261,10 @@ def main():
             "--version-code", str(vcode),
             "--version-name", vname,
             "--auto-add-overlay"]
+    # aapt2 没有单独的 debuggable 参数，用 --debug-mode 让它
+    # 在 <application> 上写入 android:debuggable="true"
+    if debug:
+        link += ["--debug-mode"]
     # assets 不用 aapt2 -A（中文路径下解析会出错），
     # 改成最后用 zipfile 直接写进 APK，路径更可控
     link += flats
@@ -334,7 +343,8 @@ def main():
     # 钥匙固定在 keystore/release.keystore，**绝不自动重新生成**。
     # main() 里 check_keystore() 已经保证它存在，这里不再有「没有就造一把」
     # 的分支——那正是让更新装不上的根因。
-    final = os.path.join(BUILD, "%s-v%s.apk" % (APP_NAME, vname))
+    suffix = "-debug" if debug else ""
+    final = os.path.join(BUILD, "%s-v%s%s.apk" % (APP_NAME, vname, suffix))
     run([JAVA, "-cp", APKSIGNER_JAR, "com.android.apksigner.ApkSignerTool",
          "sign",
          "--ks", KEYSTORE,
@@ -371,10 +381,18 @@ def main():
     print("  大小 %.2f MB" % (os.path.getsize(final) / 1024 / 1024))
     print("=" * 62)
 
-    # 顺手把最终包复制一份到 mobile/ 根目录，方便手机传
-    share = os.path.join(PROJ, "%s-v%s.apk" % (APP_NAME, vname))
+    # 顺手把最终包复制一份到 mobile/ 根目录，方便手机传。
+    # 调试包不复制成正式名、不写更新清单：否则一次本地验证就会把
+    # 线上 1.5.x 的清单指到一个 debuggable 包上，手机自动更新后能被调试。
+    share = os.path.join(PROJ, "%s-v%s%s.apk" % (APP_NAME, vname, suffix))
     shutil.copy(final, share)
     print("  已复制到：%s" % share)
+
+    if debug:
+        print("\n  调试包已就绪，装它可以直接 run-as 改存档：")
+        print("    adb install -r \"%s\"" % share)
+        print("    adb shell run-as com.zsb.plan cat shared_prefs/zsb_game.xml")
+        return
 
     # 顺手把 pages/ 下的清单也生成了。
     #

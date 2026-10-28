@@ -125,7 +125,63 @@ public class GModeView extends LinearLayout {
             return;
         }
         if (scroller != null) scroller.setVisibility(View.VISIBLE);
+        restoreUnfinishedFight();
         renderMap();
+    }
+
+    /**
+     * 进程被杀后重进：把「打到一半」的那一格退回去重新打。
+     *
+     * 为什么要这么做：enterNode() 一开始就 setPos + markVisited，
+     * 于是「进入战斗」和「通过这一格」在存档里长得一模一样。
+     * 战斗状态又只活在 GBattleView 实例里，进程一死就全丢 ——
+     * 重进时程序认为这一格已经过了，玩家白拿一个节点，就是用户说的
+     * 「上一个怪就自动过关了」。
+     *
+     * 现在开战前把节点写进 store.battleNode()，只有在玩家点「继续」
+     * （advanceAfterBattle）时才清。重进时若 battleNode 还在，
+     * 就说明那一场没打完：位置退回该格、取消「已通过」标记，重新开战。
+     */
+    private void restoreUnfinishedFight() {
+        String raw = store.battleNode();
+        if (raw == null || raw.isEmpty()) return;
+        String[] parts = raw.split(",");
+        if (parts.length != 2) { store.clearBattleNode(); return; }
+        int r, c;
+        try {
+            r = Integer.parseInt(parts[0].trim());
+            c = Integer.parseInt(parts[1].trim());
+        } catch (NumberFormatException ex) {
+            store.clearBattleNode();
+            return;
+        }
+        GameData.RouteMap map = loadOrMakeMap();
+        if (map == null || r < 0 || r >= map.rows()) {
+            store.clearBattleNode();
+            return;
+        }
+        List<GameData.Node> layer = map.row(r);
+        if (layer == null || c < 0 || c >= layer.size()) {
+            store.clearBattleNode();
+            return;
+        }
+        int type = layer.get(c).type;
+
+        // 位置退回这一格，并抹掉「已通过」—— 这一场要重打。
+        store.setPos(r, c);
+        store.unmarkVisited(r, c);
+        store.clearBattleNode();
+        setFightNode(r, c);
+
+        // 非战斗节点不需要重打，直接按原网格状态交回地图让玩家重选。
+        if (type == GameData.N_CAMP || type == GameData.N_SHOP
+                || type == GameData.N_CHEST) {
+            clearFightNode();
+            return;
+        }
+        GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
+        if (e == null) { clearFightNode(); return; }
+        startBattle(e);
     }
 
     /** 战斗结束（胜/负都走这里），清掉战斗视图回到地图。 */
@@ -141,7 +197,8 @@ public class GModeView extends LinearLayout {
     private void updateHead() {
         TextView info = findViewById(android.R.id.text1);
         if (info != null) info.setText("✦ " + store.gold() + "    特殊词 "
-                + store.specialCount() + "    Lv." + (store.bestFloor() + 1));
+                + store.specialCount() + "    道具 " + store.itemCount()
+                + "    Lv." + (store.bestFloor() + 1));
     }
 
     // ── 地图 ─────────────────────────────────────────────
@@ -249,8 +306,12 @@ public class GModeView extends LinearLayout {
         body.addView(legend);
 
         LinearLayout foot = box();
+        foot.addView(smallBtn("🎒 背包 / 我的特殊词与道具（看效果）", this::showBag));
         foot.addView(smallBtn("重新生成地图（进度清零）", () -> {
             store.resetRun();
+            store.clearBattleNode();   // 连同"打到一半"的记录一起清
+            clearFightNode();
+            if (battleView != null) { removeView(battleView); battleView = null; }
             store.setMap("");
             renderMap();
         }));
@@ -432,6 +493,8 @@ public class GModeView extends LinearLayout {
             default: {
                 GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
                 if (e == null) { advanceAfterNode(); return; }
+                setFightNode(row, col);
+                store.setBattleNode(row, col);
                 startBattle(e);
             }
         }
@@ -460,33 +523,97 @@ public class GModeView extends LinearLayout {
         body.addView(acts);
     }
 
-    /** 商店：花金币买特殊词 / 治疗。是消费点，不是战斗。 */
+    /**
+     * 商店：花金币买特殊词 / 道具 / 治疗。
+     *
+     * ── 为什么必须把效果写出来 ─────────────────────────────
+     * 原来这里只有一行「随机特殊词  ¥70」，玩家花 70 金币买回来，
+     * 顶栏「特殊词 1」加了 1，战斗里却毫无变化 ——
+     * 因为 cards.json 的 effect 字段当时根本没有代码读取。
+     * 看不见效果、也没有说明，买了当然不知道有什么用。
+     *
+     * 现在：每个商品下面直接列出它的效果原文（来自 cards.json），
+     * 道具同样标价、标效果；买到的特殊词会在「特殊词」清单里常驻显示。
+     */
     private void showShop() {
         body.removeAllViews();
         updateHead();
 
+        // Premier: shop prices -30%
+        boolean premier = store.hasSpecial("premier");
+        double priceMul = premier ? 0.7 : 1.0;
+
         LinearLayout card = box();
         card.addView(title("🏪 商店"));
-        card.addView(sub("当前金币 " + store.gold() + "。"));
+        card.addView(sub("当前金币 " + store.gold()
+                + (premier ? "　（Premier 价格 −30%）" : "")));
         body.addView(card);
 
         LinearLayout acts = box();
         int base = 30 + store.layer() * 10;
 
-        acts.addView(buyRow("随机特殊词", base + 40, () -> {
-            GameData.Special pick = data.randomUnownedSpecial(store, rnd);
-            if (pick == null) { toast("特殊词已集齐，没得卖了"); return; }
-            store.addSpecial(pick.id);
-            flashThen("🏪 买到特殊词：" + pick.cn, this::advanceAfterNode);
-        }));
+        // ── Specials:永久被动 ──
+        GameData.Special pick = data.randomUnownedSpecial(store, rnd);
+        final GameData.Special sp = pick;
+        int spPrice = (int) Math.round((base + 40) * priceMul);
+        if (sp != null) {
+            acts.addView(buyRow("特殊词 · " + sp.nameEn, spPrice, () -> {
+                store.addSpecial(sp.id);
+                flashThen("🏪 买到特殊词【" + sp.nameEn + "】\n效果：" + sp.effect
+                        + "\n（永久生效，可在背包查看）", this::advanceAfterNode);
+            }));
+            acts.addView(sub("　效果：" + sp.effect));
+            acts.addView(sub("　（永久被动，买了立刻生效）"));
+        } else {
+            acts.addView(sub("特殊词已集齐，没得卖了。"));
+        }
 
-        acts.addView(buyRow("回复 25 生命", base, () -> {
+        // ── Items：一次性 ──
+        acts.addView(sub("──────── 道具（一次性，战斗中手动使用）────────"));
+        int shown = 0;
+        for (GameData.Item it : data.items) {
+            if (shown >= 2) break;
+            final GameData.Item item = it;
+            int ip = (int) Math.round(item.price * priceMul);
+            acts.addView(buyRow("道具 · " + item.nameEn + "（" + item.en + "）", ip, () -> {
+                store.addItem(item.id);
+                flashThen("🏪 买到道具【" + item.nameEn + "】\n效果：" + item.desc
+                        + "\n（一次性，战斗里点道具使用）", this::advanceAfterNode);
+            }));
+            acts.addView(sub("　效果：" + item.desc));
+            shown++;
+        }
+
+        // ── Healing ──
+        acts.addView(sub("──────── 补给 ────────"));
+        int healPrice = (int) Math.round(base * priceMul);
+        acts.addView(buyRow("回复 25 生命", healPrice, () -> {
             store.addCampHeal(25);
             flashThen("🏪 已购买治疗：下一场战斗 +25 生命", this::advanceAfterNode);
         }));
 
         acts.addView(smallBtn("离开商店", this::advanceAfterNode));
         body.addView(acts);
+
+        showOwnedSpecials();
+    }
+
+    /** 已买到的特殊词清单：名字 + 效果，让玩家随时能查。 */
+    private void showOwnedSpecials() {
+        org.json.JSONArray ids = store.specials();
+        if (ids.length() == 0) return;
+        LinearLayout card = box();
+        card.addView(title("✦ 已拥有的特殊词（" + ids.length() + "）"));
+        for (int i = 0; i < ids.length(); i++) {
+            String id = ids.optString(i);
+            GameData.Special s = null;
+            for (GameData.Special x : data.specials) {
+                if (x.id.equals(id)) { s = x; break; }
+            }
+            if (s == null) continue;
+            card.addView(sub("✦ " + s.nameEn + "　" + s.effect));
+        }
+        body.addView(card);
     }
 
     /** 商店一行商品：名字 + 价格 + 按钮。 */
@@ -503,7 +630,7 @@ public class GModeView extends LinearLayout {
                 ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         row.addView(nm);
 
-        TextView btn = tv(afford ? "购买" : "金币不足", 12, afford ? C_AMBER : C_FG3);
+        TextView btn = tv(afford ? "Buy" : "Not enough gold", 12, afford ? C_AMBER : C_FG3);
         btn.setPadding(dp(14), dp(7), dp(14), dp(7));
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(dp(8));
@@ -518,6 +645,72 @@ public class GModeView extends LinearLayout {
         }
         row.addView(btn);
         return row;
+    }
+
+    /**
+     * 背包：把玩家已经买到的东西**连同效果原文**一起列出来。
+     *
+     * 为什么单独做一屏：特殊词是永久被动，玩家在商店里看了说明、
+     * 买了、走了，之后想确认「我刚才买的那个『至关重要的』到底是干嘛的」
+     * 就再也找不到地方看了 —— 顶栏只有一个「特殊词 1」的数字。
+     * 效果必须随时可查，否则买了和没买的差别只在血量上，
+     * 玩家根本建立不了「这个道具值这个价」的认知。
+     */
+    private void showBag() {
+        body.removeAllViews();
+        updateHead();
+
+        LinearLayout head = box();
+        head.addView(title("🎒 背包"));
+        head.addView(sub("金币 " + store.gold() + "　特殊词 " + store.specialCount()
+                + "　道具 " + store.itemCount()));
+        body.addView(head);
+
+        // ── Specials: permanent passives ──
+        LinearLayout sp = box();
+        sp.addView(title("✦ 特殊词（永久被动，买了就一直在）"));
+        sp.addView(sub("效果永久生效，可以在「店」节点花金币买。"));
+        org.json.JSONArray ids = store.specials();
+        if (ids.length() == 0) {
+            sp.addView(sub("还没有特殊词。"));
+        } else {
+            for (int i = 0; i < ids.length(); i++) {
+                String id = ids.optString(i);
+                GameData.Special f = null;
+                for (GameData.Special x : data.specials) {
+                    if (x.id.equals(id)) { f = x; break; }
+                }
+                if (f == null) continue;
+                sp.addView(sub("✦ " + f.nameEn + "（" + f.id + "）"));
+                sp.addView(sub("　　效果：" + f.effect));
+            }
+        }
+        body.addView(sp);
+
+        // ── Items: one use each ──
+        LinearLayout it = box();
+        it.addView(title("🎒 道具（一次性，战斗里手动点用）"));
+        it.addView(sub("用掉就消失，战斗里点道具那一行使用。"));
+        org.json.JSONArray iids = store.items();
+        if (iids.length() == 0) {
+            it.addView(sub("还没有道具。"));
+        } else {
+            for (int i = 0; i < iids.length(); i++) {
+                String id = iids.optString(i);
+                GameData.Item f = null;
+                for (GameData.Item x : data.items) {
+                    if (x.id.equals(id)) { f = x; break; }
+                }
+                if (f == null) continue;
+                it.addView(sub("🎒 " + f.nameEn + "（" + f.en + "）　售价 " + f.price + " 金"));
+                it.addView(sub("　　效果：" + f.desc));
+            }
+        }
+        body.addView(it);
+
+        LinearLayout back = box();
+        back.addView(smallBtn("← 返回地图", this::renderMap));
+        body.addView(back);
     }
 
     /** 宝箱：直接拿金币。是奖励点，不是战斗。 */
@@ -557,6 +750,26 @@ public class GModeView extends LinearLayout {
         renderMap();
     }
 
+    /**
+     * 当前正在打的节点（row/col）。-1 表示没有进行中的战斗。
+     *
+     * 存在的理由：Win 之后 advanceStep() 会把 store 的 curRow 推到下一层，
+     * 但只有玩家点「继续」才会真的推进。如果进程在中间被杀（返回桌面、
+     * 切后台被系统回收），重进时 store 已经在下一层了 —— 上一场看起来
+     * 「自动过关」，玩家白拿了一个节点。
+     * 记下开战时的位置，重进时若发现战斗没了又没点过继续，就把位置退回去。
+     */
+    private int fightRow = -1;
+    private int fightCol = -1;
+
+    public void setFightNode(int row, int col) { fightRow = row; fightCol = col; }
+
+    /** 是否正处在没打完的战斗里。用于拦截系统返回键。 */
+    public boolean inBattle() { return battleView != null; }
+    public int getFightRow() { return fightRow; }
+    public int getFightCol() { return fightCol; }
+    public void clearFightNode() { fightRow = -1; fightCol = -1; }
+
     private void startBattle(GameData.Enemy e) {
         body.removeAllViews();
         if (battleView != null) { removeView(battleView); battleView = null; }
@@ -581,6 +794,8 @@ public class GModeView extends LinearLayout {
      *      于是节点越界、地图上一个能点的格子都没有 —— 玩家被卡死在层末。
      */
     private void advanceAfterBattle() {
+        clearFightNode();        // 玩家确认过了，这一格才算真正走完
+        store.clearBattleNode();
         advanceStep();
         endBattle();
     }

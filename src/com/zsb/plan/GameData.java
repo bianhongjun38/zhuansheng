@@ -80,9 +80,11 @@ public class GameData {
                     if (w.isEmpty()) continue;
                     String pos = firstPos(o.optJSONArray("pos"));
                     String cn  = firstCn(o.optString("cn", ""));
+                    List<String> senses = readSenses(o.optJSONArray("senses"));
                     GCard g = new GCard(w.toLowerCase(), w, cn, pos,
                                         GCard.KIND_WORD, null,
-                                        o.optString("ex", ""), o.optString("exCn", ""));
+                                        o.optString("ex", ""), o.optString("exCn", ""),
+                                        senses);
                     words.add(g);
                     byId.put(g.id, g);
                 }
@@ -131,7 +133,7 @@ public class GameData {
             if (sp != null) for (int i = 0; i < sp.length(); i++) {
                 JSONObject o = sp.getJSONObject(i);
                 specials.add(new Special(o.optString("id"),
-                        o.optString("cn"), o.optString("effect")));
+                        o.optString("nameEn"), o.optString("cn"), o.optString("effect")));
             }
 
             JSONArray en = root.optJSONArray("enemies");
@@ -147,7 +149,8 @@ public class GameData {
             if (it != null) for (int i = 0; i < it.length(); i++) {
                 JSONObject o = it.getJSONObject(i);
                 items.add(new Item(o.optString("id"), o.optString("en"),
-                        o.optString("cn"), o.optString("desc"), o.optInt("price", 90)));
+                        o.optString("nameEn"), o.optString("cn"), o.optString("desc"),
+                        o.optInt("price", 90)));
             }
 
             JSONObject b = root.optJSONObject("balance");
@@ -530,18 +533,44 @@ public class GameData {
         }
     }
 
+    /**
+     * 特殊词（永久被动）。
+     *
+     * 名称与效果一律英文：卡面、商店、背包全部用英文文案，
+     * 所以这里只保留 nameEn / effectEn 两个字段，
+     * 另外用 cn / effect 做兼容别名（值同样是英文），
+     * 免得界面层到处改字段名。
+     */
     public static class Special {
-        public final String id, cn, effect;
-        public Special(String id, String cn, String effect) {
-            this.id = id; this.cn = cn; this.effect = effect;
+        /** 显示名（英文，背包/商店里就用这个）。 */
+        public final String nameEn;
+        /** 中文义项（卡面、释义用）。 */
+        public final String cn;
+        /** 效果说明（中文）。 */
+        public final String effect;
+        public final String id;
+        public Special(String id, String nameEn, String cn, String effect) {
+            this.id = id;
+            this.nameEn = nameEn;
+            this.cn = cn;
+            this.effect = effect;
         }
     }
 
-    public static class Item {
-        public final String id, en, cn, desc;
+    /** 一次性道具。名称与效果同样只用英文。 */
+    public class Item {
+        /** 显示名（英文）。 */
+        public final String nameEn;
+        /** 英文原词，等于 id。 */
+        public final String en;
+        public final String cn;
+        /** 效果说明（中文）。 */
+        public final String desc;
+        public final String id;
         public final int price;
-        public Item(String id, String en, String cn, String desc, int price) {
-            this.id = id; this.en = en; this.cn = cn;
+        public Item(String id, String en, String nameEn, String cn, String desc, int price) {
+            this.id = id; this.en = en;
+            this.nameEn = nameEn; this.cn = cn;
             this.desc = desc; this.price = price;
         }
     }
@@ -562,6 +591,27 @@ public class GameData {
     private static String firstPos(JSONArray a) {
         if (a == null || a.length() == 0) return "";
         return a.optString(0, "");
+    }
+
+    /**
+     * 把 vocab.json 的 senses 数组读成 ["pos|中文", ...]。
+     *
+     * 只保留有中文的义项；读不到就返回空列表（= 单义词，不参与过载模式）。
+     * 每个义项内部还有可能带分号（"收费;控告;掌管;电荷"），这里**不切**——
+     * 卡面上要不要展开是显示层的事，数据层原样留着。
+     */
+    private static List<String> readSenses(JSONArray a) {
+        if (a == null || a.length() == 0) return java.util.Collections.emptyList();
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject s = a.optJSONObject(i);
+            if (s == null) continue;
+            String cn = s.optString("cn", "").trim();
+            if (cn.isEmpty()) continue;
+            String pos = s.optString("pos", "").trim();
+            out.add(pos + "|" + cn);
+        }
+        return out;
     }
 
     private static String firstCn(String s) {

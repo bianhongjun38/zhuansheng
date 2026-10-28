@@ -81,6 +81,14 @@ public class GBattleView extends LinearLayout {
     private GCard pending;
     private GQuiz.Q pendingQ;
 
+    /**
+     * 本次作答是否走僻义过载通道，值为所考的义项下标；-1 表示普通作答。
+     *
+     * 单独存一个字段而不是只读 pendingQ.mode：resolve() 开头就把 pendingQ
+     * 置空了，那时已经读不到 mode。这个标记必须在清空之前落到一个活下来的变量里。
+     */
+    private int overloadIndex = -1;
+
     public GBattleView(Context c, GStore s) {
         super(c);
         store = s;
@@ -347,7 +355,15 @@ public class GBattleView extends LinearLayout {
         GradientDrawable g = new GradientDrawable();
         g.setCornerRadius(dp(11));
         g.setColor(c.isAdverb() ? 0xFF2A2440 : C_BG3);
-        g.setStroke(dp(1), c.isAdverb() ? C_PURPLE : C_LINE);
+        // 多义项词（熟词僻义候选）用紫色粗描边标出来。这是「这张牌可以过载」
+        // 的唯一视觉线索 —— 不标的话玩家永远不知道哪张牌值得赌，
+        // 机制等于不存在。描边宽 2dp 而不是 1dp，才在深色底上看得出来。
+        boolean overloadable = c.canOverload();
+        if (overloadable) {
+            g.setStroke(dp(2), C_PURPLE);
+        } else {
+            g.setStroke(dp(1), c.isAdverb() ? C_PURPLE : C_LINE);
+        }
         box.setBackground(g);
 
         // 卡宽 = 屏宽的三分之一，保证一屏恰好看到 3 张、左右露边提示可滑
@@ -365,6 +381,21 @@ public class GBattleView extends LinearLayout {
         TextView sub = tv(c.isAdverb() ? "副词·机制" : c.pos, 10, C_FG3);
         sub.setPadding(0, dp(1), 0, dp(3));
         box.addView(sub);
+
+        // 僻义过载标记 + 重铸标记。两个都是「这张牌有额外玩法」的提示，
+        // 挤在同一行显示，避免卡面被撑高后一屏放不下。
+        StringBuilder tag = new StringBuilder();
+        if (overloadable) tag.append("◆僻义").append(c.senseCount());
+        if (GBattle.isReWord(c)) {
+            if (tag.length() > 0) tag.append(" ");
+            tag.append("♻re-");
+        }
+        if (tag.length() > 0) {
+            TextView badge = tv(tag.toString(), 9.5f, C_PURPLE);
+            badge.setTypeface(Typeface.DEFAULT_BOLD);
+            badge.setPadding(0, 0, 0, dp(2));
+            box.addView(badge);
+        }
 
         // 副词是机制牌，按名字选就行，不考释义，所以保留效果说明
         if (c.isAdverb() && c.desc != null && !c.desc.isEmpty()) {
@@ -401,6 +432,60 @@ public class GBattleView extends LinearLayout {
 
     // ── 阶段按钮 ─────────────────────────────────────────
 
+    /**
+     * 战斗中的道具条。
+     *
+     * 道具（nevertheless / anyhow / anyway / further）在 cards.json 里
+     * 早就定义好了，但从来没有出现在任何界面 —— 商店不卖、战斗里不能用，
+     * 等于这四个道具不存在。这里按「持有才显示」列出手牌上方的一行。
+     *
+     * 文案必须把效果写出来：玩家背包里放着一个「尽管如此」，
+     * 光看词根本猜不到它是「免疫一次伤害」。
+     */
+    private void addItemBar(LinearLayout parent) {
+        org.json.JSONArray ids = store.items();
+        if (ids.length() == 0) return;
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int i = 0; i < ids.length(); i++) {
+            final String id = ids.optString(i);
+            if (id == null || id.isEmpty() || !seen.add(id)) continue;
+            GameData.Item found = null;
+            for (GameData.Item it : data.items) {
+                if (it.id.equals(id)) { found = it; break; }
+            }
+            if (found == null) continue;
+            final GameData.Item item = found;
+            parent.addView(smallBtn("🎒 " + item.nameEn + " — " + item.desc, () -> {
+                if (battle.useItem(item.id)) {
+                    flash = "🎒 已使用【" + item.nameEn + "】" + item.desc;
+                    addLog(flash, C_AMBER);
+                } else {
+                    flash = "这个道具现在用不了";
+                    addLog(flash, C_FG3);
+                }
+                render();
+            }));
+        }
+    }
+
+    /**
+     * 「Ultimate」按钮：每层只能用一次，本回合伤害 ×3。
+     *
+     * 特殊词 ultimate 的说明是「每层可用一次：本回合伤害 ×3」，
+     * 没有按钮就没法发动 —— 效果写了却点不到，等于没实现。
+     * 只有买过 ultimate 且这一层还没用过时才显示。
+     */
+    private void addUltimateButton(LinearLayout parent) {
+        if (battle == null || !battle.canUltimate()) return;
+        parent.addView(smallBtn("✨ 终极 — 本回合伤害 ×3（每层一次）", () -> {
+            if (battle.fireUltimate()) {
+                flash = "✨ 终极发动：本回合伤害 ×3";
+                addLog(flash, C_AMBER);
+            }
+            render();
+        }));
+    }
+
     private void renderOptions() {
         optRow.removeAllViews();
         if (pendingQ != null) { renderQuiz(); return; }
@@ -410,9 +495,15 @@ public class GBattleView extends LinearLayout {
                 optRow.addView(bigBtn("攻击 · 出牌打人", C_PURPLE, () -> {
                     battle.chooseAttack(); render();
                 }));
-                optRow.addView(bigBtn("保牌 · 留 2 张到下回合", C_TEAL, () -> {
-                    battle.chooseKeep(); render();
+                optRow.addView(bigBtn("保牌 · 花 " + GBattle.keepEnergyCost
+                        + " 能量留 2 张（余 " + battle.energy + "）", C_TEAL, () -> {
+                    if (!battle.chooseKeep()) {
+                        flash = "能量不足，保牌需要 " + GBattle.keepEnergyCost + " 点";
+                        addLog(flash, C_AMBER);
+                    }
+                    render();
                 }));
+                addItemBar(optRow);
                 optRow.addView(smallBtn("直接攻击（不答题）", () -> {
                     // attackDirect() 内部会 endTurn()，也就是敌人同样会打你一下。
                     // 原来直接调它再 render()，敌人这一下的动作完全看不见。
@@ -447,13 +538,26 @@ public class GBattleView extends LinearLayout {
                 } else {
                     optRow.addView(tv("手里没有可考的单词牌，直接结束回合", 12.5f, C_FG3));
                 }
+                // 保牌不再是「二选一」的整回合动作，而是出牌阶段里随时可用、
+                // 且**可以反复使用**的战术选项：只要当前能量还付得起 2 点
+                // 就能再保一轮，不设「每回合一次」的限制。
+                if (battle.energy >= GBattle.keepEnergyCost) {
+                    optRow.addView(smallBtn("保牌 −" + GBattle.keepEnergyCost
+                            + "能量（余 " + battle.energy
+                            + "，可再保 " + (battle.energy / GBattle.keepEnergyCost)
+                            + " 次）", () -> {
+                        if (battle.chooseKeep()) render();
+                    }));
+                }
+                addItemBar(optRow);
+                addUltimateButton(optRow);
                 optRow.addView(smallBtn("结束回合", () -> {
                     advanceTurn();
                 }));
                 break;
 
             case GBattle.PHASE_KEEP:
-                optRow.addView(smallBtn("确定（已保 " + battle.kept.size()
+                optRow.addView(smallBtn("确定（本轮已保 " + battle.keptNow
                         + " / " + data.keepLimit + " 张）", () -> {
                     battle.endKeep(); render();
                 }));
@@ -526,6 +630,13 @@ public class GBattleView extends LinearLayout {
                 final int k = i;
                 optRow.addView(optBtn(pendingQ.options[i], () -> answer(k)));
             }
+        } else if (pendingQ.mode == 4) {
+            // 僻义过载走的是选项制，答案不在手上 —— 提示语不能写「点牌」，
+            // 否则玩家会去点手牌，而那正是这题要避免的作弊路径。
+            TextView tip = tv("▾ 选出这个词的生僻义项", 12, C_PURPLE);
+            tip.setGravity(Gravity.CENTER);
+            tip.setPadding(0, dp(6), 0, dp(2));
+            optRow.addView(tip);
         } else {
             // 其余题型：答案在手上，点牌作答
             TextView tip = tv("▾ 点你手上对应的那张牌", 12, C_TEAL);
@@ -533,6 +644,51 @@ public class GBattleView extends LinearLayout {
             tip.setPadding(0, dp(6), 0, dp(2));
             optRow.addView(tip);
         }
+
+        // ── 僻义过载入口 ──────────────────────────────────
+        //
+        // 只有当前题目的目标牌有第二个义项时才出现。点它会把题面换成
+        // 生僻义项重新出题，答对 2.2 倍真实伤害、答错自伤 4 点。
+        // 放在最底下、用醒目色，是因为它是个「加注」操作，
+        // 不该和正常作答混在一起被误触。
+        if (pendingQ.card != null && pendingQ.card.canOverload()
+                && pendingQ.mode != 4) {
+            // 【绝不能写 pendingQ.card.en】。
+            // 这一题问的是「中文 → 从手牌里挑出那个词」，答案就是这张牌的单词。
+            // 之前按钮写成「🔥 僻义过载 · <单词>」，等于把答案直接印在题面上，
+            // 玩家不用辨识，照着按钮上的拼写去点牌就行 —— 和手牌上
+            //「◆僻义2」标记泄露答案是同一种错误。
+            // 所以这里只说加注规则，不透露是哪张牌。
+            optRow.addView(smallBtn("🔥 僻义过载（答对 2.2×，答错自伤 "
+                    + GBattle.overloadWrongSelfDamage + "）",
+                    this::startOverload));
+        }
+    }
+
+    /**
+     * 把当前题目换成僻义题。
+     *
+     * 目标牌仍然是玩家按过载时选中的那张（他手上有它、答对就打它），
+     * 但**题面改成给单词选释义**：四选一挑它的僻义。
+     *
+     * 为什么不能沿用「给中文选牌」：手牌上印着「◆僻义2」，
+     * 玩家点哪张都看得见那个标记 —— 题面问「哪个是它的僻义」时，
+     * 带 ◆ 的牌本身就把答案指出来了。改成选释义之后，标记不再是提示，
+     * 因为这时要答的是「哪个意思」，而不是「哪张牌」。
+     */
+    private void startOverload() {
+        if (battle == null || pendingQ == null) return;
+        GCard target = pendingQ.card;
+        GQuiz.Q oq = quiz.makeOverload(target);
+        if (oq == null) {
+            addLog("这张牌没有可考的僻义", C_AMBER);
+            return;
+        }
+        pendingQ = oq;
+        // 这里同样不能带 target.en —— flash/addLog 会立刻把答案显示出来。
+        flash = "🔥 僻义过载：改考生僻义项";
+        addLog(flash, C_PURPLE);
+        render();
     }
 
     /**
@@ -584,6 +740,18 @@ public class GBattleView extends LinearLayout {
     private void answer(int pick) {
         if (pendingQ == null || pendingQ.options == null) return;
         GCard target = pendingQ.card;
+
+        // 僻义过载（mode 4）也是选项题，但判对错的方式不同：
+        // 它选的是「哪个释义」，不是「哪个单词」，所以直接比 answer 下标，
+        // 不能走下面那个和 target.en 比字符串的分支。
+        if (pendingQ.mode == 4) {
+            // 不论对错都要记住义项下标：答对要用它结算 2.2 倍伤害，
+            // 答错要用它打出「你答的是什么、正确答案是什么」的说明。
+            overloadIndex = pendingQ.senseIndex;
+            resolve(target, pick == pendingQ.answer);
+            return;
+        }
+
         String chose = (pick >= 0 && pick < pendingQ.options.length)
                 ? pendingQ.options[pick] : "";
         boolean right = chose.equalsIgnoreCase(target == null ? "" : target.en);
@@ -611,6 +779,8 @@ public class GBattleView extends LinearLayout {
         }
 
         boolean right = target != null && picked != null && picked.id.equals(target.id);
+        // style="pendingQ.mode == 4" 时记住考的是第几个义项，供 resolve() 结算用
+        overloadIndex = (pendingQ.mode == 4) ? pendingQ.senseIndex : -1;
         resolve(picked, right);
     }
 
@@ -623,6 +793,45 @@ public class GBattleView extends LinearLayout {
 
         // 记下出手前的血量，用来判断这一下有没有引出「引擎内部自动结束回合」。
         int myHpBefore = battle.playerHp;
+
+        // 僻义过载走单独的结算：倍率不同，答错也不走敌人的充能逻辑。
+        // 这里必须在常规分支之前拦下来，否则过载会被当成普通答对处理，
+        // 2.2 倍伤害就白写了。
+        if (overloadIndex >= 0) {
+            int oi = overloadIndex;
+            overloadIndex = -1;
+            if (right && c != null) {
+                store.markRight();
+                int hpBefore = battle.enemyHp;
+                int dmg = battle.playCardOverload(c, oi);
+                int real = hpBefore - battle.enemyHp;
+                flash = "🔥 僻义过载　" + c.en + "（" + c.senseText(oi)
+                        + "）　真实伤害 " + real;
+                addLog(flash, C_PURPLE);
+                sprite.play("hurt");
+                if (battle.playerHp < myHpBefore) {
+                    final int took = myHpBefore - battle.playerHp;
+                    addLog("⚔ " + (battle.enemy == null ? "敌人" : battle.enemy.name)
+                            + " 攻击　你受到 " + took + " 伤害", C_RED);
+                    if (!battle.over()) {
+                        enemyStrike(new Runnable() {
+                            @Override public void run() { playerHurtFx(took); }
+                        });
+                    } else {
+                        playerHurtFx(took);
+                    }
+                }
+            } else {
+                store.markWrong();
+                battle.onOverloadWrong(c);
+                flash = "✗ 僻义答错：" + explain + "　自伤 "
+                        + GBattle.overloadWrongSelfDamage;
+                addLog(flash, C_RED);
+                playerHurtFx(GBattle.overloadWrongSelfDamage);
+            }
+            render();
+            return;
+        }
 
         if (right) {
             store.markRight();
@@ -803,7 +1012,7 @@ public class GBattleView extends LinearLayout {
         col.addView(statLine("生命", battle.playerHp + " / " + battle.playerMaxHp, null));
         col.addView(statLine("能量", battle.energy + " / " + battle.energyMax, null));
         col.addView(statLine("手牌", battle.hand.size() + " 张", null));
-        col.addView(statLine("已保牌", battle.kept.size() + " / " + data.keepLimit + " 张", null));
+        col.addView(statLine("已保牌", battle.keptNow + " / " + data.keepLimit + " 张", null));
         if (!battle.kept.isEmpty()) {
             StringBuilder sb = new StringBuilder();
             for (GCard k : battle.kept) sb.append(k.en).append("  ");
@@ -1325,7 +1534,19 @@ public class GBattleView extends LinearLayout {
      */
     private void renderResonance() {
         if (tvResonance == null) return;
-        if (battle == null || battle.resonance == null) {
+        if (battle == null) { tvResonance.setVisibility(GONE); return; }
+
+        // 三连打断的进度优先显示：它是「这回合还能不能免伤」的直接答案，
+        // 比共鸣提示更影响当下的决策。打断用掉之后才轮到共鸣条。
+        if (!battle.interruptedThisTurn && battle.streak > 0) {
+            tvResonance.setVisibility(VISIBLE);
+            tvResonance.setText("🛡 连对 " + battle.streak + " / " + battle.interruptNeed
+                    + "　—　再连对 " + Math.max(0, battle.interruptNeed - battle.streak)
+                    + " 次可截下敌人这次攻击");
+            return;
+        }
+
+        if (battle.resonance == null) {
             tvResonance.setVisibility(GONE);
             return;
         }

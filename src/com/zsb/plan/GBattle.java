@@ -68,12 +68,74 @@ public class GBattle {
 
     /** 场上临时加成（副词效果）。每回合重置。 */
     public double turnDamageMul = 1.0;
+
+    // ── 特殊词效果（由 store 里已购买的特殊词 id 驱动）─────────
+    //
+    // 这些开关必须在构造时就定好：它们是「整局/整场」的规则变形，
+    // 不能等到出牌时再问一次 store，否则同一个回合里切换 tab 就会变。
+    public boolean spCrucial;      // 同义连锁伤害 +25%
+    public boolean spEssential;    // 每场战斗开始 +10 血
+    public boolean spFundamental;  // 放宽同类连锁限制
+    public boolean spUltimate;     // 每层可用一次：本回合伤害 ×3
+    public boolean spSupreme;      // 最大生命 +20
+    public boolean spInevitable;   // 敌人充能永远 +1
+    public boolean spIndispensable;// 留牌上限 2 → 3
+    public boolean spPermanent;    // 篝火回复量 +50%
+    public boolean spThorough;     // 副词消耗减半
+    public boolean spCritical;     // 暴击率 +20%
+    public boolean spRadical;      // 每回合多抽 1 张
+    public boolean spElementary;   // 前 3 回合伤害 ×1.5
+    public boolean spMarvelous;    // 每场战斗可复活一次
+    public boolean spLiteral;      // 无视一切修饰
+    public boolean spPremier;      // 商店价格 −30%
+
+    /** 本层是否还能用「终极」（ultimate 每层一次）。 */
+    public boolean ultimateUsedThisFloor = false;
+    /** 副词消耗减半（thorough）：每回合前 1 张副词不耗能量。 */
+    public boolean adverbFreeLeft = false;
+
+    /** 本场是否已经用过复活（marvelous）。 */
+    public boolean revivedThisBattle = false;
+    /** 本回合是否已经放过「终极」×3（ultimate 每层一次）。 */
+    public boolean ultimateUsedThisTurn = false;
+
+    /** 一次性道具：本场免疫一次伤害。 */
+    public boolean itemShield = false;
+    /** 一次性道具：本场每次答对额外 +5 伤害。 */
+    public int itemFlatBonus = 0;
+    /** 一次性道具：本场手牌上限 +2。 */
+    public int itemHandBonus = 0;
     public int turnFlatBonus = 0;
     public boolean critReady = false;
     public boolean skipEnemyCharge = false;
     public boolean noAttackThisTurn = false;
     public int extraDraw = 0;
     public boolean wrongDoubled = false;
+
+    // ── 三连打断 ───────────────────────────────────────────
+    //
+    // 本回合连续答对 3 次（中间不许答错、不许直接攻击）就能截下敌人这次的
+    // 出手。原来的问题是：整场战斗只有「打人」一条输出路，玩家想活只能靠
+    // 打得够快 —— 而不认识词的时候根本打不动，也就永远拿不到喘息。
+    // 打断给了另一条路：连对三题 = 换一次免伤，让「答对」本身能当防御用。
+    /** 本回合已连续答对次数。答错清零。 */
+    public int streak = 0;
+    /** 本回合是否已经用掉打断（一回合只给一次，否则可以无限免伤）。 */
+    public boolean interruptedThisTurn = false;
+    /** 还需要几次才能打断；<=0 表示已经用掉。 */
+    public int interruptNeed = 3;
+
+    // ── 重铸之轮（re-）────────────────────────────────────
+    //
+    // 以 re- 开头的词在词库里代表「再次、返回」（rebuild / reject / recall）。
+    // 答对后按概率弹回手牌，等于让玩家把「再一次」这个词根的意思真的用出来 ——
+    // 机制和词义对得上，不是为了加数值硬凑的。
+    /** 本回合被「重铸」弹回手牌的次数，用于战报展示。 */
+    public int reforgedThisTurn = 0;
+
+    // ── 熟词僻义过载 ──────────────────────────────────────
+    /** 本次出牌是否走的僻义过载通道（供界面显示与结算区分）。 */
+    public boolean lastWasOverload = false;
 
     public GBattle(GameData g, GameData.Enemy e, Random r) {
         this(g, e, r, null);
@@ -105,8 +167,133 @@ public class GBattle {
             playerHp = playerMaxHp;
         }
         turn = 1;
+        readSpecials();
+        if (spInevitable) enemyChargeNeed = Math.max(1, enemyChargeNeed + 1);      // 把「买过的特殊词」翻译成本场规则开关
+        // 最大生命 +20（supreme）要在算血上限之后、读存档之前生效，
+        // 否则会出现「买了 supreme 但当前血量上限没涨」的情况。
+        if (spSupreme) playerMaxHp += 20;
+        if (spEssential) {
+            playerHp = Math.min(playerMaxHp,
+                    (saved > 0 ? Math.min(playerMaxHp, saved) : playerMaxHp) + 10);
+        }
         consumeCampHeal();   // 篝火/商店挂账的治疗在这里兑现
         startTurn();
+    }
+
+    /**
+     * 读已购买的特殊词，翻译成本场的规则开关。
+     *
+     * 为什么需要这一步：cards.json 里 15 个特殊词一直只有 id/cn/effect 三个字段，
+     * effect 是一句中文说明，**从来没有任何代码读过它** ——
+     * 商店花 40+ 金币买回来，只让顶栏的「特殊词 N」加一，战斗里毫无变化。
+     * 玩家当然会觉得买了不知道有什么用。
+     */
+    private void readSpecials() {
+        GStore st = (G == null) ? null : G.storeRef;
+        if (st == null) return;
+        spCrucial       = st.hasSpecial("crucial");
+        spEssential     = st.hasSpecial("essential");
+        spFundamental   = st.hasSpecial("fundamental");
+        spUltimate      = st.hasSpecial("ultimate");
+        spSupreme       = st.hasSpecial("supreme");
+        spInevitable    = st.hasSpecial("inevitable");
+        spIndispensable = st.hasSpecial("indispensable");
+        spPermanent     = st.hasSpecial("permanent");
+        spThorough      = st.hasSpecial("thorough");
+        spCritical      = st.hasSpecial("critical");
+        spRadical       = st.hasSpecial("radical");
+        spElementary    = st.hasSpecial("elementary");
+        spMarvelous     = st.hasSpecial("marvelous");
+        spLiteral       = st.hasSpecial("literal");
+        spPremier       = st.hasSpecial("premier");
+    }
+
+    /**
+     * 本回合实际生效的伤害倍率。
+     *
+     * literal（字面的）是「无视一切修饰」—— 它必须在**乘算之前**把所有
+     * 临时倍率清成 1.0，而不是在最后再除一次：后者遇到先乘 3 再乘 0.5
+     * 这种顺序时会算错。
+     */
+    public double effectiveDamageMul() {
+        if (spLiteral) return 1.0;
+        double m = turnDamageMul;
+        if (spElementary && turn <= 3) m *= 1.5;
+        if (spUltimate && ultimateUsedThisTurn) m *= 3.0;
+        return m;
+    }
+
+    /**
+     * 是否还能发动「终极」（ultimate）：每层一次。
+     *
+     * 界面上用它决定那个按钮显不显示。
+     */
+    public boolean canUltimate() { return spUltimate && !ultimateUsedThisFloor; }
+
+    /**
+     * 发动「终极」：本回合伤害 ×3，每层一次。
+     *
+     * 和副词那条 turnDamageMul 分开算，是为了让「本回合」结束就自然失效，
+     * 同时把「这一层已经用过了」记在 ultimateUsedThisFloor 上。
+     */
+    public boolean fireUltimate() {
+        if (!canUltimate()) return false;
+        ultimateUsedThisFloor = true;
+        ultimateUsedThisTurn = true;
+        lastMsg = "【终极】本回合伤害 ×3";
+        return true;
+    }
+
+    /** 同义连锁倍率（crucial 把每一级连锁的增量放大 25%）。 */
+    public double chainMul() {
+        int c = Math.min(chain, 3);
+        if (c <= 0) return 1.0;
+        double base = Math.pow(G.chainMultiplier, c);
+        if (spLiteral) return 1.0;
+        if (spCrucial) return base * 1.25;
+        return base;
+    }
+
+    /** 本场是否还能复活（marvelous，每场一次）。 */
+    public boolean canRevive() { return spMarvelous && !revivedThisBattle; }
+
+    // ── 道具（一次性消耗品）────────────────────────────────
+
+    /**
+     * 使用一个道具。返回 true 表示真的生效了。
+     *
+     * 道具和特殊词的区别：特殊词是永久被动，买了就一直算；
+     * 道具是一次性的，用掉就没了 —— 所以这里必须从存档里删掉。
+     */
+    public boolean useItem(String id) {
+        if (id == null || id.isEmpty()) return false;
+        GStore st = (G == null) ? null : G.storeRef;
+        if (st == null || !st.hasItem(id)) return false;
+        if ("nevertheless".equals(id)) {
+            itemShield = true;
+            st.removeItem(id);
+            lastMsg = "【道具】Nevertheless：本场免疫一次伤害";
+            return true;
+        }
+        if ("anyhow".equals(id)) {
+            itemHandBonus += 2;
+            st.removeItem(id);
+            lastMsg = "【道具】Anyhow：本场手牌上限 +2";
+            return true;
+        }
+        if ("anyway".equals(id)) {
+            hand.addAll(G.drawCards(3, rnd));
+            st.removeItem(id);
+            lastMsg = "【道具】Anyway：抽 3 张牌";
+            return true;
+        }
+        if ("further".equals(id)) {
+            itemFlatBonus += 5;
+            st.removeItem(id);
+            lastMsg = "【道具】Further：本场每次答对额外 +5 伤害";
+            return true;
+        }
+        return false;
     }
 
     // ── 回合开始 ─────────────────────────────────────────
@@ -121,6 +308,14 @@ public class GBattle {
         chain = 0;
         resonanceUsedThisTurn = false;
         lastWasResonance = false;
+        streak = 0;
+        interruptedThisTurn = false;
+        reforgedThisTurn = 0;
+        lastWasOverload = false;
+        keepBatches = 0;
+        keptNow = 0;
+        adverbFreeLeft = spThorough;   // 每回合第一张副词免费
+        ultimateUsedThisTurn = false;
         energy = energyMax;
 
         // 保下来的牌先回手
@@ -129,7 +324,8 @@ public class GBattle {
 
         // 发牌走「同义保底」版本：以共鸣槽里的词为焦点，约 55% 概率补一张同义词。
         // 原先纯随机的同义对出现率实测 0.4%，机制等于不存在（见 drawCardsWithSyn 注释）。
-        int need = Math.max(0, G.handSize + extraDraw - hand.size());
+        int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
+                + (spRadical ? 1 : 0) - hand.size());
         if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
         phase = PHASE_CHOOSE;
     }
@@ -141,24 +337,95 @@ public class GBattle {
         lastMsg = "选择一张牌出击";
     }
 
-    public void chooseKeep() {
-        phase = PHASE_KEEP;
-        lastMsg = "选择最多 " + G.keepLimit + " 张牌保留到下回合";
-    }
+    /**
+     * 进入保牌阶段。
+     *
+     * ── 为什么保牌要收 2 点能量 ────────────────────────────
+     * 原来的保牌是纯白给：花一整个回合的进攻机会换 2 张牌，账面上永远亏，
+     * 于是没人用，机制事实上不存在。现在改成**在正在进行的回合里随时可以保**，
+     * 代价是 2 点能量 —— 保牌变成了「用打人的资源换手牌质量」，
+     * 手上有关键词时值得，没有时不值得，才构成决策。
+     *
+     * 能量不够就不让进（返回 false），避免负数能量。
+     */
+    public boolean chooseKeep() {
+        // 只要是本回合、只要还剩得起 2 点能量，就能保 —— 不限制次数。
+        // 打掉一张牌后能量降到 2，仍然可以再保一次（扣完就是 0）。
+        // 唯一的前置是「不在保牌界面里」，否则会重复进入自己。
+        if (phase != PHASE_PLAY && phase != PHASE_CHOOSE) return false;
+        if (energy < keepEnergyCost) {
+            lastMsg = "能量不足：保牌需要 " + keepEnergyCost + " 点能量";
+            return false;
+        }
+        // 上一轮还没确认的保牌不能直接丢掉 —— 先并入 kept，再重新开一轮。
+        // 不这么做的话，连按两次保牌会把第一轮挑的牌全部退回手里作废，
+        // 而能量已经扣了两遍。
+        if (phase == PHASE_KEEP) return false;
 
-    public boolean keep(GCard c) {
-        if (phase != PHASE_KEEP) return false;
-        if (kept.size() >= G.keepLimit) return false;
-        if (!hand.remove(c)) return false;
-        kept.add(c);
+        energy -= keepEnergyCost;
+        keepBatches++;
+        phase = PHASE_KEEP;
+        lastMsg = "保牌　−" + keepEnergyCost + " 能量　选最多 "
+                + G.keepLimit + " 张留下（余 " + energy + " 能量）";
         return true;
     }
 
+    /** 本回合进入过几次保牌界面，仅用于界面提示与自测。 */
+    public int keepBatches = 0;
+
+    /** 保牌的能量代价。设计常量放这里而不是 GameData —— 它是规则不是数值。 */
+    public static final int keepEnergyCost = 2;
+
+    public boolean keep(GCard c) {
+        if (phase != PHASE_KEEP) return false;
+        // 这一轮最多挑 keepLimit 张；上限按「本轮已挑张数」算，
+        // 不按 kept 总张数算 —— 否则第二轮一张也挑不了。
+        if (keptNow >= G.keepLimit) return false;
+        if (!hand.remove(c)) return false;
+        kept.add(c);
+        keptNow++;
+        return true;
+    }
+
+    /**
+     * 只供 JVM 侧单测调用：按当前规则补一次手牌。
+     *
+     * 界面上永远走 startTurn()，不会直接调它。存在的意义是让「多抽 1 张」
+     * 这类规则能被单独验证，而不必先跑完整回合流程。
+     */
+    void refillForTest() {
+        int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
+                + (spRadical ? 1 : 0) - hand.size());
+        if (need > 0) hand.addAll(G.drawCardsWithSyn(need, rnd, resonance, 0.55));
+    }
+
+/** 本轮已挑的张数（进保牌界面时清零）。 */
+    public int keptNow = 0;
+
+    /**
+     * 结束保牌阶段。
+     *
+     * 保牌现在是「花 2 能量，在回合中途挑牌留住」，所以保完不是结束回合 ——
+     * 回到出牌阶段继续用剩下的能量打人。只有能量真的用光了才自然进 endTurn。
+     *
+     * 旧行为是保完直接结束回合，在保牌已经收费的前提下那样太亏：
+     * 花 2 能量还搭进去整个回合，没人会再用第二次。
+     */
     public void endKeep() {
-        // 没保的牌全部弃掉
-        discard.addAll(hand);
-        hand.clear();
-        endTurn(false);
+        // 关键：不能再「弃掉整只手牌、只留 kept」。
+        // 保牌现在是花 2 能量的中途动作，可以在一回合里做多次：
+        // 第一次保完就清空 hand 的话，玩家剩余的手牌会被全部弃掉，
+        // 第二次保牌时手上已经没牌可挑 —— 等于只允许保一次。
+        // 现在 kept 只是「已锁定的牌」清单，确认后它们回到手上，
+        // 其余牌原样留在手里，可以接着出牌、也可以再花 2 能量保一轮。
+        if (!kept.isEmpty()) {
+            hand.addAll(kept);
+            kept.clear();
+        }
+        keptNow = 0;
+        phase = PHASE_PLAY;
+        lastMsg = "已保 " + hand.size() + " 张，继续出牌（余 " + energy + " 能量）";
+        if (energy <= 0) endTurn(false);
     }
 
     /**
@@ -178,7 +445,11 @@ public class GBattle {
         //   ② 本回合连环：与上一张同义 → 递增倍率（原有机制，保留）
         // 都不满足时，若这张牌本身有同义词，就把它放进槽里等以后配对。
         lastWasResonance = false;
-        boolean chained = lastPlayed != null && G.synonym(lastPlayed.id, c.id);
+        // fundamental（任意同类即可连）：放宽成「词性相同就算连锁」。
+        boolean chained = lastPlayed != null
+                && (G.synonym(lastPlayed.id, c.id)
+                    || (spFundamental && !spLiteral
+                        && lastPlayed.pos != null && lastPlayed.pos.equals(c.pos)));
 
         if (resonance != null && !resonanceUsedThisTurn && G.synonym(resonance.id, c.id)) {
             // ① 共鸣暴击
@@ -188,9 +459,9 @@ public class GBattle {
             resonance = null;          // 触发即消耗
             chain++;
         } else if (chained) {
-            // ② 本回合连环
+            // ② 本回合连环（倍率统一走 chainMul，crucial/literal 才生效）
             chain++;
-            dmg = (int) Math.round(dmg * Math.pow(G.chainMultiplier, Math.min(chain, 3)));
+            dmg = (int) Math.round(dmg * chainMul());
         } else {
             chain = 0;
         }
@@ -202,21 +473,139 @@ public class GBattle {
             resonance = c;
         }
 
-        // 副词与临时加成
-        dmg = (int) Math.round(dmg * turnDamageMul) + turnFlatBonus;
+        // 副词与临时加成。倍率统一走 effectiveDamageMul()：
+        // elementary（前 3 回合 ×1.5）、ultimate（×3）、literal（清零）都在里面。
+        dmg = (int) Math.round(dmg * effectiveDamageMul()) + turnFlatBonus;
+        // 道具「进一步」（further）：本场每次答对额外 +5
+        if (itemFlatBonus > 0) dmg += itemFlatBonus;
+        // critical：每张牌额外 20% 概率暴击。和副词给的必暴击共用
+        // critReady 通道 —— 先判副词（必中），没中就掷一次概率。
+        if (!critReady && spCritical && !spLiteral && rnd.nextDouble() < 0.20) {
+            critReady = true;
+        }
         if (critReady) { dmg = (int) Math.round(dmg * G.critMultiplier); critReady = false; }
 
         enemyHp -= dmg;
         lastPlayed = c;
-        discard.add(c);
-        energy--;
+        // thorough：副词消耗减半 —— 实现成「每回合第一张副词免费」，
+        // 因为能量是整数，减半没法表示；免费一次等价于把 1 点砍成 0.5x2。
+        if (spThorough && c.isAdverb() && adverbFreeLeft) {
+            adverbFreeLeft = false;
+        } else {
+            energy--;
+        }
 
-        lastMsg = (lastWasResonance ? "⚡ 共鸣暴击  " : (chained ? "同义连锁 ×" + chain + "  " : ""))
-                + c.en + "  造成 " + dmg + " 伤害";
+        // ── 重铸之轮（re-）──────────────────────────────────
+        //
+        // 词库里以 re- 开头的词本身就表示「再次、返回」。让它们答对后有概率
+        // 不进弃牌堆、直接弹回手牌，机制和词根含义是对齐的：
+        // 你打出的这个 re- 词，真的「又回来了一次」。
+        //
+        // 概率固定 50%，不随等级浮动 —— 太高会让 re- 牌变成无限连，
+        // 太低则感知不到，50% 是最容易被玩家察觉「刚才那张回来了」的位置。
+        boolean reforged = false;
+        if (isReWord(c) && rnd.nextDouble() < reforgeChance) {
+            hand.add(c);          // 回手，而不是进弃牌堆
+            reforged = true;
+            reforgedThisTurn++;
+        } else {
+            discard.add(c);
+        }
+
+        StringBuilder msg = new StringBuilder();
+        if (lastWasResonance) msg.append("⚡ 共鸣暴击  ");
+        else if (chained) msg.append("同义连锁 ×").append(chain).append("  ");
+        msg.append(c.en).append("  造成 ").append(dmg).append(" 伤害");
+        if (reforged) msg.append("　♻ 重铸：回到手牌");
+
+        // ── 三连打断 ────────────────────────────────────────
+        //
+        // 见 streak / interruptedThisTurn 的注释。这里只在「本回合还够格
+        // 打断、且还没打断过」时推进计数，一旦用掉就不再累积。
+        if (!interruptedThisTurn) {
+            streak++;
+            if (streak >= interruptNeed) {
+                interruptedThisTurn = true;
+                skipEnemyCharge = true;   // 交给 enemyAct() 兑现：这次不出手
+                msg.append("　🛡 三连打断：敌人本次攻击被截下");
+            } else {
+                msg.append("　连对 ").append(streak).append("/").append(interruptNeed);
+            }
+        }
+
+        lastMsg = msg.toString();
+
+        if (enemyHp <= 0) { enemyHp = 0; phase = PHASE_WIN; saveHp(); return dmg; }
+
+        // 牌回了手，手牌就不是空的 —— 余额判定要按「能量用光」算，
+        // 否则重铸出来的那张牌会被直接弃掉，等于机制没生效。
+        if (energy <= 0) endTurn(false);
+        else if (hand.isEmpty()) endTurn(false);
+        return dmg;
+    }
+
+    /** 重铸概率。re- 牌答对后不进弃牌堆的概率。 */
+    public static final double reforgeChance = 0.5;
+
+    /** 是不是 re- 开头的词（代表「再次、返回」）。 */
+    public static boolean isReWord(GCard c) {
+        if (c == null || !c.isWord()) return false;
+        String w = c.en == null ? "" : c.en.toLowerCase();
+        return w.length() > 2 && w.startsWith("re")
+                && Character.isLetter(w.charAt(2));
+    }
+
+    /**
+     * 僻义过载结算：答对走这里，答错由 onOverloadWrong() 处理。
+     *
+     * 2.2 倍真实伤害、无视护甲。当前版本敌人没有护甲，所以「无视护甲」
+     * 等价于「不被任何减免吃掉」—— 这里直接写敌血，不再经过任何倍率。
+     */
+    public int playCardOverload(GCard c, int senseIndex) {
+        if (phase != PHASE_PLAY) return 0;
+        if (!hand.remove(c)) return 0;
+
+        int base = attackBlocked() ? 0 : G.baseDamage;
+        int dmg = (int) Math.round(base * overloadMul);
+        enemyHp -= dmg;
+        energy--;
+        lastWasOverload = true;
+        streak = interruptedThisTurn ? streak : streak + 1;
+
+        if (!interruptedThisTurn && streak >= interruptNeed) {
+            interruptedThisTurn = true;
+            skipEnemyCharge = true;
+        }
+
+        discard.add(c);
+        lastMsg = "🔥 僻义过载  " + c.en + "（" + c.senseText(senseIndex)
+                + "）  真实伤害 " + dmg;
 
         if (enemyHp <= 0) { enemyHp = 0; phase = PHASE_WIN; saveHp(); }
         else if (energy <= 0 || hand.isEmpty()) endTurn(false);
         return dmg;
+    }
+
+    /** 僻义过载倍率。2.2 倍、不吃任何减免。 */
+    public static final double overloadMul = 2.2;
+    /** 过载答错时玩家自伤。押错僻义的代价必须比普通答错更疼。 */
+    public static final int overloadWrongSelfDamage = 4;
+
+    /**
+     * 过载答错：扣 4 点血，这张牌弃掉，不计入三连。
+     *
+     * 为什么不走 onWrong()：普通答错是「敌人充能加快」，那是对局节奏的惩罚；
+     * 过载是玩家主动加注，赌错了就该当场付钱，而不是让敌人变强。
+     */
+    public void onOverloadWrong(GCard c) {
+        if (c != null) { hand.remove(c); discard.add(c); }
+        playerHp -= overloadWrongSelfDamage;
+        lastWasOverload = true;
+        streak = 0;
+        lastMsg = "✗ 僻义答错：" + (c == null ? "" : c.en)
+                + "  自伤 " + overloadWrongSelfDamage;
+        if (playerHp <= 0) { playerHp = 0; phase = PHASE_LOSE; saveHp(); }
+        else if (hand.isEmpty()) endTurn(false);
     }
 
     /**
@@ -233,6 +622,7 @@ public class GBattle {
     public void onWrong(GCard c) {
         enemyCharge += G.wrongChargeUp;
         wrongDoubled = true;
+        streak = 0;          // 连对断了：三连打断必须一次都不错才成立
         if (c != null) { hand.remove(c); discard.add(c); }
         lastMsg = "答错：" + (c == null ? "" : c.en) + "  敌人充能 +"
                 + G.wrongChargeUp + "，下次伤害翻倍";
@@ -348,6 +738,9 @@ public class GBattle {
         }
     }
 
+    /** 只供单测：按正常流程开一个新回合。 */
+    void startTurnPublic() { startTurn(); }
+
     /** 本回合是否被禁止攻击（hence 副词）。 */
     public boolean attackBlocked() { return noAttackThisTurn; }
 
@@ -365,7 +758,10 @@ public class GBattle {
         startTurn();
     }
 
-    private void enemyAct() {
+    /** 敌人出手。包可见是为了能在 JVM 侧直接测伤害/免伤/复活，界面不调它。 */
+    void enemyAct() {
+        // skipEnemyCharge 有两个来源：副词「本回合敌人不充能」和三连打断。
+        // 两者的共同结果都是「这次不出手」，所以合成一条路处理。
         if (skipEnemyCharge) { enemyCharge = 0; skipEnemyCharge = false; return; }
 
         enemyCharge++;
@@ -375,9 +771,27 @@ public class GBattle {
         int dmg = enemy == null ? 10 : enemy.atk;
         if (wrongDoubled) { dmg = (int) Math.round(dmg * G.wrongDamageMultiplier); wrongDoubled = false; }
 
+        // 道具「尽管如此」（nevertheless）：本场免疫一次伤害。
+        // 必须在扣血之前拦，扣完再补回来会把 playerHp 打成 0 触发 PHASE_LOSE。
+        if (itemShield) {
+            itemShield = false;
+            lastMsg = (enemy == null ? "敌人" : enemy.name) + " 攻击  " + dmg
+                    + " 伤害　🛡 被【尽管如此】完全免疫";
+            return;
+        }
+
         playerHp -= dmg;
         lastMsg = (enemy == null ? "敌人" : enemy.name) + " 攻击  " + dmg + " 伤害";
         if (playerHp <= 0) {
+            // 特殊词「非凡的」（marvelous）：每场战斗可复活一次。
+            // 这里不直接进 PHASE_LOSE，而是把血压回一半血，打上"已用过"标记。
+            if (canRevive()) {
+                revivedThisBattle = true;
+                playerHp = Math.max(1, playerMaxHp / 2);
+                lastMsg += "　✨ 【非凡的】复活：" + playerHp + " 生命";
+                saveHp();
+                return;
+            }
             playerHp = 0;
             phase = PHASE_LOSE;
             saveHp();

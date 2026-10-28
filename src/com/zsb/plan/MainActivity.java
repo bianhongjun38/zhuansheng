@@ -208,6 +208,41 @@ public class MainActivity extends Activity {
         return root;
     }
 
+    /**
+     * 系统返回键的接管。
+     *
+     * 原来没有任何处理 —— 按一下就把 MainActivity 关掉回桌面，
+     * 而战斗状态（血量/手牌/回合/题目）只存在 GBattleView 实例里，
+     * Activity 一死就全没了。重进时地图以为那一格已经打过，
+     * 于是「上一个怪就自动过关了」。
+     *
+     * 现在的顺序：
+     *   1. 在词汇塔且正在战斗 → 什么都不做（战后有「继续」按钮，不用返回键逃）
+     *   2. 在词汇塔（非战斗）→ 回今日页，不退出应用
+     *   3. 其它 tab → 回今日页
+     *   4. 已经在今日页 → 才真正退出（moveTaskToBack 保留进程）
+     */
+    @Override
+    public void onBackPressed() {
+        if (tab == 3) {
+            if (gameView != null && gameView.inBattle()) {
+                Toast.makeText(this, "战斗中不能退出 —— 打完这一场再用「继续」推进",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            tab = 0;
+            render();
+            return;
+        }
+        if (tab != 0) {
+            tab = 0;
+            render();
+            return;
+        }
+        // 回到后台而不是 finish()：进程留着，下次打开还在原处
+        moveTaskToBack(true);
+    }
+
     // ── 渲染分发 ──────────────────────────────────────────
     private void render() {
         tvDays.setText(String.valueOf(store.daysLeft(plan)));

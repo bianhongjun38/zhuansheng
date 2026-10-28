@@ -69,6 +69,49 @@ public class GStore {
 
     public int specialCount() { return specials().length(); }
 
+    // ── 一次性道具 ───────────────────────────────────────
+    //
+    // 存在 "items" 这个 key 里，元素是 cards.json 的 item id。
+    // 和 specials 分开：特殊词是永久被动、买了就不删；
+    // 道具用掉必须删掉，否则下次进战斗还能再按一次。
+
+    public org.json.JSONArray items() {
+        try { return new org.json.JSONArray(sp.getString("items", "[]")); }
+        catch (org.json.JSONException e) { return new org.json.JSONArray(); }
+    }
+
+    public boolean hasItem(String id) {
+        if (id == null) return false;
+        org.json.JSONArray a = items();
+        for (int i = 0; i < a.length(); i++) {
+            if (id.equals(a.optString(i))) return true;
+        }
+        return false;
+    }
+
+    public void addItem(String id) {
+        if (id == null || id.isEmpty() || hasItem(id)) return;
+        org.json.JSONArray a = items();
+        a.put(id);
+        sp.edit().putString("items", a.toString()).apply();
+    }
+
+    /** 用掉一个道具：从列表里删掉第一个匹配项。 */
+    public void removeItem(String id) {
+        if (id == null) return;
+        org.json.JSONArray a = items();
+        org.json.JSONArray out = new org.json.JSONArray();
+        boolean dropped = false;
+        for (int i = 0; i < a.length(); i++) {
+            String v = a.optString(i);
+            if (!dropped && id.equals(v)) { dropped = true; continue; }
+            out.put(v);
+        }
+        if (dropped) sp.edit().putString("items", out.toString()).apply();
+    }
+
+    public int itemCount() { return items().length(); }
+
     // ── 地图进度 ─────────────────────────────────────────
 
     /**
@@ -129,6 +172,36 @@ public class GStore {
 
     /** 清空已访问记录（新地图 / 新一层时用）。 */
     public void setVisitedClear() { sp.edit().putString("visited", "").apply(); }
+
+    public void unmarkVisited(int row, int col) {
+        String v = visitedRaw();
+        if (v.isEmpty()) return;
+        String key = row + "," + col;
+        StringBuilder sb = new StringBuilder();
+        for (String s : v.split(";")) {
+            if (s.isEmpty() || s.equals(key)) continue;
+            if (sb.length() > 0) sb.append(';');
+            sb.append(s);
+        }
+        setVisited(sb.toString());
+    }
+
+    /**
+     * 进行中的战斗节点 "row,col"；空串 = 没有进行中的战斗。
+     *
+     * 为什么必须落盘：战斗状态（血量/手牌/回合）只活在 GBattleView 实例里，
+     * 进程一被系统回收就没了。而 store.setPos() 早就在 enterNode() 里
+     * 把玩家挪到了这一格并标成已访问 —— 重进时程序看到的是「这一格走过了、
+     * 人站在下一层」，于是上一场怪被当成打赢了，玩家白拿一个节点（自动过关）。
+     * 把这个节点写进 SharedPreferences，重进时就能把位置退回去重新打。
+     */
+    public String battleNode() { return sp.getString("battleNode", ""); }
+
+    public void setBattleNode(int row, int col) {
+        sp.edit().putString("battleNode", row + "," + col).apply();
+    }
+
+    public void clearBattleNode() { sp.edit().putString("battleNode", "").apply(); }
 
     /**
      * 篝火 / 商店买的治疗量。
@@ -287,6 +360,11 @@ public class GStore {
           .putInt("node", 0)
           .putString("route", "[]")
           .putString("specials", "[]")
+          .putString("items", "[]")
+          .putString("battleNode", "")   // 重置这一局就不能留下"打到一半"的记录
+          .putString("visited", "")
+          .remove("curRow")
+          .remove("curCol")
           .apply();
     }
 

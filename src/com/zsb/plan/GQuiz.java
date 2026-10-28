@@ -43,6 +43,8 @@ public class GQuiz {
         public String explain = "";
         public GCard card;          // 正确答案那张牌
         public int mode;            // 题型，见类注释
+        /** 仅 mode==4（僻义过载）有效：本次考的是第几个义项。 */
+        public int senseIndex = -1;
     }
 
     private final GameData G;
@@ -213,6 +215,85 @@ public class GQuiz {
         q.prompt = firstSense(c.cn);
         q.sub = (c.pos.isEmpty() ? "" : c.pos + "　") + "从手牌中选出正确的词";
         q.explain = c.cn + " = " + c.en;
+        return q;
+    }
+
+    // ── 题型 4：僻义过载 ──────────────────────────────────
+    /**
+     * 只用「第二个及以后的义项」出题。
+     *
+     * 为什么单独一个入口：常规出题永远考 firstSense（最常见义），
+     * 玩家背熟了主义就能一路平推，而考试里真正拉分的是熟词僻义
+     * （charge 考「充电」不考「收费」）。过载模式把 senses[1..] 拿出来考，
+     * 答对了给 2.2 倍真实伤害，等于用「敢赌僻义」换输出。
+     *
+     * @param c 目标牌，必须是 canOverload() 的牌
+     * @return 题目；这张牌没有僻义时返回 null
+     */
+    public Q makeOverload(GCard c) {
+        if (c == null || !c.canOverload()) return null;
+
+        // 从第 1 个义项开始随机挑（senses[0] 是常见义，不能用来过载）
+        List<Integer> idx = new ArrayList<>();
+        for (int i = 1; i < c.senseCount(); i++) {
+            if (!c.senseText(i).isEmpty()) idx.add(i);
+        }
+        if (idx.isEmpty()) return null;
+        int pick = idx.get(rnd.nextInt(idx.size()));
+
+        // ── 题型必须是「给词选义」，不能是「给义选牌」 ──
+        //
+        // 手牌上已经印着「◆僻义2」，玩家一眼就知道哪张有多义项。
+        // 如果题面给中文、让玩家点手牌，那张带 ◆ 的牌本身就是答案提示 ——
+        // 等于答案摆在台面上。所以这里反过来出题：正面给单词，
+        // 四个释义里挑它的僻义。手牌标记这时不再是提示，因为
+        // 玩家已经知道考的就是这张，要选的是「哪个意思」。
+        Q q = new Q();
+        q.card = c;
+        q.mode = 4;
+        q.senseIndex = pick;
+        q.prompt = c.en;
+
+        // 干扰项：优先用同词性的其它义项，凑不够再从词库里补。
+        String right = c.senseText(pick);
+        List<String> opts = new ArrayList<>();
+        opts.add(right);
+
+        // ① 先把这张牌其它义项（含常见义）拿来当干扰 —— 最难也最有意义：
+        //    玩家必须分清「收费/充电/控告」到底哪一个是僻义。
+        for (int i = 0; i < c.senseCount() && opts.size() < 4; i++) {
+            if (i == pick) continue;
+            String t = c.senseText(i);
+            if (!t.isEmpty() && !t.equals(right)) opts.add(t);
+        }
+        // ② 还不够的话，从词库里找同词性的词义补齐
+        if (opts.size() < 4) {
+            String wantPos = c.sensePos(pick);
+            List<String> pool = new ArrayList<>();
+            for (GCard o : G.words) {
+                if (o == null || o == c) continue;
+                for (int i = 0; i < o.senseCount(); i++) {
+                    String t = o.senseText(i);
+                    if (t.isEmpty() || opts.contains(t)) continue;
+                    // 同词性优先，不同词性只在池子不够时才用
+                    if (wantPos.isEmpty() || o.sensePos(i).equals(wantPos)) pool.add(t);
+                }
+            }
+            java.util.Collections.shuffle(pool, rnd);
+            for (String t : pool) {
+                if (opts.size() >= 4) break;
+                if (!opts.contains(t)) opts.add(t);
+            }
+        }
+        java.util.Collections.shuffle(opts, rnd);
+
+        q.options = opts.toArray(new String[0]);
+        q.answer = opts.indexOf(right);
+        String sp = c.sensePos(pick);
+        q.sub = (sp.isEmpty() ? "" : sp + "　") + "选出生僻义 · 答对 2.2 倍真实伤害，答错自伤 "
+                + GBattle.overloadWrongSelfDamage;
+        q.explain = c.en + " = " + right
+                + (c.cn.isEmpty() ? "" : "（常见义：" + c.cn + "）");
         return q;
     }
 
