@@ -89,7 +89,7 @@ public class VerTest {
      */
     static void regressionStaleManifestBlocksGithub() {
         // 三份来源的真实数值（2026-10-27 实测拉到的）
-        int u1 = parseVer("1.2.3");   // app.xxjcloudns.kdns.fr/update.json（过期）
+        int u1 = parseVer("1.2.3");   // 线上清单里的旧版本（过期）
         int u2 = parseVer("1.2.3");   // zsb-update.pages.dev/update.json（同样过期）
         int gh = parseVer("v1.4.1");  // api.github.com releases/latest（正确）
         int local = parseVer("1.2.3"); // 用户手机上实际装的旧版本

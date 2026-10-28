@@ -35,11 +35,10 @@ PROJ = os.path.dirname(os.path.abspath(__file__))
 PAGES = os.path.join(PROJ, "pages")
 PROJECT = "zsb-update"
 
-# 自定义域名（已实测直连 200，手机可达）。优先用它，pages.dev 作兜底：
-#   xxjcloudns.kdns.fr 是用户自己的域名，Cloudflare 托管，绑定 Pages 项目，
-#   DNS: app.xxjcloudns.kdns.fr CNAME zsb-update.pages.dev（已代理）
-BASE = "https://app.xxjcloudns.kdns.fr"
-BASE_FALLBACK = "https://%s.pages.dev" % PROJECT
+# 2026-10-28：自有域名 app.xxjcloudns.kdns.fr 按用户决定**取消**，
+# 只用 Pages 的默认域名。那个域名指向同一个项目，只是多套一层代理，
+# 实测会返回 403 "Website Access Blocked"（WAF 拦截），纯属负资产。
+BASE = BASE_FALLBACK = "https://%s.pages.dev" % PROJECT
 GH_REPO = "bianhongjun38/zhuansheng"
 
 # Cloudflare Pages 单个文件的**硬上限**（官方文档 platform/limits 原文）：

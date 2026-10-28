@@ -70,9 +70,15 @@ public class UpdGuardAudit {
                 src.contains("fallbackGithubCode == ltCode(lt)"));
         ok("记录了 GitHub 那版的版本号",
                 src.contains("fallbackGithubCode = code"));
-        ok("自有域名与 pages.dev 互为镜像",
-                src.contains("app.xxjcloudns.kdns.fr/")
-                        && src.contains("zsb-update.pages.dev/"));
+        // 2026-10-28：自有域名取消后，只剩 pages.dev 一个入口。
+        // 这条改成断言「不再出现自有域名」，防止以后有人手滑加回去。
+        ok("只用 pages.dev，自有域名已彻底移除",
+                src.contains("zsb-update.pages.dev/")
+                        && !src.contains("PRIMARY_JSON =\n            \"https://app.xxjcloudns"));
+        ok("清单主通道指向 pages.dev",
+                src.contains("\"https://zsb-update.pages.dev/update.json\""));
+        ok("教材基地址指向 pages.dev",
+                src.contains("BOOK_BASE = \"https://zsb-update.pages.dev/books/\""));
 
         System.out.println();
         System.out.println("=== ⑤ 版本号进位（1.5.100 会与 1.6.0 碰撞）===");

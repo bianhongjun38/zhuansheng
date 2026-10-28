@@ -38,7 +38,14 @@ import java.net.URL;
 public class Update {
 
     /**
-     * 更新**主通道**：用户自有域名（Cloudflare Pages 托管，已绑自定义域名）。
+     * 更新**主通道**：Cloudflare Pages 的默认域名。
+     *
+     * 2026-10-28：自有域名 app.xxjcloudns.kdns.fr 按用户决定**取消**。
+     * 它指向的就是同一个 Pages 项目，只是多套了一层 Cloudflare 代理，
+     * 而实测会返回 403 "Website Access Blocked"（WAF 拦截页）。
+     * 多一个域名 = 多一个会坏的入口，现在只用 pages.dev。
+     *
+     * 下面保留的历史实测数据，供以后排查时对照：
      *
      * 2026-10-27 直连实测（不带代理，模拟手机）：
      *   app.xxjcloudns.kdns.fr/update.json   HTTP 200
@@ -63,14 +70,14 @@ public class Update {
      * 现在书 PDF 与 APK 都在 Pages，一个域名管完。
      */
     private static final String PRIMARY_JSON =
-            "https://app.xxjcloudns.kdns.fr/update.json";
+            "https://zsb-update.pages.dev/update.json";
 
     // 2026-10-28：Worker 那条 dl.xxjcloudns.kdns.fr 兜底通道按用户决定整条撤掉。
     // Worker 运行时本身没毛病，坏的是 workers.dev 后缀的路由（DNS 污染），
     // 后来绑自有域名 dl 绕过 —— 但既然书 PDF 和 APK 都已经统一放在 Pages，
     // 再维持第二套部署只是多一个会失联的源。现在只剩三个通道：
-    //   app.xxjcloudns.kdns.fr（自有域名，主）→ zsb-update.pages.dev（兜底）
-    //   → api.github.com（本地 Pages 全挂时才试）
+    //   zsb-update.pages.dev（唯一 Pages 域名，主）
+    //   → api.github.com（Pages 全挂时才试）
     // 老机器（v1.5.7 及更早）读 dl 会 404，但 fetchLatestAny 是「取最高版本、
     // 单源失败即忽略」，不是「读到即返回」，所以缺这一条不影响它们升级 ——
     // 它们读自己的 dl 清单拿到的是旧版，而主通道给的是新版，取最大值仍然是新版。
@@ -86,7 +93,7 @@ public class Update {
      */
     // 2026-10-28：Worker 已按用户决定撤掉（Pages 与 Workers 单文件上限、免费额度一致，
     // 没必要跑两套）。书 PDF 与 APK 统一放在 Pages，这条路一个域名管完。
-    public static final String BOOK_BASE = "https://app.xxjcloudns.kdns.fr/books/";
+    public static final String BOOK_BASE = "https://zsb-update.pages.dev/books/";
 
     private static final String PAGES_JSON =
             "https://zsb-update.pages.dev/update.json";
@@ -181,7 +188,7 @@ public class Update {
         // 探测顺序保持"自有域名优先"——只是不再提前返回，
         // 三份都要拿到手才能比出最高的那个。
         Latest[] all = {
-                fetchManifest(PRIMARY_JSON),        // app.xxjcloudns.kdns.fr（Pages，主通道）
+                fetchManifest(PRIMARY_JSON),        // zsb-update.pages.dev（Pages，主通道）
                 fetchManifest(PAGES_JSON),          // zsb-update.pages.dev（Pages 兜底）
                 fetchFromGithub(),                  // api.github.com
         };
@@ -437,22 +444,11 @@ public class Update {
     private java.util.List<String> buildSources(Latest lt) {
         java.util.List<String> out = new java.util.ArrayList<>();
         if (lt != null && lt.apkUrl != null) {
-            // 同一个 Pages 站点有两个域名，互为镜像。
-            // 以前清单里只写 zsb-update.pages.dev，自有域名从来没被用过 ——
-            // 部分运营商网络连不上 pages.dev 时就直接掉到 GitHub 源。
-            // 这里把两个域名都排上，先自有域名再 pages.dev。
-            String url = lt.apkUrl;
-            String appHost = "app.xxjcloudns.kdns.fr/";
-            String pagesHost = "zsb-update.pages.dev/";
-            if (url.contains(pagesHost)) {
-                out.add(url.replace(pagesHost, appHost));
-                out.add(url);
-            } else if (url.contains(appHost)) {
-                out.add(url);
-                out.add(url.replace(appHost, pagesHost));
-            } else {
-                out.add(url);
-            }
+            // 2026-10-28：自有域名已取消，只剩 zsb-update.pages.dev 一个入口，
+            // 所以这里不再派生镜像——直接把清单里给的地址排第一。
+            // （以前会额外把 app.xxjcloudns.kdns.fr 排前面，但那个域名
+            //   实测会返回 403 Website Access Blocked，等于白白多一次失败重试。）
+            out.add(lt.apkUrl);
         }
         // GitHub 兜底源**只在版本号完全一致时**才用。
         //
@@ -514,7 +510,7 @@ public class Update {
      *
      * 为什么要多源：本机 2026-10-28 实测——
      *   github.com（release 资产，302 到 release-assets）完整 20.12 MB / 3.1s / 6.6 MB/s
-     *   app.xxjcloudns.kdns.fr（Pages，APK 3.65 MB / 2.9s / 1.3 MB/s）
+     *   zsb-update.pages.dev（Pages，APK 3.65 MB / 2.9s / 1.3 MB/s）
      * 两条都通，但国内线路质量会变（同一天不同时段、不同运营商差别很大）。
      * 单一源一旦抽风，用户就只能干等或失败；多源按序退避最稳。
      *
@@ -605,7 +601,7 @@ public class Update {
                 ui.post(new Runnable() {
                     public void run() {
                         pd.dismiss();
-                        toastOnUi(msg + "\n可在浏览器打开 app.xxjcloudns.kdns.fr 手动下载。");
+                        toastOnUi(msg + "\n可在浏览器打开 zsb-update.pages.dev 手动下载。");
                     }
                 });
             }
