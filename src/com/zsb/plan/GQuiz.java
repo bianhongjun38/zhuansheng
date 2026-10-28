@@ -66,6 +66,64 @@ public class GQuiz {
     private static String key(String cn) { return firstSense(cn); }
 
     /**
+     * 把一个义项串按内部分号拆成单义。
+     *
+     * vocab.json 的 senses[i].cn 常常塞了多个近义说法：
+     *   charge → {"v", "收费;控告;掌管;电荷"}
+     * 整个当成一个选项，玩家看到「收费;控告;掌管;电荷」这种四合一，
+     * 既不像选项也不像释义。拆开后才是一道正常的四选一。
+     */
+    private static List<String> splitSenses(String cn) {
+        List<String> out = new ArrayList<>();
+        if (cn == null) return out;
+        for (String part : cn.split("[;；]")) {
+            String t = part.trim();
+            if (!t.isEmpty()) out.add(t);
+        }
+        return out;
+    }
+
+    /**
+     * 义项归一化：只留中文骨架，用于判断两个选项是不是「同一个意思」。
+     *
+     * 为什么必须做这件事：中文释义里同一概念常有多种写法，
+     *   · 词性前缀（v. / n.）不该影响判重；
+     *   · 「部⻔ / 部门」（⻔ 是兼容区汉字）看起来不同其实是同一个词；
+     *   · 「收费 / 费用」「进步 / 进展」这种，玩家选哪个都说得通。
+     * 只要两条释义归一化后互相包含，就当同一个意思处理 ——
+     * 绝不能把两个都能算对的选项同时摆出来。
+     */
+    private static String senseKey(String t) {
+        if (t == null) return "";
+        String s = t.trim().toLowerCase();
+        // 去掉词性前缀，如 "v." "n." "adj."
+        s = s.replaceAll("^[a-z]+\\.\\s*", "");
+        // 去掉标点、空白、括号、省略号
+        s = s.replaceAll("[\\s（）()【】\\[\\]、，,。.·…\\-—/]", "");
+        return s;
+    }
+
+    /** 供判题层调用：两个释义是否算同一个意思。 */
+    public static boolean sameSensePublic(String a, String b) {
+        return sameSense(a, b);
+    }
+
+    /** 两个释义是否算「同一个意思」（归一化后相等或互相包含）。 */
+    private static boolean sameSense(String a, String b) {
+        String x = senseKey(a), y = senseKey(b);
+        if (x.isEmpty() || y.isEmpty()) return false;
+        if (x.equals(y)) return true;
+        // 互相包含也要算：'收费' vs '费用' 不算，但 '信用' vs '信用贷款' 算
+        return x.contains(y) || y.contains(x);
+    }
+
+    /** 一组释义里是否已经存在和 t 同义的项。 */
+    private static boolean hasSame(List<String> list, String t) {
+        for (String s : list) if (sameSense(s, t)) return true;
+        return false;
+    }
+
+    /**
      * 供界面取「首个义项」。
      *
      * 战斗里怪物答对后的台词要用它（把词义复述一遍）。
@@ -248,7 +306,43 @@ public class GQuiz {
             if (!c.senseText(i).isEmpty()) idx.add(i);
         }
         if (idx.isEmpty()) return null;
-        int pick = idx.get(rnd.nextInt(idx.size()));
+
+        // 常见义用来当「已知条件」写进题面，所以第 0 个义项的所有说法
+        // 都要先收集起来：被判为「和常见义同义」的义项不能拿来出题 ——
+        // 那样所谓的「生僻义」其实就是常见义的另一种写法，
+        // 玩家答常见义被判错，纯属题目自身有歧义。
+        List<String> common0 = splitSenses(c.senseText(0));
+
+        // 只剩与常见义都不同义的义项才能当正确答案
+        List<Integer> pickable = new ArrayList<>();
+        for (int i : idx) {
+            boolean dup = false;
+            for (String t : splitSenses(c.senseText(i))) {
+                if (hasSame(common0, t)) { dup = true; break; }
+            }
+            if (!dup) pickable.add(i);
+        }
+        if (pickable.isEmpty()) return null;   // 没有真正的僻义，别出这题
+        int pick = pickable.get(rnd.nextInt(pickable.size()));
+
+        // 正确答案按内部分号拆开，只取一个说法。
+        // 原来整个 "收费;控告;掌管;电荷" 当成一个选项，玩家看到的是
+        // 四合一的长串，既不像选项也不像释义；拆开才是正常四选一。
+        List<String> rightList = splitSenses(c.senseText(pick));
+        if (rightList.isEmpty()) return null;
+        String right = rightList.get(rnd.nextInt(rightList.size()));
+
+        // ── 题面必须交代「常见义是什么」 ──────────────────────
+        //
+        // 原来的题面只有英文单词，然后让玩家「选出生僻义」。
+        // 问题是四选一里同时摆着常见义和僻义，两者都是这个词的正确翻译，
+        // 玩家没有任何依据知道该排除哪个 —— 选常见义被判错，
+        // 感觉就是「明明对了却算我错」。
+        //
+        // 现在把常见义直接写在题面上（「charge（常见义：收费）」），
+        // 问题变成「除了收费，它还有什么意思」，排除项一目了然，
+        // 选常见义才算真的答错，而不是被暗算。
+        List<String> commonList = common0;
 
         // ── 题型必须是「给词选义」，不能是「给义选牌」 ──
         //
@@ -261,45 +355,83 @@ public class GQuiz {
         q.card = c;
         q.mode = 4;
         q.senseIndex = pick;
-        q.prompt = c.en;
+        // 题面带上常见义，把「选哪个」变成可判定的问题。
+        // 只给单词时，常见义和僻义都是这个词的正确翻译，
+        // 玩家选常见义被判错会觉得冤枉 —— 题目本身有歧义。
+        // 写成「charge ─ 常见义：收费」之后，要排除什么一目了然。
+        q.prompt = c.en + (commonList.isEmpty()
+                ? "" : "　─ 常见义：" + String.join(" / ", commonList));
 
-        // 干扰项：优先用同词性的其它义项，凑不够再从词库里补。
-        String right = c.senseText(pick);
+        // ── 干扰项构造：绝不能出现「两个都对」的选项 ──────────
+        //
+        // 原来的写法是把这张牌其它义项直接塞进来当干扰，包括常见义。
+        // 但它没做语义去重，于是出现你遇到的这个问题：
+        //   · 义项内部带分号（"收费;控告;掌管"）时，
+        //     和正确答案里的某个说法重了，"收费" 和 "收费;控告" 同时出现；
+        //   · 「进步 / 进展」「费用 / 收费」这种近义写法，
+        //     玩家选哪个都说得通，却只有一个被判对 —— 冤枉。
+        //   · 更要命的是 q.answer = opts.indexOf(right)：
+        //     一旦有两个字面相同的选项，indexOf 只返回第一个下标，
+        //     玩家点第二个同样的文字，判题时下标不等，直接算错。
+        //
+        // 所以这里每加一个干扰项都必须先过 sameSense：同义的直接丢弃。
         List<String> opts = new ArrayList<>();
         opts.add(right);
 
-        // ① 先把这张牌其它义项（含常见义）拿来当干扰 —— 最难也最有意义：
-        //    玩家必须分清「收费/充电/控告」到底哪一个是僻义。
+        // ① 这张牌自己的其它义项优先当干扰 —— 最有意义：玩家必须分清
+        //    「收费 / 看待 / 掌管」到底哪一个是这次问的那个。
+        //    但与常见义同义的项要跳过：常见义已经写在题面上，
+        //    再把它摆成选项等于白送一个错误答案，还挤掉了有效干扰项。
         for (int i = 0; i < c.senseCount() && opts.size() < 4; i++) {
             if (i == pick) continue;
-            String t = c.senseText(i);
-            if (!t.isEmpty() && !t.equals(right)) opts.add(t);
+            for (String t : splitSenses(c.senseText(i))) {
+                if (opts.size() >= 4) break;
+                if (!hasSame(opts, t) && !hasSame(commonList, t)) opts.add(t);
+            }
         }
-        // ② 还不够的话，从词库里找同词性的词义补齐
+        // ② 还不够，从词库补其它词的义项。同样逐个过同义过滤。
         if (opts.size() < 4) {
             String wantPos = c.sensePos(pick);
-            List<String> pool = new ArrayList<>();
+            List<String> sameP = new ArrayList<>();   // 同词性优先
+            List<String> anyP  = new ArrayList<>();    // 兜底
             for (GCard o : G.words) {
                 if (o == null || o == c) continue;
                 for (int i = 0; i < o.senseCount(); i++) {
-                    String t = o.senseText(i);
-                    if (t.isEmpty() || opts.contains(t)) continue;
-                    // 同词性优先，不同词性只在池子不够时才用
-                    if (wantPos.isEmpty() || o.sensePos(i).equals(wantPos)) pool.add(t);
+                    for (String t : splitSenses(o.senseText(i))) {
+                        if (hasSame(opts, t)) continue;
+                        // 常见义已经写在题面上，不能又被当成干扰项摆回来。
+                        // 漏这一条时出现过：equivalent 的常见义「相等的」
+                        // 拆出的「相等」从别的词补进选项里，等于白送一个错项。
+                        if (hasSame(commonList, t)) continue;
+                        if (!wantPos.isEmpty() && o.sensePos(i).equals(wantPos)) {
+                            if (!hasSame(sameP, t)) sameP.add(t);
+                        } else if (!hasSame(anyP, t)) {
+                            anyP.add(t);
+                        }
+                    }
                 }
             }
-            java.util.Collections.shuffle(pool, rnd);
-            for (String t : pool) {
-                if (opts.size() >= 4) break;
-                if (!opts.contains(t)) opts.add(t);
-            }
+            java.util.Collections.shuffle(sameP, rnd);
+            java.util.Collections.shuffle(anyP, rnd);
+            for (String t : sameP) { if (opts.size() >= 4) break;
+                                     if (!hasSame(opts, t)) opts.add(t); }
+            for (String t : anyP)  { if (opts.size() >= 4) break;
+                                     if (!hasSame(opts, t)) opts.add(t); }
         }
+        // 凑不齐四个就别出这道题 —— 两个选项的选择题纯属送分，
+        // 而且在只有 2 项时「答对」的运气成分太高。
+        if (opts.size() < 3) return null;
+
         java.util.Collections.shuffle(opts, rnd);
 
         q.options = opts.toArray(new String[0]);
+        // 用 indexOf 定位正确答案：right 一定在 opts 里，且 hasSame 保证
+        // 不会有两个同义项共存，所以这里拿到的下标是唯一的。
         q.answer = opts.indexOf(right);
+        if (q.answer < 0) return null;
         String sp = c.sensePos(pick);
-        q.sub = (sp.isEmpty() ? "" : sp + "　") + "选出生僻义 · 答对 2.2 倍真实伤害，答错自伤 "
+        q.sub = (sp.isEmpty() ? "" : sp + "　")
+                + "选出常见义之外的义项 · 答对 2.2 倍真实伤害，答错自伤 "
                 + GBattle.overloadWrongSelfDamage;
         q.explain = c.en + " = " + right
                 + (c.cn.isEmpty() ? "" : "（常见义：" + c.cn + "）");

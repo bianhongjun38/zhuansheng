@@ -35,6 +35,55 @@ public class GStore {
     public int layer()     { return sp.getInt("layer", 0); }
     public void setLayer(int l) { sp.edit().putInt("layer", l).apply(); }
 
+    /**
+     * 当前这一局的「爬塔层数」，从 1 开始，**唯一权威口径**。
+     *
+     * 原来有三套互相打架的层数，界面上根本说不清「第 3 层」是什么意思：
+     *   · layer()       —— 第几张地图（走完一整张才 +1，长期是 0）
+     *   · curRow()      —— 地图内第几行（0 起）
+     *   · bestFloor()   —— 历史最高层（跨局不清，和这一局的进度无关）
+     *
+     * 而且敌人强度、商店价格用的是 layer()，顶栏 Lv. 用的是 bestFloor()，
+     * 地图标题用的是 curRow() —— 三者经常给出不同的数字。
+     *
+     * 现在统一成一个：floorIndex = layer * 一张图的行数 + curRow。
+     * 战斗强度、商店价格、排行上报、界面显示全部只认这个值。
+     */
+    public int floorIndex() {
+        int rows = 6;
+        try {
+            String raw = mapRaw();
+            if (raw != null && !raw.isEmpty()) rows = Math.max(1, raw.split("\\|", -1).length);
+        } catch (Exception ignored) { }
+        return layer() * rows + Math.max(0, curRow());
+    }
+
+    /** 给人看的层数：从 1 开始。 */
+    public int floorNo() { return floorIndex() + 1; }
+
+    // ── 排行榜主动上传 ────────────────────────────────────
+    //
+    // 玩家随时可以点「上传进度」，服务端 /v1/game/snapshot 是
+    // **每人每天一条、覆盖更新**语义，所以重复上传不会累加 ——
+    // 这正是能做成「随时更新」的前提。
+    //
+    // 每次上传都生成新 rev：
+    //   · 老 rev 重传会被服务端判 dup 静默丢弃（防断网重放）；
+    //   · 新 rev 才会真正覆盖成最新进度。
+    // 所以这里不能缓存 rev —— 缓存了就等于「只能传第一次的数值」。
+
+    /** 生成一个本次上传专用的幂等键。每次调用都是新的。 */
+    public String newUploadRev() {
+        return Long.toString(System.currentTimeMillis(), 36)
+                + "-" + Integer.toString((int) (Math.random() * (1 << 20)), 36);
+    }
+
+    /** 上次成功上传的时间戳，0 表示从未传过。仅用于界面提示。 */
+    public long lastUploadAt() { return sp.getLong("lastUploadAt", 0L); }
+    public void markUploaded() {
+        sp.edit().putLong("lastUploadAt", System.currentTimeMillis()).apply();
+    }
+
     public int right()     { return sp.getInt("right", 0); }
     public int wrong()     { return sp.getInt("wrong", 0); }
     public void markRight() { sp.edit().putInt("right", right() + 1).apply(); }

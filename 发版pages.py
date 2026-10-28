@@ -114,7 +114,18 @@ def main():
 
     os.makedirs(PAGES, exist_ok=True)
 
-    # 清掉旧 APK，Pages 上只留最新一个，避免体积累积
+    # 只留本次这一个 APK。
+    #
+    # 历史包没有任何用处：Update.buildSources() 只会拼出"最新版的地址"
+    # （update.json 里的 apk.url + GitHub 兜底），客户端从不去请求自己
+    # 那一版的旧包。留旧包换不来任何一次"能装上"，只能白占体积。
+    #
+    # 删除本身有个副作用要记住（2026-10-28 踩过）：这个 Pages 项目对
+    # **任何**缺失路径都返回 HTTP 200 + index.html（实测 nope.bin 也是），
+    # 不是 404；所以"下架的版本"那个 URL 会返回一个 200 的 HTML 假包。
+    # 服务端改不了这个平台行为（_routes.json / functions 都不生效），
+    # 根治在客户端：Update.java 装前用 getPackageArchiveInfo 读包内真实
+    # versionName，不高于本机就拒绝安装，不会再把错包交给安装器。
     for f in os.listdir(PAGES):
         if f.endswith(".apk"):
             os.remove(os.path.join(PAGES, f))

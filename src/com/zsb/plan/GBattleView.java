@@ -327,6 +327,8 @@ public class GBattleView extends LinearLayout {
 
         tvEnemyHp.setText(battle.enemy == null ? "敌人"
                 : battle.enemy.name + "  " + battle.enemyHp + " / " + battle.enemyMaxHp);
+        // 不再显示 Lv.：等级等于层数，顶栏已经写了第几层。
+        // 加成体现在能量上限和伤害里，玩家能感觉到变强，不需要一个重复的数字。
         tvPlayerHp.setText("生命 " + battle.playerHp + " / " + battle.playerMaxHp
                 + "    能量 " + battle.energy + " / " + battle.energyMax
                 + "    回合 " + battle.turn);
@@ -883,9 +885,30 @@ public class GBattleView extends LinearLayout {
 
         if (pendingQ.options != null) {
             // 释义辨析题：选项是屏幕上的按钮（干扰项都不是手牌）
+            //
+            // lucid（精英掉落）：每题排除一个错误选项。
+            // 在界面层划掉而不是改题库数据 —— 题库是共用的，改一处会污染
+            // 后续所有题目；这里只在渲染时决定「这一题这个选项不可点」。
+            int cut = -1;
+            if (battle != null && battle.spLucid && pendingQ.options.length > 2) {
+                java.util.Random lr = new java.util.Random(pendingQ.prompt.hashCode());
+                for (int tries = 0; tries < 8; tries++) {
+                    int k = lr.nextInt(pendingQ.options.length);
+                    if (k != pendingQ.answer) { cut = k; break; }
+                }
+            }
             for (int i = 0; i < pendingQ.options.length; i++) {
                 final int k = i;
-                optRow.addView(optBtn(pendingQ.options[i], () -> answer(k)));
+                TextView ob = optBtn(pendingQ.options[i], () -> answer(k));
+                if (k == cut) {
+                    ob.setText("✗ " + pendingQ.options[i]);
+                    ob.setAlpha(0.35f);
+                    ob.setPaintFlags(ob.getPaintFlags()
+                            | android.graphics.Paint.STRIKE_THRU_TEXT_FLAG);
+                    ob.setOnClickListener(null);   // 划掉的就是不能点
+                    ob.setClickable(false);
+                }
+                optRow.addView(ob);
             }
         } else if (pendingQ.mode == 4) {
             // 僻义过载走的是选项制，答案不在手上 —— 提示语不能写「点牌」，
@@ -1005,7 +1028,24 @@ public class GBattleView extends LinearLayout {
             // 不论对错都要记住义项下标：答对要用它结算 2.2 倍伤害，
             // 答错要用它打出「你答的是什么、正确答案是什么」的说明。
             overloadIndex = pendingQ.senseIndex;
-            resolve(target, pick == pendingQ.answer);
+
+            // ── 同义容差：选中的选项只要和正确答案「是同一个意思」就算对 ──
+            //
+            // 原来是纯下标比较（pick == pendingQ.answer）。出题侧已经尽量
+            // 保证选项互不同义，但中文释义本来就是一堆近义写法
+            // （收费/费用、进步/进展、相等的/等量），题库里同一概念
+            // 常有多种表述，光靠出题去重不可能穷尽。
+            //
+            // 一旦漏网，玩家选一个明明说得通的选项却被判错，
+            // 就是「生僻义回答常见意思也算错」那种冤枉感。
+            // 所以判题侧再兜一层：文字归一化后相等或互相包含即算对。
+            boolean right = pick == pendingQ.answer;
+            if (!right && pick >= 0 && pick < pendingQ.options.length
+                    && pendingQ.answer >= 0 && pendingQ.answer < pendingQ.options.length) {
+                right = GQuiz.sameSensePublic(pendingQ.options[pick],
+                                               pendingQ.options[pendingQ.answer]);
+            }
+            resolve(target, right);
             return;
         }
 
@@ -1424,6 +1464,10 @@ public class GBattleView extends LinearLayout {
             TextView g = tv("+" + gold + " 金币", 14, C_AMBER);
             g.setGravity(Gravity.CENTER);
             optRow.addView(g);
+            // 精英怪必掉一件（特殊词优先，集齐后掉道具）。
+            // 掉落必须在 recordBattle 之前就写进存档：recordBattle 会读
+            // store 的当前值算增量，先掉后记才和玩家看到的数字一致。
+            addEliteDrop();
         }
 
         recordBattle(win);
@@ -1461,6 +1505,61 @@ public class GBattleView extends LinearLayout {
     }
 
     /**
+     * 精英掉落：打赢精英怪当场给一件东西，并写进存档。
+     *
+     * 只对 tier 以 elite 开头的敌人触发（colossus / judge）。普通怪、
+     * boss、宝箱怪都不掉 —— 掉落如果人人都有，就不再是「值得去赌的格子」。
+     *
+     * 为什么在这里而不是 GBattle 里：掉落是「这一局的地图进度」的一部分，
+     * 和金币一样属于结算界面的事；GBattle 只管战斗规则，不该知道排行榜、
+     * 存档和卡片池。
+     */
+    private void addEliteDrop() {
+        if (battle == null || battle.enemy == null) return;
+        String tier = battle.enemy.tier == null ? "" : battle.enemy.tier;
+        if (!tier.startsWith("elite")) return;
+
+        Object drop = data.rollEliteDrop(store, rnd);
+        if (drop == null) {
+            // 特殊词和道具都集齐了。给一笔补偿金币，不让精英白打。
+            int bonus = data.eliteGold / 2;
+            store.addGold(bonus);
+            TextView t = tv("🏆 精英掉落：所有特殊词与道具都已集齐，补偿 +"
+                    + bonus + " 金币", 13, C_AMBER);
+            t.setGravity(Gravity.CENTER);
+            t.setPadding(0, dp(6), 0, dp(6));
+            optRow.addView(t);
+            return;
+        }
+
+        TextView head = tv("🏆 精英掉落", 15, C_AMBER);
+        head.setTypeface(Typeface.DEFAULT_BOLD);
+        head.setGravity(Gravity.CENTER);
+        head.setPadding(0, dp(8), 0, dp(2));
+        optRow.addView(head);
+
+        if (drop instanceof GameData.Special) {
+            GameData.Special sp = (GameData.Special) drop;
+            store.addSpecial(sp.id);
+            TextView n = tv("【" + sp.nameEn + "】特殊词 · 永久被动", 14, C_TEAL);
+            n.setGravity(Gravity.CENTER);
+            optRow.addView(n);
+            TextView e = tv(sp.effect, 12.5f, C_FG2);
+            e.setGravity(Gravity.CENTER);
+            optRow.addView(e);
+        } else if (drop instanceof GameData.Item) {
+            GameData.Item it = (GameData.Item) drop;
+            store.addItem(it.id);
+            TextView n = tv("【" + it.nameEn + "】道具 · 一次性", 14, C_TEAL);
+            n.setGravity(Gravity.CENTER);
+            optRow.addView(n);
+            TextView e = tv(it.desc, 12.5f, C_FG2);
+            e.setGravity(Gravity.CENTER);
+            optRow.addView(e);
+        }
+    }
+
+    /**
      * 把这一场记进本地并按天聚合，然后后台补传。
      *
      * 为什么用「增量」而不是直接读累计值：right()/wrong()/gold() 都是
@@ -1474,8 +1573,22 @@ public class GBattleView extends LinearLayout {
             if (bpRev == null || bpRev.isEmpty()) return;
             GStore.Battle b = new GStore.Battle();
             b.day = com.zsb.plan.StateLogic.todayIso();
-            b.floor = store.layer();
-            b.node = store.curRow();   // 分叉地图下「节点」就是第几层（供排行榜展示用）
+            // ── 爬塔进度用「总层数」而不是 layer() ──────────────
+            //
+            // 这是排行榜一直没数据的真正原因。store.layer() 只在
+            // 一整张地图走到尽头时才 +1（见 GModeView.advanceStep），
+            // 而一张图有好几层 —— 大多数玩家整局都停在第 0 层。
+            // 于是一路爬到第 8 层的人，榜上显示的还是「第 1 层」，
+            // 看起来就像没同步。
+            //
+            // 真实爬塔进度 = layer() * 每层行数 + curRow()。
+            // 这样既包括跨地图的层数，也包括地图内已经走过的行数，
+            // 和玩家在界面上看到的 Lv. 对得上。
+            // 层数口径统一走 store.floorIndex()，不再在这里重算。
+            // 之前战斗强度、商店价格、顶栏、排行榜各算一套，
+            // 同一个「第 3 层」在不同地方指的东西不一样。
+            b.floor = store.floorIndex();
+            b.node = store.layer();   // 第几张地图 —— 排行榜也要能看到
             b.win = win;
             b.gold = Math.max(0, store.gold() - bpGold0);
             b.right = Math.max(0, store.right() - bpRight0);
@@ -1483,59 +1596,22 @@ public class GBattleView extends LinearLayout {
             b.ms = Math.max(0, System.currentTimeMillis() - bpT0);
             b.started = bpT0;
             b.rev = bpRev;
-            // 一题都没答就结束的战斗（全程「直接攻击」）不记：
-            // 服务端 empty_battle 会拒收，留着它只会永远堵在队头。
-            if (b.total() > 0) store.addBattle(b);
+            // 一题都没答就结束的战斗（全程「直接攻击」）也记。
+            //
+            // 原来这里要求 total()>0，理由是"服务端会拒收"。但站在玩家
+            // 角度看这是错的：他确实爬到了第几层、确实打完了这场，
+            // 排行榜却完全没有他 —— 表现就是"我的爬塔记录没同步"。
+            // 战败的那一场更冤：输了本来就掉层，干脆连存在感都没有。
+            //
+            // 现在一律记录；服务端若因题目数太少而忽略，那是它的判断，
+            // 客户端不该提前替它扔掉玩家的成绩。
+            store.addBattle(b);
         } catch (Exception ignored) {
             // 记不上不能影响玩家继续玩
         }
-        uploadPendingBattles();
-    }
-
-    /**
-     * 补传积压的战斗记录。
-     *
-     * 和 EngView.uploadPending 一个套路：同学玩的地方经常没网，
-     * 当场传必失败，所以先落本地，每次战斗结束时顺手试一遍。
-     * 服务器明确回了 ignored=true（用时太短/超上限/越界）也算已处理 ——
-     * 再传一次结果一样，不该无限重试。
-     */
-    private void uploadPendingBattles() {
-        final com.zsb.plan.Account acc = com.zsb.plan.Account.load(getContext());
-        if (!acc.loggedIn()) return;
-        final org.json.JSONArray pend = store.pendingBattles();
-        if (pend.length() == 0) return;
-
-        final java.util.List<org.json.JSONObject> items = new java.util.ArrayList<>();
-        for (int i = 0; i < pend.length(); i++) {
-            org.json.JSONObject o = pend.optJSONObject(i);
-            if (o != null) items.add(o);
-        }
-        if (items.isEmpty()) return;
-
-        new Thread(() -> {
-            for (org.json.JSONObject o : items) {
-                Api.R res = Api.postBattle(acc.token,
-                        o.optInt("floor"), o.optInt("node"), o.optInt("win") == 1,
-                        o.optInt("gold"), o.optInt("r"), o.optInt("w"),
-                        o.optLong("ms"), o.optLong("started"), o.optString("rev"));
-                if (res.ok || (res.body != null && res.body.optBoolean("ignored"))) {
-                    store.markBattleSent(o.optString("rev"));
-                } else if (res.code == 401) {
-                    // 登录过期。这条记录本身是好的，重新登录后还要传 ——
-                    // 所以既不能丢，也不能硬刷，停下来等下次机会。
-                    break;
-                } else if (res.code >= 400 && res.code < 500) {
-                    // 其它 4xx = 服务端明确说「这条我不收」（字段不合法之类）。
-                    // 必须当成已处理扔掉：如果这里 break，队头这条会永远堵住
-                    // 后面所有记录，越积越多、再也传不上去。
-                    store.markBattleSent(o.optString("rev"));
-                } else {
-                    // code==0 是连不上，5xx 是服务器抖了 —— 这两种才值得下次重试
-                    break;
-                }
-            }
-        }).start();
+        // 不再在战斗结束时自动上报 —— 排行榜改成玩家主动上传（见 BoardView.doUpload）。
+        // 原来每打一场就传一条，服务端按条累加，于是榜上是「一堆散记录
+        // 加起来的数」，玩家看到的金币/层数和自己界面对不上。
     }
 
     public Runnable onFinish;

@@ -468,6 +468,26 @@ public class Update {
                         if (!looksLikeApk(out)) {
                             throw new Exception("下载内容不是有效安装包（" + got + " 字节）");
                         }
+                        // 第三道校验：把包里真正的 versionName 读出来，
+                        // 必须**严格大于**本机版本，否则绝不给安装器。
+                        //
+                        // 2026-10-28 线上事故：Pages 的 _routes.json 是 SPA 回退，
+                        // 请求一个已下架的 apk 会返回 200 + index.html；
+                        // 更隐蔽的是换包/发错包 —— 下载链路全绿、zip 头正常，
+                        // 但里面是**旧版本**，系统安装器于是弹
+                        // "已安装相同版本"，用户永远升不上去。
+                        // 这个检查让那种情况变成一句明确的错误，而不是装完才发现。
+                        String apkVer = apkVersionName(out);
+                        if (apkVer == null) {
+                            throw new Exception("安装包读取失败（可能不是完整 APK）");
+                        }
+                        int apkCode = parseVer(apkVer);
+                        int myCode = parseVer(localVersionName());
+                        if (apkCode <= myCode) {
+                            throw new Exception("下载到的版本 v" + apkVer
+                                    + " 不高于本机 v" + localVersionName()
+                                    + "，已拒绝安装");
+                        }
                         ui.post(new Runnable() {
                             public void run() { pd.dismiss(); install(out); }
                         });
@@ -614,6 +634,25 @@ public class Update {
      * 断流会留下半截文件 —— 两者长度都可能过 1MB 门槛，
      * 但只有真正的 zip 开头才能被系统安装器接受。
      */
+    /**
+     * 读 APK 里真实的 versionName。读不到返回 null。
+     *
+     * 用 PackageManager.getPackageArchiveInfo —— 这是系统自己解析
+     * AndroidManifest 的结果，跟安装器看到的是同一份数据，
+     * 不会被文件名或清单里的字段骗过去。
+     */
+    private String apkVersionName(File f) {
+        try {
+            android.content.pm.PackageManager pm = act.getPackageManager();
+            android.content.pm.PackageInfo pi = pm.getPackageArchiveInfo(
+                    f.getAbsolutePath(), 0);
+            if (pi == null || pi.versionName == null) return null;
+            return pi.versionName;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     private boolean looksLikeApk(File f) {
         if (f == null || !f.exists() || f.length() < 4) return false;
         java.io.FileInputStream in = null;

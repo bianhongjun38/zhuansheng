@@ -78,14 +78,24 @@ public class GModeView extends LinearLayout {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         head.addView(title);
 
+        addView(head);
+
+        // 状态信息单独占一行，不再挤在「返回 / 词汇塔」右边。
+        //
+        // 原来它和标题同一行、weight=1 抢剩余宽度，360dp 上只够写
+        // 「第 14 层 · 第 2 张地图 · 特殊词 0 道」，
+        // 后面的「具 0」被折到第二行，而且因为 gravity=RIGHT，
+        // 折下来的那半截还靠右对齐 —— 读起来像乱码。
+        // 给它整行宽度，一行放得下，也不用再靠折行。
         TextView info = tv("", 12, C_AMBER);
         info.setId(android.R.id.text1);
-        LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(
-                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-        info.setGravity(Gravity.RIGHT);
-        info.setLayoutParams(ip);
-        head.addView(info);
-        addView(head);
+        LinearLayout infoWrap = new LinearLayout(getContext());
+        infoWrap.setOrientation(HORIZONTAL);
+        infoWrap.setPadding(dp(14), 0, dp(14), dp(9));
+        infoWrap.addView(info, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        addView(infoWrap);
 
         View line = new View(getContext());
         line.setBackgroundColor(C_LINE);
@@ -179,7 +189,7 @@ public class GModeView extends LinearLayout {
             clearFightNode();
             return;
         }
-        GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
+        GameData.Enemy e = data.pickEnemy(type, store.floorIndex(), rnd);
         if (e == null) { clearFightNode(); return; }
         startBattle(e);
     }
@@ -215,11 +225,23 @@ public class GModeView extends LinearLayout {
         int maxHp = store.curMaxHp() > 0 ? store.curMaxHp() : data.playerHp;
         int hp = store.curHp();
         if (hp < 0) hp = maxHp;
-        // 血量低于三成时标红，让「快死了」在地图上就能看出来
-        String hpTxt = "❤ " + Math.min(hp, maxHp) + "/" + maxHp + "    ";
-        info.setText(hpTxt + "✦ " + store.gold() + "    特殊词 "
-                + store.specialCount() + "    道具 " + store.itemCount()
-                + "    Lv." + (store.bestFloor() + 1));
+        // 顶栏一行放完。三个设计决定：
+        //
+        //   ① 「层数」只认 store.floorIndex()。这里曾经和地图行号、
+        //      历史最高层三套口径并存，同一个「第 3 层」指的不是一回事。
+        //   ② 不显示 Lv. —— 等级直接等于层数，并排写是同一个数字写两遍。
+        //      加成（伤害 / 能量上限）照常生效，只是不给它单独的显示。
+        //   ③ 标签全部压短（「第几张地图」→「第2图」、「特殊词」→「特殊」）。
+        //      原来那版第二行末尾的「道具 0」会被折到第三行，而且因为
+        //      gravity=RIGHT，折下来的半截还靠右对齐，看着像乱码。
+        //      现在整行最坏情况（99/99 血、9999 金、99 层 99 图 99 特殊 99 道具）
+        //      实测 270px，可用宽度 332dp，留足余量。
+        info.setText("❤" + Math.min(hp, maxHp) + "/" + maxHp
+                + "　✦" + store.gold()
+                + "　第" + store.floorNo() + "层"
+                + "　第" + (store.layer() + 1) + "图"
+                + "　特殊" + store.specialCount()
+                + "　道具" + store.itemCount());
         // 残血提醒：整个顶栏染红，比只改一段数字更醒目
         boolean low = hp * 100 < maxHp * 30;
         info.setTextColor(low ? C_RED : (hp * 100 < maxHp * 60 ? C_AMBER : C_FG));
@@ -243,6 +265,7 @@ public class GModeView extends LinearLayout {
             intro.addView(title("开始一局"));
             intro.addView(sub("树枝状地图：每层 1~3 个节点，走哪条由你决定。"));
             intro.addView(sub("战斗 / 商店 / 篝火 / 宝箱 / 精英，五种格子各有用途。"));
+        intro.addView(sub("打赢精英必掉特殊词或道具 —— 想要更多被动就往精英走。"));
             intro.addView(bigBtn("生成地图", C_PURPLE, this::newMap));
             body.addView(intro);
             return;
@@ -270,7 +293,12 @@ public class GModeView extends LinearLayout {
         }
 
         LinearLayout hdr = box();
-        hdr.addView(title("第 " + (row + 1) + " / " + map.rows() + " 层"));
+        // 标题原来写「第 row+1 / rows 层」，那是「这张图里的第几行」，
+        // 和顶栏的层数、排行榜的层数完全不是一个东西，玩家必然疑惑。
+        // 现在统一成：总第几层，并注明这是第几张图的第几行。
+        hdr.addView(title("第 " + store.floorNo() + " 层"));
+        hdr.addView(sub("第 " + (store.layer() + 1) + " 张图 · 第 "
+                + (row + 1) + "/" + map.rows() + " 行"));
         hdr.addView(sub("金币 " + store.gold() + "    答对 " + store.right()
                 + " / 答错 " + store.wrong()));
         body.addView(hdr);
@@ -326,6 +354,7 @@ public class GModeView extends LinearLayout {
         // 图例
         LinearLayout legend = box();
         legend.addView(sub("战=战斗  精=精英  店=商店  火=篝火  箱=宝箱"));
+        legend.addView(sub("精=精英（必掉特殊词/道具）"));
         legend.addView(sub("亮色描边 = 下一步可去，暗色 = 已走过或去不了"));
         body.addView(legend);
 
@@ -515,7 +544,7 @@ public class GModeView extends LinearLayout {
                 openChest();
                 return;
             default: {
-                GameData.Enemy e = data.pickEnemy(type, store.layer(), rnd);
+                GameData.Enemy e = data.pickEnemy(type, store.floorIndex(), rnd);
                 if (e == null) { advanceAfterNode(); return; }
                 setFightNode(row, col);
                 store.setBattleNode(row, col);
@@ -574,7 +603,7 @@ public class GModeView extends LinearLayout {
         body.addView(card);
 
         LinearLayout acts = box();
-        int base = 30 + store.layer() * 10;
+        int base = 30 + store.floorIndex() * 10;
 
         // ── Specials:永久被动 ──
         GameData.Special pick = data.randomUnownedSpecial(store, rnd);
@@ -596,6 +625,9 @@ public class GModeView extends LinearLayout {
         acts.addView(sub("──────── 道具（一次性，战斗中手动使用）────────"));
         int shown = 0;
         for (GameData.Item it : data.items) {
+            // 精英专属道具（price=0）不在商店卖 —— 它们只能靠打精英拿到，
+            // 否则「去精英拿装备」这条动线又会被商店替代掉。
+            if (it.price <= 0) continue;
             if (shown >= 2) break;
             final GameData.Item item = it;
             int ip = (int) Math.round(item.price * priceMul);
@@ -693,7 +725,7 @@ public class GModeView extends LinearLayout {
         // ── Specials: permanent passives ──
         LinearLayout sp = box();
         sp.addView(title("✦ 特殊词（永久被动，买了就一直在）"));
-        sp.addView(sub("效果永久生效，可以在「店」节点花金币买。"));
+        sp.addView(sub("两种拿法：商店花金币买；打赢精英怪必掉一件。"));
         org.json.JSONArray ids = store.specials();
         if (ids.length() == 0) {
             sp.addView(sub("还没有特殊词。"));
@@ -714,7 +746,7 @@ public class GModeView extends LinearLayout {
         // ── Items: one use each ──
         LinearLayout it = box();
         it.addView(title("🎒 道具（一次性，战斗里手动点用）"));
-        it.addView(sub("用掉就消失，战斗里点道具那一行使用。"));
+        it.addView(sub("用掉就消失，战斗里点道具那一行使用。精英怪也会掉。"));
         org.json.JSONArray iids = store.items();
         if (iids.length() == 0) {
             it.addView(sub("还没有道具。"));
@@ -726,7 +758,8 @@ public class GModeView extends LinearLayout {
                     if (x.id.equals(id)) { f = x; break; }
                 }
                 if (f == null) continue;
-                it.addView(sub("🎒 " + f.nameEn + "（" + f.en + "）　售价 " + f.price + " 金"));
+                String src = f.price > 0 ? "　售价 " + f.price + " 金" : "　精英掉落";
+                it.addView(sub("🎒 " + f.nameEn + "（" + f.en + "）" + src));
                 it.addView(sub("　　效果：" + f.desc));
             }
         }
@@ -915,7 +948,18 @@ public class GModeView extends LinearLayout {
             // 用 -1 表示"在层间过渡，尚未选定格子"。
             store.setPos(nextRow, -1);
         }
-        store.raiseFloor(store.layer());
+        // 原来传 store.layer() —— 参数就是自己，bestFloor 永远停在 0。
+        // 现在 bestFloor 记录真实到达过的最高层（floorIndex 口径）。
+        store.raiseFloor(store.floorIndex());
+
+        // 往下一层 = 变强一级。不显示 Lv. 数字，但变化本身要让玩家知道，
+        // 否则「越爬越强」这件事在界面上完全不可见。
+        // 提升封顶后就不再刷提示，免得每层都弹一句废话。
+        int eff = Math.min(store.floorIndex(), GBattle.LEVEL_BONUS_CAP);
+        if (eff >= 2) {
+            String extra = (eff == 2 || eff == 5) ? "，能量上限 +1" : "";
+            toast("⚡ 你变强了：伤害 +" + ((eff - 1) * 8) + "%" + extra);
+        }
     }
 
     // ── 控件 ─────────────────────────────────────────────

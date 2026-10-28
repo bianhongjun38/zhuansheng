@@ -52,10 +52,85 @@ public class BoardViewAudit {
         // 明细行后来又收窄过一次：场次/题数跟节点数量级接近、信息重复，
         // 换成「层 · 金币 · 正确率」—— 层=爬到哪，金币=攒了多少，正确率=打得准不准。
         // 断言要钉在**当前**这版真实拼接上，否则源码改了这里还绿，就等于没测。
-        boolean hasShortDetail = src.contains(
-                "\"第\" + (floor + 1) + \"层 · \" + gold + \"金 · \" + rate + \"%\"");
-        ok("明细行用的是收窄后的格式", hasShortDetail,
+        // 明细行现在还带上了「第几张地图」—— 层数口径统一后，
+        // 光看「第 N 层」不知道在第几张图上。断言同步钉到新格式。
+        boolean hasShortDetail = src.contains("\"第\" + (floor + 1) + \"层 · 图\" + mapNo");
+        ok("明细行显示层/图/金/正确率四段", hasShortDetail,
                 "BoardView 里的明细行格式变了，请同步这条断言");
+
+        // 用户要求不显示等级：等级等于层数，并排写是重复信息。
+        // 这条防止以后又把 Lv. 加回来。
+        ok("排行榜不显示 Lv.", !src.contains("\"Lv.\""),
+                "BoardView 又把 Lv. 加回明细行了");
+
+        // 明细行必须用**它自己的字号**来量。
+        // BoardView 里 sub.setTextSize(11)，这里原来误用了 fScore(22pt) ——
+        // 尺寸翻倍，于是不管怎么写都"放不下"，是审计自己造成的虚警。
+        // 标题字号是 11sp，Android sp≈px（160dpi 基准），直接用 11pt 对应。
+        Font fDetail = new Font("Microsoft YaHei", Font.PLAIN, 11);
+        java.awt.FontMetrics fm2 = new java.awt.Canvas().getFontMetrics(fDetail);
+        int w = fm2.stringWidth("第99层 · 图99 · ✦9999 · 100%");
+        ok("四段明细在最坏情况下放得下", w <= spare,
+                w + "px > 余量 " + spare + "px（names 会被挤掉）");
+
+        // ③ 排行榜必须是「玩家主动上传」，不能退回自动上报。
+        //    这条不是格式检查，是行为回归：加回自动上报会让榜上的
+        //    金币变成一堆战报的累加，和玩家界面上的数字对不上。
+        ok("排行榜有主动上传按钮", src.contains("上传我的进度"),
+                "BoardView 里找不到上传按钮文案");
+        ok("上传走快照接口而非战报接口", src.contains("Api.postSnapshot"),
+                "上传又改回 postBattle 了 —— 那个接口会累加");
+        ok("空榜文案不再说自动记录", !src.contains("打赢一场战斗就会出现在这里"),
+                "空榜还在承诺自动上榜，和实际行为不符");
+
+        String bsrc = new String(java.nio.file.Files.readAllBytes(
+                java.nio.file.Paths.get("src/com/zsb/plan/GBattleView.java")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        ok("战斗结束不再自动上报", !bsrc.contains("uploadPendingBattles()"),
+                "GBattleView 又把自动上报加回来了");
+        ok("榜上提示我上次上传时间", src.contains("我上次上传"),
+                "缺少「我上次上传」提示，玩家会以为自动同步");
+        // 401 必须自动拉起登录并接着传，不能只弹一句「登录过期」。
+        // 这是真实用户踩到的坑：token 因别处登录而作废，他只看到一句提示，
+        // 不知道要去哪儿、也不知道点完还得再点一次上传。
+        ok("401 自动拉起重新登录", src.contains("askRelogin"),
+                "401 只弹提示，不会自动重新登录");
+        ok("重登后自动续传", src.contains("doUpload();"),
+                "重新登录后没有接着上传；玩家要自己再点一次");
+
+        // (5) 精英必须掉特殊词/道具。原来精英只多给 50 金币，特殊词唯一
+        //     来源是商店一次挂一个 —— 整局下来手里常年 1~2 个，词见不全。
+        ok("精英结算会掉东西", bsrc.contains("addEliteDrop()"),
+                "GBattleView 不再给精英掉落，精英又只剩金币");
+        ok("只有精英档才掉", bsrc.contains("elite"),
+                "掉落门槛改了，普通怪也会掉，精英就没有区别了");
+        // ④ 词汇塔顶栏必须一行放得下。
+        //    原来顶栏和标题同一行、weight=1 抢剩余宽度，360dp 上只能写到
+        //    「…特殊词 0 道」，后面被折到第二行且跟着 right 对齐，看着像乱码。
+        //    现在给它独立一行 + 压短标签，这条断言锁住「最坏情况仍放得下」。
+        String msrc = new String(java.nio.file.Files.readAllBytes(
+                java.nio.file.Paths.get("src/com/zsb/plan/GModeView.java")),
+                java.nio.charset.StandardCharsets.UTF_8);
+        ok("顶栏不再用 \\n 手工折行", !msrc.contains("\"\\n第 \" + store.floorNo()"),
+                "顶栏又拼回带换行的长字符串了");
+        // 只检查顶栏那一段，不能整份源码找 —— 商店里「特殊词 · xxx」是正常文案，
+        // 第一版写成全文件查找，直接把商店那行判成违规，是断言自己写宽了。
+        int headAt = msrc.indexOf("private void updateHead()");
+        String headSrc = headAt > 0
+                ? msrc.substring(headAt, Math.min(msrc.length(), headAt + 3000)) : "";
+        ok("顶栏没有塞不下的长标签",
+                !headSrc.contains("特殊词 \" + store.specialCount()"),
+                "顶栏又用回「特殊词 N」这种长标签，360dp 屏会折行");
+        // 用真实 12sp 度量最坏情况
+        Font fHead = new Font("Microsoft YaHei", Font.PLAIN, 12);
+        java.awt.FontMetrics fmh = new java.awt.Canvas().getFontMetrics(fHead);
+        String worstHead = "\u276499/99\u3000\u27269999\u3000\u7b2c99\u5c42"
+                + "\u3000\u7b2c9\u56fe\u3000\u7279\u6b8a99\u3000\u9053\u517799";
+        int hw = fmh.stringWidth(worstHead);
+        ok("顶栏最坏情况放得下", hw <= 332, hw + "px > 332dp");
+        // 同一行里不能同时有两个 weight=1 抢宽度的兄弟（标题已经占了）
+        ok("顶栏信息独立成行", msrc.contains("infoWrap"),
+                "顶栏信息没有独立容器，仍和标题抢宽度");
 
         // 名字必须靠原生截断，不能靠手算宽度。
         // 这里必须钉死到 nm 这个 View 上 —— 第一版写的是

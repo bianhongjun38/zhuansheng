@@ -43,6 +43,51 @@ public class GBattle {
     public int phase = PHASE_CHOOSE;
     public int energy, energyMax = 3;
 
+    // ── 等级（Lv.）──────────────────────────────────────────
+    //
+    // 原来的 Lv. 是 bestFloor()+1 —— 历史最高层，跨局不清、
+    // 不参与任何计算，纯粹是顶栏上的装饰数字。玩家说得对：毫无意义。
+    //
+    // 现在改成真正的成长系统：本局累计答对题数决定等级，
+    // 等级直接加伤害、提高能量上限，让它值得在意。
+    //   每 5 题答对升 1 级，Lv.1 起步
+    //   伤害  + (Lv-1) × 8%
+    //   能量上限  Lv3 / Lv6 / Lv9 各 +1（最多 5 点）
+    // 数值刻意压低：这是「滚雪球的奖励」，不是「等级即通关」。
+    /** 本局已经推进过的层数（来自存档 floorIndex）。 */
+    public int levelFloor = 0;
+
+    /** 当前等级：跟着爬塔层数走，不用刷题攒经验。 */
+    public int level() { return 1 + Math.max(0, levelFloor); }
+
+    /**
+     * 等级加成的封顶等级。
+     *
+     * 层数可以一直往上爬（第 20 层就是 Lv.20），但伤害不能线性跟到底：
+     * 实测 Lv.41 会把 12 点基础伤害放大到 50 点（4.2 倍），
+     * 越往后越像直接跳过战斗，爬塔就没内容了。
+     * 所以等级继续涨、显示继续涨，但加成在 Lv.10 封顶（1.72 倍）。
+     */
+    public static final int LEVEL_BONUS_CAP = 10;
+
+    /** 等级带来的伤害倍率。Lv1=1.00，Lv10 封顶 1.72。 */
+    public double levelDamageMul() {
+        int eff = Math.min(level(), LEVEL_BONUS_CAP);
+        return 1.0 + (eff - 1) * 0.08;
+    }
+
+    /** 等级带来的能量上限加成：Lv3/6/9 各 +1，最多 +2。 */
+    public int levelEnergyBonus() {
+        int lv = level();
+        int b = 0;
+        if (lv >= 3) b++;
+        if (lv >= 6) b++;
+        return b;
+    }
+
+    /** 升到下一级还需要往下走几层（给界面显示进度）。 */
+    public int floorsToNextLevel() { return 1; }
+
     /** 本回合已出过牌的最后一张，用于同义连锁判定。 */
     public GCard lastPlayed;
 
@@ -88,6 +133,17 @@ public class GBattle {
     public boolean spMarvelous;    // 每场战斗可复活一次
     public boolean spLiteral;      // 无视一切修饰
     public boolean spPremier;      // 商店价格 −30%
+    // —— 精英掉落专属 ——
+    public boolean spFormidable;   // 每答对一个，本回合伤害 +2（可叠加）
+    public boolean spTremendous;   // 暴击伤害 ×2.4
+    public boolean spAbundant;     // 起手多抽 2 张
+    public boolean spVigorous;     // 答错伤害减半
+    public boolean spRelentless;   // 充能更快，但每次答对 +3
+    public boolean spSublime;      // 每层进入回 15 血
+    public boolean spAdamant;      // 残血时伤害 ×1.8
+    public boolean spLucid;        // 每题排除一个错误选项
+    /** formidable：本回合已答对的次数，用于叠加伤害。 */
+    public int formidableStack = 0;
 
     /** 本层是否还能用「终极」（ultimate 每层一次）。 */
     public boolean ultimateUsedThisFloor = false;
@@ -105,6 +161,10 @@ public class GBattle {
     public int itemFlatBonus = 0;
     /** 一次性道具：本场手牌上限 +2。 */
     public int itemHandBonus = 0;
+    /** 道具 whereas：本场战斗立即回满生命（用过即失效）。 */
+    public boolean itemFullHeal = false;
+    /** 道具 moreover：本场每回合多抽 1 张。 */
+    public boolean itemTurnDraw = false;
     public int turnFlatBonus = 0;
     public boolean critReady = false;
     public boolean skipEnemyCharge = false;
@@ -171,10 +231,20 @@ public class GBattle {
         }
         turn = 1;
         readSpecials();
-        if (spInevitable) enemyChargeNeed = Math.max(1, enemyChargeNeed + 1);      // 把「买过的特殊词」翻译成本场规则开关
+        // 等级跟着爬塔层数走：走到第 N 层就是 Lv.N。
+        // 原来按答对数攒经验，等于逼玩家在低层反复刷题才变强，
+        // 而爬塔本身就是进度 —— 层数和等级应该同步，才有往上走的动力。
+        // 能量上限要在 startTurn 之前定好，否则第一回合拿到的还是旧上限。
+        levelFloor = (g != null && g.storeRef != null) ? g.storeRef.floorIndex() : 0;
+        energyMax = 3 + levelEnergyBonus();
+        if (spInevitable) enemyChargeNeed = Math.max(1, enemyChargeNeed + 1);
+        // relentless：充能更快（代价），换来每次答对 +3
+        if (spRelentless) enemyChargeNeed = Math.max(1, enemyChargeNeed - 1);      // 把「买过的特殊词」翻译成本场规则开关
         // 最大生命 +20（supreme）要在算血上限之后、读存档之前生效，
         // 否则会出现「买了 supreme 但当前血量上限没涨」的情况。
         if (spSupreme) playerMaxHp += 20;
+        // sublime：每层进入时回 15 血（精英掉落的特殊词）
+        if (spSublime) playerHp = Math.min(playerMaxHp, playerHp + 15);
         if (spEssential) {
             playerHp = Math.min(playerMaxHp,
                     (saved > 0 ? Math.min(playerMaxHp, saved) : playerMaxHp) + 10);
@@ -209,6 +279,14 @@ public class GBattle {
         spMarvelous     = st.hasSpecial("marvelous");
         spLiteral       = st.hasSpecial("literal");
         spPremier       = st.hasSpecial("premier");
+        spFormidable    = st.hasSpecial("formidable");
+        spTremendous    = st.hasSpecial("tremendous");
+        spAbundant      = st.hasSpecial("abundant");
+        spVigorous      = st.hasSpecial("vigorous");
+        spRelentless    = st.hasSpecial("relentless");
+        spSublime       = st.hasSpecial("sublime");
+        spAdamant       = st.hasSpecial("adamant");
+        spLucid         = st.hasSpecial("lucid");
     }
 
     /**
@@ -296,6 +374,31 @@ public class GBattle {
             lastMsg = "【道具】Further：本场每次答对额外 +5 伤害";
             return true;
         }
+        if ("whereas".equals(id)) {
+            itemFullHeal = true;
+            playerHp = playerMaxHp;
+            st.removeItem(id);
+            lastMsg = "【道具】Whereas：本场生命已回满";
+            return true;
+        }
+        if ("thereby".equals(id)) {
+            enemyCharge = 0;
+            st.removeItem(id);
+            lastMsg = "【道具】Thereby：敌人充能清零，攻击延后";
+            return true;
+        }
+        if ("moreover".equals(id)) {
+            itemTurnDraw = true;
+            st.removeItem(id);
+            lastMsg = "【道具】Moreover：本场每回合多抽 1 张";
+            return true;
+        }
+        if ("henceforth".equals(id)) {
+            itemFlatBonus += 8;
+            st.removeItem(id);
+            lastMsg = "【道具】Henceforth：本场每次答对额外 +8 伤害";
+            return true;
+        }
         return false;
     }
 
@@ -319,16 +422,21 @@ public class GBattle {
         keptNow = 0;
         adverbFreeLeft = spThorough;   // 每回合第一张副词免费
         ultimateUsedThisTurn = false;
+        formidableStack = 0;      // formidable 的叠加按回合重置
         energy = energyMax;
 
         // 保下来的牌先回手
         hand.clear();
         if (!kept.isEmpty()) { hand.addAll(kept); kept.clear(); }
 
+        // abundant：起手多抽 2 张（精英掉落的特殊词）
+        extraDraw = spAbundant ? 2 : 0;
+
         // 发牌走「同义保底」版本：以共鸣槽里的词为焦点，约 55% 概率补一张同义词。
         // 原先纯随机的同义对出现率实测 0.4%，机制等于不存在（见 drawCardsWithSyn 注释）。
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
-                + (spRadical ? 1 : 0) - hand.size());
+                + (spRadical ? 1 : 0)
+                + (itemTurnDraw ? 1 : 0) - hand.size());
         // 排除已在手上的牌（主要是刚回手的保牌），免得同一个词在一手里出现两张
         if (need > 0) {
             java.util.Set<String> hold = new java.util.HashSet<>();
@@ -403,7 +511,8 @@ public class GBattle {
      */
     void refillForTest() {
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
-                + (spRadical ? 1 : 0) - hand.size());
+                + (spRadical ? 1 : 0)
+                + (itemTurnDraw ? 1 : 0) - hand.size());
         if (need > 0) {
             java.util.Set<String> hold = new java.util.HashSet<>();
             for (GCard hc : hand) hold.add(hc.id);
@@ -449,7 +558,8 @@ public class GBattle {
 
         // ③ 补满手牌。差额补，避免把已保的张数又抽一份回来。
         int need = Math.max(0, G.handSize + extraDraw + itemHandBonus
-                + (spRadical ? 1 : 0) - kept.size() - hand.size());
+                + (spRadical ? 1 : 0)
+                + (itemTurnDraw ? 1 : 0) - kept.size() - hand.size());
         // 排除已保的牌：牌库是按需随机抽，不排除就可能把刚保下的那张
         // 又抽回手上 —— 同一个词同时出现在手牌区和保牌区，保牌等于没锁。
         if (need > 0) {
@@ -535,7 +645,9 @@ public class GBattle {
 
         // 副词与临时加成。倍率统一走 effectiveDamageMul()：
         // elementary（前 3 回合 ×1.5）、ultimate（×3）、literal（清零）都在里面。
-        dmg = (int) Math.round(dmg * effectiveDamageMul()) + turnFlatBonus;
+        // 等级加成：和临时倍率同层相乘，不吃 literal 的「清零」语义
+        // （等级是长期成长，不是这一回合的修饰）。
+        dmg = (int) Math.round(dmg * effectiveDamageMul() * levelDamageMul()) + turnFlatBonus;
         // 道具「进一步」（further）：本场每次答对额外 +5
         if (itemFlatBonus > 0) dmg += itemFlatBonus;
         // critical：每张牌额外 20% 概率暴击。和副词给的必暴击共用
@@ -543,7 +655,21 @@ public class GBattle {
         if (!critReady && spCritical && !spLiteral && rnd.nextDouble() < 0.20) {
             critReady = true;
         }
-        if (critReady) { dmg = (int) Math.round(dmg * G.critMultiplier); critReady = false; }
+        // relentless：每次答对额外 +3（充能更快的代价换来的）
+        if (spRelentless) dmg += 3;
+        // formidable：本回合每答对一个 +2，可叠加
+        if (spFormidable) dmg += formidableStack * 2;
+        // adamant：残血（低于 30%）时伤害 x1.8，越危险越能打
+        if (spAdamant && playerMaxHp > 0 && playerHp * 100 / playerMaxHp < 30) {
+            dmg = (int) Math.round(dmg * 1.8);
+        }
+        if (critReady) {
+            // tremendous：暴击伤害从 x2.0 提到 x2.4
+            double critMul = spTremendous ? 2.4 : G.critMultiplier;
+            dmg = (int) Math.round(dmg * critMul);
+            critReady = false;
+        }
+        if (spFormidable) formidableStack++;   // 这一张也算进去，下次更高
 
         enemyHp -= dmg;
         lastPlayed = c;
@@ -626,7 +752,7 @@ public class GBattle {
         if (!hand.remove(c)) return 0;
 
         int base = attackBlocked() ? 0 : G.baseDamage;
-        int dmg = (int) Math.round(base * overloadMul);
+        int dmg = (int) Math.round(base * overloadMul * levelDamageMul());
         enemyHp -= dmg;
         energy--;
         lastWasOverload = true;
@@ -829,6 +955,8 @@ public class GBattle {
 
         enemyCharge = 0;
         int dmg = enemy == null ? 10 : enemy.atk;
+        // vigorous：答错的代价减半（敌人伤害砍一半，最低 1）
+        if (spVigorous) dmg = Math.max(1, dmg / 2);
         if (wrongDoubled) { dmg = (int) Math.round(dmg * G.wrongDamageMultiplier); wrongDoubled = false; }
 
         // 道具「尽管如此」（nevertheless）：本场免疫一次伤害。

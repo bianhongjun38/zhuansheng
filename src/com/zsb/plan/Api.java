@@ -210,6 +210,33 @@ public class Api {
         }
     }
 
+    /**
+     * 上传「当前整局进度」快照。
+     *
+     * 和 postBattle 的区别（这个区别是必须的，不是选择题）：
+     *   postBattle  → /v1/game/round，逐场战报，服务端按条 SUM，
+     *                 且有单场上限（金币≤300、题数≤40、单日≤60 条）。
+     *   postSnapshot→ /v1/game/snapshot，每人每天一条，**覆盖**更新。
+     *
+     * 主动上传整局进度时金币和题数一定超过「单场」上限，走战报接口
+     * 会被 out_of_range 拒收；就算不被拒，SUM 也会把多次上传累加。
+     */
+    public static R postSnapshot(String token, int floor, int mapNo, int gold,
+                                 int right, int wrong, String clientRev) {
+        try {
+            JSONObject p = new JSONObject();
+            p.put("floor", floor);
+            p.put("map", mapNo);
+            p.put("gold", gold);
+            p.put("right", right);
+            p.put("wrong", wrong);
+            p.put("clientRev", clientRev);
+            return call("POST", "/v1/game/snapshot", p, token);
+        } catch (Exception e) {
+            R r = new R(); r.msg = netMsg(e); return r;
+        }
+    }
+
     /** 词汇塔排行榜。和英语榜一样不需要登录。 */
     public static R gameBoard(String range) {
         return call("GET", "/v1/game/board?range=" + ("week".equals(range) ? "week" : "day"), null, null);

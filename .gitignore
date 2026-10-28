@@ -44,3 +44,8 @@ pages/*.apk
 _ui*.xml
 _*.py
 _shot*.png
+
+# ── 编译产物（javac 输出，不进仓库）─────────────────────
+_cls*/
+test/com/
+*.class

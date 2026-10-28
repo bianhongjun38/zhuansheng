@@ -61,6 +61,8 @@ public class GameData {
     public double wrongDamageMultiplier = 2.0;
     public int battleGoldMin = 15, battleGoldMax = 25;
     public int eliteGold = 50, chestGoldMin = 20, chestGoldMax = 60;
+    /** 精英掉落概率（0-100）。默认 100 = 打赢精英必掉，不靠运气。 */
+    public int eliteSpecialChance = 100, eliteItemChance = 100;
     public int cardPrice = 60, itemPrice = 90;
 
     private GameData(Context c) {
@@ -172,6 +174,8 @@ public class GameData {
                     chestGoldMax = ec.optInt("chestMax", chestGoldMax);
                     cardPrice = ec.optInt("cardPrice", cardPrice);
                     itemPrice = ec.optInt("itemPrice", itemPrice);
+                    eliteSpecialChance = ec.optInt("eliteSpecialChance", eliteSpecialChance);
+                    eliteItemChance = ec.optInt("eliteItemChance", eliteItemChance);
                 }
             }
         } catch (Exception e) {
@@ -529,7 +533,10 @@ public class GameData {
      * 而宝箱本来是地图上唯一的稳定补给点。
      * 25% 大约等于「四箱一怪」，每次开箱都还是值得赌。
      */
-    public int mimicChance = 25;
+    // 12%：宝箱是补给点，不该变成「每开四个箱子挨一次咬」。
+    // 太频繁会让玩家开始躲宝箱，反而毁掉塔里唯一的稳定收入来源。
+    // 想要「稀有但真会怕」，所以取一个低于直觉的数值。
+    public int mimicChance = 12;
 
     /** 开箱时是否触发宝箱怪。 */
     public boolean rollMimic(Random rnd) {
@@ -623,6 +630,52 @@ public class GameData {
         for (Special s : specials) {
             if (s == null || s.id == null || s.id.isEmpty()) continue;
             if (!store.hasSpecial(s.id)) pool.add(s);
+        }
+        if (pool.isEmpty()) return null;
+        return pool.get(rnd.nextInt(pool.size()));
+    }
+
+    /**
+     * 精英掉落。打赢精英怪必得一件，特殊词优先、集齐后转掉道具。
+     *
+     * ── 为什么精英必须掉东西 ──────────────────────────────
+     * 原来打赢精英只多给 50 金币（普通战斗 15~25），特殊词唯一来源是商店 ——
+     * 而商店每次只随机挂 1 个，还得先攒够 100 金币。结果就是整局玩下来
+     * 手里的特殊词常年停在 1~2 个，15 个词根本见不全。
+     *
+     * 精英是地图上「要赌一把」的格子（GameData 保证永远留一条无精英路线），
+     * 打赢它就该有确定的回报，而不是再多几个金币。所以这里用 100% 概率
+     * 而不是拼运气：玩家挑精英走，是因为知道能拿到东西。
+     *
+     * 特殊词先掉完再掉道具：永久被动比一次性道具值钱，先把「成长」给足。
+     * 两边都集齐就返回 null，界面据此显示「已集齐」。
+     */
+    public Object rollEliteDrop(GStore store, Random rnd) {
+        boolean specialLeft = randomUnownedSpecial(store, rnd) != null;
+        boolean itemLeft = randomUnownedItem(store, rnd) != null;
+        if (!specialLeft && !itemLeft) return null;
+
+        // 只剩一边就直接给它，不必掷骰子
+        if (specialLeft && !itemLeft) return randomUnownedSpecial(store, rnd);
+        if (itemLeft && !specialLeft) return randomUnownedItem(store, rnd);
+
+        // 两边都有：按配置概率决定这次掉哪类。默认 100/100，
+        // 于是各占一半 —— 特殊词和道具一起流进来，不会只顾一头。
+        int sp = Math.max(0, Math.min(100, eliteSpecialChance));
+        int it = Math.max(0, Math.min(100, eliteItemChance));
+        int total = sp + it;
+        if (total <= 0) return randomUnownedSpecial(store, rnd);
+        boolean pickSpecial = rnd.nextInt(total) < sp;
+        return pickSpecial ? randomUnownedSpecial(store, rnd)
+                : (Object) randomUnownedItem(store, rnd);
+    }
+
+    /** 随机挑一个玩家还没有的道具。全都有了返回 null。 */
+    public Item randomUnownedItem(GStore store, Random rnd) {
+        List<Item> pool = new ArrayList<>();
+        for (Item it : items) {
+            if (it == null || it.id == null || it.id.isEmpty()) continue;
+            if (!store.hasItem(it.id)) pool.add(it);
         }
         if (pool.isEmpty()) return null;
         return pool.get(rnd.nextInt(pool.size()));

@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.5.29",
-  "versionInt": 10529,
-  "versionCode": 53,
-  "notes": "v1.5.29（versionCode 53）",
+  "versionName": "1.5.39",
+  "versionInt": 10539,
+  "versionCode": 63,
+  "notes": "v1.5.39 修复更新装不上的根因：装前读取包内真实版本号，下载到的版本不高于本机就拒绝安装并说明原因（以前会把下架包/错包直接交给安装器，表现为提示有新版本却装出旧版、或弹「已安装相同版本」）。覆盖安装保留学习进度。",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.5.29.apk",
-    "size": 3828456,
-    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.29.apk"
+    "name": "zhuansheng-v1.5.39.apk",
+    "size": 3836648,
+    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.39.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.29"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.39"
   }
 }
