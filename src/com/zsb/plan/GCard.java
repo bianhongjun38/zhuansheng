@@ -26,6 +26,36 @@ public class GCard {
     public final String ex, exCn;
 
     /**
+     * 例句整句的中文译文（只取第一句，与 ex 一一对应）。
+     *
+     * 为什么要单独切一份：words.json 的 exCn 是「多句挤在一个字段里」的
+     * 拼接串（实测 a 的 exCn 是「我需要一个解释。 I have a dog. 我有一只狗。」），
+     * 而 ex 同样是拼接的。直接在界面里拼整串去念，怪物会一口气说完三句
+     * 毫不相干的翻译，既不像台词，也不对应题面那一句。
+     *
+     * exCnFirst 只在构造时算一次，之后只读；空串表示数据里没有译文。
+     */
+    public final String exCnFirst;
+
+    /** 取「第一句」：遇到中英文句末标点就截断。没有标点时整串当作一句。 */
+    private static String firstSentence(String s) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.isEmpty()) return "";
+        for (int i = 0; i < t.length(); i++) {
+            char ch = t.charAt(i);
+            if (ch == '.' || ch == '!' || ch == '?' || ch == '\u3002'
+                    || ch == '\uFF01' || ch == '\uFF1F' || ch == '\uFF0E') {
+                String head = t.substring(0, i).trim();
+                // 纯英文句号可能是缩写/小数点，前面没内容就别乱切
+                if (head.isEmpty()) continue;
+                return head;
+            }
+        }
+        return t;
+    }
+
+    /**
      * 全部义项，形如 {"n|危险", "v|使…危险"}。
      *
      * 只有 vocab.json 里 senses.size() >= 2 的词才会填这个（实测 324 / 1654）。
@@ -53,6 +83,7 @@ public class GCard {
         this.desc = desc == null ? "" : desc;
         this.ex = ex == null ? "" : ex;
         this.exCn = exCn == null ? "" : exCn;
+        this.exCnFirst = firstSentence(this.exCn);
         this.senses = senses == null
                 ? Collections.<String>emptyList()
                 : Collections.unmodifiableList(new ArrayList<>(senses));

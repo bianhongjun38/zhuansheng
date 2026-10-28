@@ -46,6 +46,17 @@ public class GBattleView extends LinearLayout {
     private GBattle battle;
     private GSprite sprite;
     private LinearLayout stage, handRow, optRow;
+
+    /**
+     * 保牌区：本回合已保下来的牌单独显示在这里。
+     *
+     * 为什么不跟手牌挤在一起：保住的牌不参与洗牌、也不在下回合之前回到手上，
+     * 它是「已锁定」状态，和可打出的手牌是两种东西。混排会让人以为
+     * 保完还能立刻打出去 —— 那正是旧版「保了等于没保」的观感来源。
+     */
+    private LinearLayout keptRow;
+    /** 保牌区上方的标题条，没保牌时整块隐藏。 */
+    private LinearLayout keptBox;
     private TextView tvMsg, tvEnemyHp, tvPlayerHp, tvIntent, tvResonance;
 
     /** 战报：每回合发生的事都记在这，点战报条可看全部。 */
@@ -232,6 +243,24 @@ public class GBattleView extends LinearLayout {
         hs.setLayoutParams(hp);
         addView(hs);
 
+        // 保牌区：默认隐藏，只有 kept 非空时才出现（见 renderHand）。
+        // 放在手牌下方、选项区上方 —— 玩家先看到"手里还有什么"，
+        // 再看到"已经留住了什么"，最后才是按钮。
+        keptBox = new LinearLayout(getContext());
+        keptBox.setOrientation(VERTICAL);
+        keptBox.setPadding(dp(10), 0, dp(10), dp(2));
+        keptBox.setVisibility(GONE);
+        addView(keptBox);
+
+        android.widget.HorizontalScrollView khs =
+                new android.widget.HorizontalScrollView(getContext());
+        khs.setHorizontalScrollBarEnabled(false);
+        keptRow = new LinearLayout(getContext());
+        keptRow.setOrientation(HORIZONTAL);
+        keptRow.setPadding(0, dp(2), 0, dp(2));
+        khs.addView(keptRow);
+        keptBox.addView(khs);
+
         // 选项区（答题 / 阶段按钮都放这）
         optRow = new LinearLayout(getContext());
         optRow.setOrientation(VERTICAL);
@@ -365,6 +394,101 @@ public class GBattleView extends LinearLayout {
             t.setPadding(dp(8), dp(20), 0, 0);
             handRow.addView(t);
         }
+        renderKept();
+    }
+
+    /**
+     * 保牌区：把已保下来的牌单独画一遍。
+     *
+     * ── 为什么要显示释义注释 ──────────────────────────────
+     *
+     * 保牌是「花 2 能量把这张牌留到下一回合」，玩家做这个决定前需要
+     * 确认自己留的到底是什么。但卡面上**故意不印中文释义**（那会把考题
+     * 答案印在题面上，见 cardView 的注释）—— 于是保完的牌只剩一个
+     * 光秃秃的英文单词，和手牌里那些待考的牌长得一模一样，
+     * 玩家既看不出这是"已保住"的，也确认不了自己保对了没有。
+     *
+     * 解决方式与「◆僻义N」一致：在单词下方加一行小字注释。
+     * 这里是安全窗口 —— 已经保下来的牌**不可能再出题**（keep() 时它
+     * 已从 hand 移出，出题只从 hand 里挑），所以显示释义不会泄题。
+     */
+    private void renderKept() {
+        if (keptBox == null) return;
+        if (battle == null || battle.kept.isEmpty()) {
+            keptBox.setVisibility(GONE);
+            return;
+        }
+
+        keptRow.removeAllViews();
+
+        TextView head = tv("🛡 已保 " + battle.kept.size() + " 张 · 下回合回手（不参与洗牌）",
+                10.5f, C_TEAL);
+        head.setTypeface(Typeface.DEFAULT_BOLD);
+        head.setPadding(0, dp(2), 0, dp(2));
+        keptBox.removeAllViews();
+        keptBox.addView(head);
+
+        android.widget.HorizontalScrollView khs =
+                new android.widget.HorizontalScrollView(getContext());
+        khs.setHorizontalScrollBarEnabled(false);
+        keptRow = new LinearLayout(getContext());
+        keptRow.setOrientation(HORIZONTAL);
+        keptRow.setPadding(0, dp(2), 0, dp(2));
+        khs.addView(keptRow);
+        keptBox.addView(khs);
+
+        for (GCard c : battle.kept) {
+            keptRow.addView(keptCardView(c));
+        }
+        keptBox.setVisibility(VISIBLE);
+    }
+
+    /**
+     * 保牌区里的一张牌。比手牌小一号，且**带释义注释**。
+     *
+     * 不可点击：保住的牌这一回合不能再被打出，点了会让人以为能反悔。
+     */
+    private View keptCardView(final GCard c) {
+        LinearLayout box = new LinearLayout(getContext());
+        box.setOrientation(VERTICAL);
+        box.setPadding(dp(8), dp(7), dp(8), dp(7));
+
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(9));
+        g.setColor(0xFF1F3040);
+        g.setStroke(dp(1), C_TEAL);
+        box.setBackground(g);
+
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int cardW = Math.max(dp(84), (screenW - dp(40)) / 4);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(cardW,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.rightMargin = dp(7);
+        box.setLayoutParams(lp);
+
+        TextView en = tv(c.en, 12.5f, C_TEAL);
+        en.setTypeface(Typeface.DEFAULT_BOLD);
+        en.setMaxLines(1);
+        box.addView(en);
+
+        // 释义注释：单词正下方。与「◆僻义N」同样的位置语言 ——
+        // 主信息在上、补充信息在下，玩家扫一眼就知道这张是什么。
+        String sense = c.isWord() ? GQuiz.firstSensePublic(c.cn) : c.desc;
+        if (sense == null) sense = "";
+        sense = sense.trim();
+        if (!sense.isEmpty()) {
+            TextView cn = tv(sense, 10, C_FG2);
+            cn.setPadding(0, dp(2), 0, 0);
+            cn.setMaxLines(2);
+            box.addView(cn);
+        }
+
+        if (c.pos != null && !c.pos.isEmpty()) {
+            TextView pos = tv(c.pos, 9, C_FG3);
+            pos.setPadding(0, dp(1), 0, 0);
+            box.addView(pos);
+        }
+        return box;
     }
 
     /**
@@ -666,20 +790,51 @@ public class GBattleView extends LinearLayout {
         tvSpeak.animate().alpha(1f).setDuration(180).start();
     }
 
-    /** 按题型挑一句合适的中文台词。c 是这轮打出去的牌。 */
+    /**
+     * 按题型挑一句合适的中文台词。c 是这轮打出去的牌。
+     *
+     * ── 例句题说的是「整句的翻译」，不是单个单词 ────────────────
+     *
+     * 旧版无论什么题型都只念单词的第一个义项，例句题也念。
+     * 但例句题考的本来就是「你能不能读懂这一整句」——
+     * 玩家读着 The captain gave the order to ___ ship. 选对了 abandon，
+     * 怪物却只回「放弃，抛弃」两个字，等于把最大的学习收益（整句释义）
+     * 白白扔掉，而且答对一句长句却只换来两个字的回应，反馈严重不足。
+     *
+     * 现在例句题走 exCnFirst（数据侧已经切好第一句，见 GCard），
+     * 把整句中文念出来；没有译文数据时才退回单词义。
+     * 其余题型仍然念单词义 —— 那些题型本来就没给句子。
+     */
     private void enemySpeakFor(GCard c, String explain) {
         if (c == null) { enemySpeak(null); return; }
+
         String sense = c.isWord() ? GQuiz.firstSensePublic(c.cn) : "";
         if (sense == null) sense = "";
         sense = sense.trim();
-        if (sense.isEmpty()) { enemySpeak(null); return; }
 
-        // 例句题额外把整句的中文意思带出来 —— 这是它比「词=义」多给的东西
-        String said = "「" + sense + "」……你居然真懂这个词。";
-        if (c.ex != null && !c.ex.trim().isEmpty() && pendingQLastMode == 1) {
-            said = "「" + sense + "」……这一句我本来没打算让你读懂。";
+        // 例句题优先念整句译文
+        String sentence = c.exCnFirst == null ? "" : c.exCnFirst.trim();
+        if (pendingQLastMode == 1 && !sentence.isEmpty()) {
+            // 译文可能很长（有些例句译文三十多个字），台词框只有一行，
+            // 超出会被截断成省略号。这里按 44 字上限收一收，保住完整语义。
+            enemySpeak("「" + shorten(sentence, 44) + "」……这一句我本来没打算让你读懂。");
+            return;
         }
-        enemySpeak(said);
+
+        if (sense.isEmpty()) { enemySpeak(null); return; }
+        enemySpeak("「" + sense + "」……你居然真懂这个词。");
+    }
+
+    /**
+     * 超长文本截到 max 字以内，末尾补省略号。
+     *
+     * 中文按字算，一个汉字算一个 —— 台词框宽度固定，不截会直接溢出。
+     */
+    private static String shorten(String s, int max) {
+        if (s == null) return "";
+        String t = s.trim();
+        if (t.length() <= max) return t;
+        return t.substring(0, max) + "…";
     }
 
     /** 刚结算掉的那道题的题型。仅用于挑台词，不影响判定。 */
