@@ -201,6 +201,61 @@ public class EngTrainTest {
         ok("edit1 少一个", EngTrain.edit1("abc", "ab"));
         ok("edit1 多一个", EngTrain.edit1("ab", "abc"));
         ok("edit1 完全不同", !EngTrain.edit1("abc", "xyz"));
+
+        // ── 全角 / IME 污染（用户报「拼写正确却判错」的首要原因）──
+        // 中文输入法开着时敲出的是全角字母 U+FF41 起，屏幕上和半角几乎一样，
+        // char 值却差 0xFEE0，字符串比较必然不等。
+        ok("全角字母也算对", EngTrain.judgeText(it, toFull("apple")) == EngTrain.J_RIGHT,
+                EngTrain.norm(toFull("apple")));
+        ok("全角空格也算对", EngTrain.judgeText(it, "apple" + (char) 0x3000) == EngTrain.J_RIGHT);
+        ok("不换行空格也算对", EngTrain.judgeText(it, "apple" + (char) 0x00A0) == EngTrain.J_RIGHT);
+        ok("前导全角空格也算对", EngTrain.judgeText(it, (char) 0x3000 + "apple") == EngTrain.J_RIGHT);
+        ok("零宽空格也算对",
+                EngTrain.judgeText(it, "ap" + (char) 0x200B + "ple") == EngTrain.J_RIGHT);
+        ok("弯撇号归一化", "dont".equals(EngTrain.norm("don" + (char) 0x2019 + "t")));
+        ok("全角转半角", "apple".equals(EngTrain.norm(toFull("apple"))));
+
+        // ── 相邻字母颠倒（最高频拼写错误，原先被判成彻底错）──
+        EngTrain.Item ac = new EngTrain.Item();
+        ac.mode = EngTrain.M_SPELL;
+        ac.answerText = "accusation";
+        ok("相邻颠倒判近", EngTrain.judgeText(ac, "accusatoin") == EngTrain.J_NEAR,
+                String.valueOf(EngTrain.judgeText(ac, "accusatoin")));
+        ok("颠倒不算全对", EngTrain.judgeText(ac, "accusatoin") != EngTrain.J_RIGHT);
+        String hs = EngTrain.nearHint("accusation", "accusatoin");
+        ok("颠倒提示说顺序", hs.contains("顺序颠倒"), hs);
+        ok("颠倒提示定位正确", hs.contains("第 8"), hs);
+
+        EngTrain.Item rc = new EngTrain.Item();
+        rc.mode = EngTrain.M_SPELL;
+        rc.answerText = "receive";
+        ok("recieve 判近", EngTrain.judgeText(rc, "recieve") == EngTrain.J_NEAR);
+
+        EngTrain.Item th = new EngTrain.Item();
+        th.answerText = "their";
+        ok("thier 判近", EngTrain.judgeText(th, "thier") == EngTrain.J_NEAR);
+
+        // 交换只允许一对；两处以上仍是错
+        ok("swap1 一对颠倒", EngTrain.swap1("abcd", "bacd"));
+        ok("swap1 末尾颠倒", EngTrain.swap1("abcd", "abdc"));
+        ok("swap1 两对颠倒不算", !EngTrain.swap1("abcd", "badc"));
+        ok("swap1 相同不算", !EngTrain.swap1("abcd", "abcd"));
+        ok("swap1 长度不同不算", !EngTrain.swap1("abcd", "abc"));
+
+        // 插入 / 删除仍给「少/多了一个字母」
+        String hi = EngTrain.nearHint("necessary", "neccessary");
+        ok("插入提示说多少", hi.contains("多") || hi.contains("少"), hi);
+    }
+
+    /** 半角 ASCII -> 全角（模拟中文输入法开着时的输入）。 */
+    static String toFull(String s) {
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c >= 0x21 && c <= 0x7E) b.append((char) (c + 0xFEE0));
+            else b.append(c);
+        }
+        return b.toString();
     }
 
     // ── ④ 五种题型都造得出来，且答案自洽 ─────────────────

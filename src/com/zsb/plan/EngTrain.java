@@ -348,6 +348,11 @@ public class EngTrain {
      * 两处以上交换就是真的不会写，不能再给「差一点」。
      */
     static boolean swap1(String a, String b) {
+        // 必须自己挡长度：judgeText 那侧有 Math.abs(...) <= 1 兜着，
+        // 但 nearHint 是公开方法、任何调用方都可能直接传不等长的一对。
+        // 少了这一句，swap1("abc","ab") 会在 a.charAt(i+1) 上抛 StringIndexOutOfBounds，
+        // 整个反馈 render 直接崩 —— 本来就答错了，还看不到答案。
+        if (a == null || b == null || a.length() != b.length()) return false;
         int i = 0, n = a.length();
         while (i < n && a.charAt(i) == b.charAt(i)) i++;
         if (i >= n - 1) return false;                 // 完全相等或多出来的都在末尾，不算交换
@@ -444,13 +449,21 @@ public class EngTrain {
             }
         }
 
-        int n = Math.min(a.length(), b.length());
+        // 长度不同就是多写/少写了一个字母。必须先判这个再逐位比 ——
+        // neccessary 多了一个 c，逐位比会指向「第 4 个字母不对」，
+        // 但学生看到第 4 位是 c、答案第 4 位也是 c，会以为自己没写错。
+        // 直接说「多了一个字母」才对得上他手里的东西。
+        if (a.length() != b.length()) {
+            return (b.length() > a.length() ? "多" : "少") + "了一个字母（共 " + a.length() + " 个字母）";
+        }
+
+        int n = a.length();
         for (int i = 0; i < n; i++) {
             if (a.charAt(i) != b.charAt(i)) {
-                return "差一个字母：第 " + (i + 1) + " 个字母不对（共 " + a.length() + " 个字母）";
+                return "差一个字母：第 " + (i + 1) + " 个字母不对（共 " + n + " 个字母）";
             }
         }
-        return "少/多了一个字母（共 " + a.length() + " 个字母）";
+        return "少/多了一个字母（共 " + n + " 个字母）";
     }
 
     // ── 组卷 ──────────────────────────────────────────────
