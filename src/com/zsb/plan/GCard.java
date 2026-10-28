@@ -37,20 +37,86 @@ public class GCard {
      */
     public final String exCnFirst;
 
-    /** 取「第一句」：遇到中英文句末标点就截断。没有标点时整串当作一句。 */
+    /**
+     * 取「第一句」：遇到中英文句末标点就截断，再切掉尾部残留的英文片段。
+     *
+     * 两步的原因是数据实测：
+     *   · 965 条有译文的词里，条条可能挤着 2~3 句（「我需要一个解释。 I have a dog. …」），
+     *     不切第一句，怪物会把三句不相干的翻译一口气念完；
+     *   · 光切句还不够 —— 有些条目的中英混排不在句号处分开，而是在
+     *     **中文逗号**后直接接半句英文（实测 chain：「生活是一串串的快乐时光， He started a fast food chain」）。
+     *     这种行按句号切完，尾部仍挂着一截英文，念出来像机器在报错。
+     *     所以第二步专门砍掉「尾巴上那段连续的英文」。
+     *
+     * 注意不能反过来「有英文就整句丢掉」：proof 的译文是
+     * 「…科学证据证明iPad 对教育有好处」，丢掉就把整句学习价值一起扔了。
+     * 只砍**尾部**连续英文串，句中的专有名词（iPad）原样保留。
+     */
     private static String firstSentence(String s) {
         if (s == null) return "";
         String t = s.trim();
         if (t.isEmpty()) return "";
+
+        // ① 切第一句
+        String head = t;
         for (int i = 0; i < t.length(); i++) {
             char ch = t.charAt(i);
             if (ch == '.' || ch == '!' || ch == '?' || ch == '\u3002'
                     || ch == '\uFF01' || ch == '\uFF1F' || ch == '\uFF0E') {
-                String head = t.substring(0, i).trim();
+                String cut = t.substring(0, i).trim();
                 // 纯英文句号可能是缩写/小数点，前面没内容就别乱切
-                if (head.isEmpty()) continue;
-                return head;
+                if (cut.isEmpty()) continue;
+                head = cut;
+                break;
             }
+        }
+
+        // ② 砍掉尾部残留的英文串。
+        //    从末尾往前扫，遇到中文就停；扫到的英文（含空格、撇号、连字符）
+        //    整段切掉，再把尾巴上的中文标点和空格收拾干净。
+        int end = head.length();
+        int i = end;
+        while (i > 0) {
+            char ch = head.charAt(i - 1);
+            boolean eng = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                    || ch == ' ' || ch == '\'' || ch == '-' || ch == '\u2019';
+            if (!eng) break;
+            i--;
+        }
+        if (i < end) {
+            // 只剩英文/空白 → 整句没有中文，说明数据不是译文，宁可返回空串
+            String rest = head.substring(0, i).trim();
+            // 尾部那截如果不含至少 2 个英文字母，就不是"英文串"，别误删（如结尾的 & 空格）
+            int letters = 0;
+            for (int k = i; k < end; k++) {
+                char ch = head.charAt(k);
+                if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) letters++;
+            }
+            if (letters >= 2) {
+                head = trimTailPunct(rest);
+            }
+        }
+        // ③ 太短的不要。
+        //    实测 965 条译文里，47 条按上述规则切完只剩 1~5 个字，
+        //    而且都是残缺片段：「雅」「务」「上」「裤的」「的过去式是」
+        //    「算机的恐惧」。这类东西念出来比不念更难懂，等于用一句
+        //    噪音替换掉本来有用的单词义。所以不足 6 字直接判为无效，
+        //    由调用方退回单词义。
+        //    6~7 字是完好的短句（「他们必遭失败」「她生性很敏感」），保留。
+        String out = head.trim();
+        if (out.length() < 6) return "";
+        return out;
+    }
+
+    /** 去掉尾部的中文标点与空白。 */
+    private static String trimTailPunct(String s) {
+        String t = s;
+        while (!t.isEmpty()) {
+            char ch = t.charAt(t.length() - 1);
+            if (ch == ' ' || ch == ',' || ch == '\uFF0C' || ch == '\u3001'
+                    || ch == ';' || ch == '\uFF1B' || ch == ':' || ch == '\uFF1A') {
+                t = t.substring(0, t.length() - 1);
+            } else break;
         }
         return t;
     }
