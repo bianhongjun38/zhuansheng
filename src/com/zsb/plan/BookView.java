@@ -461,7 +461,7 @@ public class BookView {
      * 下载一本教材到缓存。成功返回 true。
      *
      * 顺序：先看安装包里有没有（老版本兼容 + 离线可用），
-     * 没有再走 dl.xxjcloudns.kdns.fr 拉。
+     * 没有再走 Update.BOOK_BASE（Cloudflare Pages 上的 app 域名）拉。
      * 下载写 .part 再 rename —— 中途断网不会留下半份文件，
      * 否则下次 PdfRenderer 打开会直接崩。
      */

@@ -57,28 +57,23 @@ public class Update {
      *   github.com                           → 仍被阻断
      *
      * 也就是说 Worker 运行时一直是好的，坏的是 workers.dev 这个后缀的路由。
-     * 所以现在把 Worker 绑到自有域名 dl.xxjcloudns.kdns.fr 上，
-     * APK 本体作为 Worker 静态资源直出（不再 302 去 github.com，那条路下不动）。
-     * 这样也顺手绕开了 Pages 单文件 25 MiB 的上限 —— APK 已经 20.13 MB 了。
-     *
-     * 实测：dl 域名下 21,109,913 B 的包 8.5 秒下完，2.37 MB/s，文件头 PK。
+     * 中途把 Worker 绑到自有域名 dl.xxjcloudns.kdns.fr 绕过这个问题，
+     * 但 2026-10-28 按用户决定把 Worker 整套撤掉了：Pages 与 Workers 的
+     * 单文件上限、免费额度完全一致，没必要同时维护两套部署。
+     * 现在书 PDF 与 APK 都在 Pages，一个域名管完。
      */
     private static final String PRIMARY_JSON =
             "https://app.xxjcloudns.kdns.fr/update.json";
 
-    /**
-     * 已下线的 Worker 直出通道，仅留作兜底。
-     *
-     * 为什么留着：v1.5.7 及之前的安装包把 dl.xxjcloudns.kdns.fr 当成主通道，
-     * 那些机器升级过一次之后才会切到 Pages。在它们全部升级完之前，
-     * 这条记录不能删 —— 删了它们会读 404。等确认没有老版本在线，可整条移除。
-     */
-    private static final String LEGACY_WORKER_JSON =
-            "https://dl.xxjcloudns.kdns.fr/update.json";
-
-    /** 旧主通道（Cloudflare Pages），保留做第二兜底。 */
-    private static final String PAGES_PRIMARY_JSON =
-            "https://app.xxjcloudns.kdns.fr/update.json";
+    // 2026-10-28：Worker 那条 dl.xxjcloudns.kdns.fr 兜底通道按用户决定整条撤掉。
+    // Worker 运行时本身没毛病，坏的是 workers.dev 后缀的路由（DNS 污染），
+    // 后来绑自有域名 dl 绕过 —— 但既然书 PDF 和 APK 都已经统一放在 Pages，
+    // 再维持第二套部署只是多一个会失联的源。现在只剩三个通道：
+    //   app.xxjcloudns.kdns.fr（自有域名，主）→ zsb-update.pages.dev（兜底）
+    //   → api.github.com（本地 Pages 全挂时才试）
+    // 老机器（v1.5.7 及更早）读 dl 会 404，但 fetchLatestAny 是「取最高版本、
+    // 单源失败即忽略」，不是「读到即返回」，所以缺这一条不影响它们升级 ——
+    // 它们读自己的 dl 清单拿到的是旧版，而主通道给的是新版，取最大值仍然是新版。
 
     /**
      * 教材 PDF 的下载基地址。
@@ -186,7 +181,6 @@ public class Update {
         Latest[] all = {
                 fetchManifest(PRIMARY_JSON),        // app.xxjcloudns.kdns.fr（Pages，主通道）
                 fetchManifest(PAGES_JSON),          // zsb-update.pages.dev（Pages 兜底）
-                fetchManifest(LEGACY_WORKER_JSON),  // 已下线的 Worker，仅兜底老机器
                 fetchFromGithub(),                  // api.github.com
         };
 
