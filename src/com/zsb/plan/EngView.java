@@ -66,6 +66,16 @@ public class EngView {
     private int idx = 0;
     private EngTrain.Item cur;
     private EngTrain.Item answered;       // 已作答的题（用于回显）
+
+    /**
+     * 玩家这一题**实际敲进去的内容**（原样，未归一化）。
+     *
+     * 为什么不能回显标准答案：原来 answered != null 时输入框直接 setText(cur.answerText)，
+     * 屏幕上显示的就是正确答案。于是「差一个字母」判错时，玩家看到的输入框里
+     * 明明写着和答案一模一样的词 —— 反馈说我错，界面说我全对，这是最伤信任的一种 bug。
+     * 用户截图里 accusation 显示在框里、判定却说「差一点」，就是这个原因。
+     */
+    private String typedText = "";
     private int picked = -1;              // 选择题选了哪个
     private int verdict = -1;
     private String feedback = "";
@@ -423,11 +433,26 @@ public class EngView {
         et.setBackgroundColor(C_BG2);
         et.setPadding(dp(14), dp(12), dp(14), dp(12));
         et.setSingleLine(true);
-        et.setInputType(InputType.TYPE_CLASS_TEXT);
+        // ── 关掉输入法的「自作聪明」 ────────────────────────
+        // 默认 TYPE_CLASS_TEXT 在两个地方会替学生改答案：
+        //   ① TYPE_TEXT_FLAG_CAP_SENTENCES 会自动把首字母大写；
+        //   ② 输入法的自动纠错/联想会悄悄换掉拼错的词。
+        // 拼写题要的是「学生自己写的那个词」，被输入法改过就不再是他的答案了。
+        // 顺带关掉全角输入：中文输入法开着时敲出来是全角字母（U+FF41 起），
+        // 屏幕上几乎看不出差别却必然判定不等 —— 归一化那边已经能兜住，
+        // 这里再从源头减少一种可能。
+        // 不用 VISIBLE_PASSWORD —— 有些输入法会因此把已输入的字母暂时遮成圆点。
+        // NO_SUGGESTIONS 关联想；CAP_CHARACTERS 保证不会被自动改成首字母大写。
+        et.setInputType(InputType.TYPE_CLASS_TEXT
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+                | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         if (answered != null) {
-            et.setText(cur.answerText);
+            // 回显玩家自己敲的东西，不是标准答案。
+            // 答对了就显示他写的（本来就等于答案）；答错了显示他错在哪，
+            // 再配合下面的「答案：xxx」对照，才知道差在哪个字母。
+            et.setText(typedText);
             et.setEnabled(false);
-            et.setTextColor(C_TEAL);
+            et.setTextColor(verdict == EngTrain.J_RIGHT ? C_TEAL : C_RED);
         }
         cardBody.addView(et);
 
@@ -450,6 +475,7 @@ public class EngView {
             go.setOnClickListener(v -> {
                 String in = et.getText().toString();
                 if (EngTrain.norm(in).isEmpty()) return;
+                typedText = in;                 // 原样留底，用于回显
                 verdict = EngTrain.judgeText(cur, in);
                 answered = cur;
                 if (verdict == EngTrain.J_RIGHT) right++;

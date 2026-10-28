@@ -333,24 +333,78 @@ public class EngTrain {
         if (a.isEmpty()) return J_WRONG;
         if (a.equals(b)) return J_RIGHT;
         if (Math.abs(a.length() - b.length()) <= 1 && edit1(a, b)) return J_NEAR;
+        // 相邻字母颠倒也算「差一点」。
+        // accusatoin / recieve / thier / freind 这类是拼写题里最高频的错误，
+        // 原先 edit1() 只认插入-删除-替换，交换被判成彻底 WRONG，
+        // 学生明明只错在顺序上，却得到「不会写」的反馈。那是最误导人的一种判错。
+        if (a.length() == b.length() && swap1(a, b)) return J_NEAR;
         return J_WRONG;
     }
 
+    /**
+     * b 是不是 a 交换了某一对相邻字母。
+     *
+     * 只比长度相等的情况（交换不改变长度），且只允许**恰好一对**：
+     * 两处以上交换就是真的不会写，不能再给「差一点」。
+     */
+    static boolean swap1(String a, String b) {
+        int i = 0, n = a.length();
+        while (i < n && a.charAt(i) == b.charAt(i)) i++;
+        if (i >= n - 1) return false;                 // 完全相等或多出来的都在末尾，不算交换
+        // 命中第一处不同：必须正好是 a[i]b[i+1] == b[i]a[i+1]
+        if (a.charAt(i) != b.charAt(i + 1) || a.charAt(i + 1) != b.charAt(i)) return false;
+        // 交换之后剩余部分必须完全一致
+        for (int j = i + 2; j < n; j++) {
+            if (a.charAt(j) != b.charAt(j)) return false;
+        }
+        return true;
+    }
+
+    /**
+     * 归一化：全角转半角、大小写拉平、去首尾与多余空格、去标点、去零宽字符。
+     *
+     * ── 为什么必须做全角转换 ──────────────────────────────
+     * 用户报「拼写正确后还显示错误」。实测根因就在这里：
+     * 手机中文输入法开着的时候，敲出来的是全角字母（ａｂａｎｄｏｎ，U+FF41 起），
+     * 屏幕上和半角几乎没有区别，但 char 值差 0xFEE0，字符串比较必然不等。
+     * 全角空格 U+3000、不换行空格 U+00A0 同理 —— 它们不是 ' '，
+     * 既不会被当作空格跳过，也不会被 trim() 去掉。
+     * 之前只处理半角 ' ' 和 A-Z，这几种输入全部被判错，学生看着自己明明打对了。
+     *
+     * 另外顺手处理两类看不见的东西：
+     *   · 零宽字符（U+200B/200C/200D/FEFF）—— 输入法或复制粘贴会带进来
+     *   · 各种引号（直/弯单引号、双引号、反引号）—— 统一去掉
+     * 连字符要保留：well-known、e-mail 这类词本身带连字符。
+     */
     public static String norm(String s) {
         if (s == null) return "";
         StringBuilder b = new StringBuilder();
         boolean lastSpace = false;
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
+
+            // ① 零宽 / 格式字符：直接丢
+            if (c == '\u200B' || c == '\u200C' || c == '\u200D'
+                    || c == '\uFEFF' || c == '\u00AD') continue;
+
+            // ② 全角 ASCII（U+FF01..U+FF5E）→ 半角
+            if (c >= '\uFF01' && c <= '\uFF5E') c = (char) (c - 0xFEE0);
+            // 全角空格
+            else if (c == '\u3000') c = ' ';
+            // 不换行空格 / 窄空格 等
+            else if (c == '\u00A0' || c == '\u202F' || c == '\u2007') c = ' ';
+
             if (c >= 'A' && c <= 'Z') c = (char) (c + 32);
-            if (c == ' ' || c == '\t' || c == '\n') {
+
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
                 if (!lastSpace && b.length() > 0) b.append(' ');
                 lastSpace = true;
                 continue;
             }
-            // 去英文标点，保留连字符（well-known 这类词本身带连字符）
+            // ③ 标点：直/弯引号、反引号、常见英文标点都去掉
             if (c == '.' || c == ',' || c == ';' || c == ':' || c == '!'
-                    || c == '?' || c == '"' || c == 39 || c == 96) continue;
+                    || c == '?' || c == '"' || c == 39 || c == 96
+                    || c == '\u2018' || c == '\u2019' || c == '\u201C' || c == '\u201D') continue;
             b.append(c);
             lastSpace = false;
         }
@@ -378,6 +432,18 @@ public class EngTrain {
 
     public static String nearHint(String answer, String input) {
         String a = norm(answer), b = norm(input);
+
+        // 先判是不是相邻字母写反了 —— 这种要给「顺序」提示，
+        // 不能说「第 N 个字母不对」，否则学生盯着那个字母看不出错在哪。
+        if (a.length() == b.length() && swap1(a, b)) {
+            int i = 0, n = a.length();
+            while (i < n && a.charAt(i) == b.charAt(i)) i++;
+            if (i < n - 1) {
+                return "字母写反了：第 " + (i + 1) + " 和第 " + (i + 2)
+                        + " 个字母顺序颠倒（共 " + n + " 个字母）";
+            }
+        }
+
         int n = Math.min(a.length(), b.length());
         for (int i = 0; i < n; i++) {
             if (a.charAt(i) != b.charAt(i)) {
