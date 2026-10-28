@@ -387,19 +387,41 @@ public class Update {
     private String findApk(JSONObject rel) {
         try {
             JSONArray arr = rel.getJSONArray("assets");
+            if (arr == null) return null;
+            // **挑版本号最大的那个附件**，不能见到 .apk 就拿。
+            //
+            // 2026-10-28 实测事故：tag 打在了没有提交 version.json 的 commit 上，
+            // CI 用旧的 version.json 构建，于是 v1.5.40 这个 Release 底下
+            // 同时躺着 zhuansheng-v1.5.39.apk 和 zhuansheng-v1.5.40.apk，
+            // 而且 1.5.39 排在前面。以前这里 return 第一个，兜底源就指向
+            // 旧包 —— 用户被提示升级 1.5.40，下载到的却是 1.5.39，
+            // 然后被版本校验拦下，报一句看不懂的错。
+            JSONObject best = null;
+            int bestCode = -1;
             for (int i = 0; i < arr.length(); i++) {
                 JSONObject a = arr.getJSONObject(i);
                 String name = a.optString("name", "");
                 if (!name.endsWith(".apk")) continue;
-                String api = a.optString("url", "");
-                if (api.startsWith("https://api.github.com/")) {
-                    fallbackGithubUrl = api;
-                    return api;
+                // 从文件名里抠版本号（zhuansheng-v1.5.40.apk → 1.5.40）。
+                //
+                // 注意不能直接 parseVer(文件名)：它要求字符串**以数字开头**，
+                // "zhuansheng-v1.5.40.apk" 会返回 0（实测），于是所有附件
+                // 分数一样，挑选逻辑等于没写。先正则抠出 d+.d+.d+。
+                int code = verOfApkName(name);
+                if (code > bestCode) {
+                    bestCode = code;
+                    best = a;
                 }
-                fallbackGithubUrl = a.optString("browser_download_url", null);
-                // 兜底：万一副本接口没给 url，退回老地址（可能很慢但不至于不可用）
-                return a.optString("browser_download_url", null);
             }
+            if (best == null) return null;
+            String api = best.optString("url", "");
+            if (api.startsWith("https://api.github.com/")) {
+                fallbackGithubUrl = api;
+                return api;
+            }
+            // 兜底：万一副本接口没给 url，退回老地址（可能很慢但不至于不可用）
+            fallbackGithubUrl = best.optString("browser_download_url", null);
+            return fallbackGithubUrl;
         } catch (Exception ignored) {
         }
         return null;
@@ -447,6 +469,20 @@ public class Update {
 
     private int ltCode(Latest lt) {
         return lt == null ? 0 : parseVer(lt.ver);
+    }
+
+    /** 从附件名里抠出版本号：zhuansheng-v1.5.40.apk → 10540。 */
+    private static int verOfApkName(String name) {
+        if (name == null) return 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("(\\d+\\.\\d+\\.\\d+)").matcher(name);
+        // 找**第一个**三段式数字；文件名里一般只有版本号是这种形状。
+        if (m.find()) return parseVer(m.group(1));
+        // 退化：只有两段或一段的命名也认一下
+        java.util.regex.Matcher m2 = java.util.regex.Pattern
+                .compile("(\\d+\\.\\d+)").matcher(name);
+        if (m2.find()) return parseVer(m2.group(1));
+        return 0;
     }
 
     private void askUpdate(String ver, String notes, final java.util.List<String> urls) {

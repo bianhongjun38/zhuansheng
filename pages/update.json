@@ -1,16 +1,16 @@
 {
   "ok": true,
-  "versionName": "1.5.40",
-  "versionInt": 10540,
-  "versionCode": 64,
-  "notes": "修复 12 项审计缺陷：教材PDF魔数校验、下载源版本对齐、版本号进位、Gist用POST、导入落库、回忆统计、游标泄漏、生命周期护栏",
+  "versionName": "1.5.42",
+  "versionInt": 10542,
+  "versionCode": 66,
+  "notes": "GitHub兜底源按附件名挑最高版本；打tag前强制提交version.json；代理自动探测",
   "source": "cloudflare-pages",
   "apk": {
-    "name": "zhuansheng-v1.5.40.apk",
+    "name": "zhuansheng-v1.5.42.apk",
     "size": 3836648,
-    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.40.apk"
+    "url": "https://zsb-update.pages.dev/zhuansheng-v1.5.42.apk"
   },
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.40"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.42"
   }
 }

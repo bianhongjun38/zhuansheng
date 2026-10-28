@@ -50,8 +50,36 @@ GH_REPO = "bianhongjun38/zhuansheng"
 PAGES_MAX = 25 * 1024 * 1024
 PAGES_SAFE = 24 * 1024 * 1024
 
-for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
-    os.environ.setdefault(k, "http://127.0.0.1:7897")
+# 代理只在**真的活着**时才挂。
+#
+# 以前是无条件 setdefault 127.0.0.1:7897。那个端口是本地翻墙代理，
+# 平时不开；一旦它没运行，所有请求都会 ECONNREFUSED，
+# wrangler 报一句 "fetch failed / 网络代理配置问题"，很难看出是代理的锅。
+# 实测 2026-10-28：7897 未监听，部署直接失败。
+#
+# 这里改成先探端口：连得上才设，连不上就确保不设（顺便清掉外层环境里
+# 可能残留的同名变量，避免把上一层的脏环境带进来）。
+import socket as _socket
+
+
+def _proxy_alive(port=7897, host="127.0.0.1"):
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            return s.connect_ex((host, port)) == 0
+    except Exception:
+        return False
+
+
+if _proxy_alive():
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        os.environ.setdefault(k, "http://127.0.0.1:7897")
+    print("  代理     127.0.0.1:7897 可用，走代理")
+else:
+    # 端口不通就必须彻底摘掉，否则 wrangler / urllib 会拿它去连
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
+        os.environ.pop(k, None)
+    print("  代理     127.0.0.1:7897 未开启，直连")
 
 
 def ver_int(name):
@@ -243,11 +271,26 @@ def main():
         return 0
 
     print("\n▶ 部署到 Cloudflare Pages")
+    # 显式传一份**干净的环境**给 wrangler。
+    #
+    # 只改 os.environ 不够：实测（2026-10-28）外层 shell 里残留的
+    # HTTP_PROXY/HTTPS_PROXY 会被继承下去，wrangler 检测到就死命走代理，
+    # 而 7897 没在监听 → "fetch failed"，报的却是一句"网络代理配置问题"，
+    # 完全看不出是代理的锅。这里直接把所有代理相关的键从 env 里剔掉，
+    # 并给 NO_PROXY=* 作为双保险。
+    env = dict(os.environ)
+    for k in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+              "http_proxy", "https_proxy", "all_proxy"):
+        env.pop(k, None)
+    if not _proxy_alive():
+        env["NO_PROXY"] = "*"
+        env["no_proxy"] = "*"
+
     p = subprocess.run(
         "npx --yes wrangler@latest pages deploy . --project-name %s --branch main "
         "--commit-dirty=true" % PROJECT,
         cwd=PAGES, shell=True, capture_output=True, text=True,
-        encoding="utf-8", errors="replace")
+        encoding="utf-8", errors="replace", env=env)
     for line in (p.stdout or "").splitlines()[-6:]:
         print("  " + line)
     if p.returncode != 0:
