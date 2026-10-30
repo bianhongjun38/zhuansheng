@@ -231,6 +231,24 @@ def main():
 
     check_keystore()
 
+    # ── 域名红线检查 ────────────────────────────────────────
+    # 2026-10-28：因客户端反复请求已失效的自有域名，xxjcloudns.kdns.fr
+    # 整条 zone 被 Cloudflare 全站 403，永久报废。
+    # 这里挡住"会对自有域名制造高频/并发请求"的代码，不许打进包。
+    _guard = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "scripts", "域名红线检查.py")
+    if os.path.isfile(_guard):
+        _r = subprocess.run([sys.executable, _guard],
+                            capture_output=True, text=True, encoding="utf-8")
+        if _r.returncode != 0:
+            print(_r.stdout or "")
+            print(_r.stderr or "")
+            print("构建中止：域名红线检查未通过。规则见项目根 AGENTS.md 第一节。")
+            sys.exit(1)
+        print("域名红线检查：通过")
+    else:
+        print("! 未找到域名红线检查脚本，跳过（不建议）")
+
     for p, n in [(AAPT2, "aapt2"), (JAVAC, "javac"), (D8_JAR, "d8.jar"),
                  (APKSIGNER_JAR, "apksigner.jar"), (ZIPALIGN, "zipalign"),
                  (PLATFORM, "android.jar"), (KEYSTORE, "签名钥匙")]:

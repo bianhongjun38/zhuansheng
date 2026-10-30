@@ -245,6 +245,22 @@ public class StateLogic {
     }
 
     // ── 导出 / 导入 ────────────────────────────────────────
+    /**
+     * 导出完整状态。
+     *
+     * 失败时返回**空串**，不是 "{}"。
+     *
+     * 实测教训：原来返回 "{}" 时，调用方拿到的是一个**语法合法、
+     * 内容为空**的 JSON —— GistSync.merge("{}", remote) 会走
+     * "本地没有 state，直接拷贝远端" 分支，看起来没问题；
+     * 但只要走到 applyLocal("{}")（比如云端备份本身是空的），
+     * importJson 就会把 done/completed/star 全部 clear() 再灌空集，
+     * **本机进度被静默清空**，界面还显示"已写入本机"。
+     *
+     * 空串则让所有调用方都必须显式判断，不会误当成"一份空进度"。
+     * 返回空串而不是 null，是为了让 json.length() 这类既有调用
+     * （MainActivity 的"复制完整备份"）不会 NPE。
+     */
     public String exportJson() {
         try {
             JSONObject o = new JSONObject();
@@ -254,7 +270,22 @@ public class StateLogic {
             o.put("state", new JSONObject(serialize()));
             return o.toString(2);
         } catch (Exception e) {
-            return "{}";
+            return "";
+        }
+    }
+
+    /** 这份导出内容是否真的带了状态（有任意一条记录）。 */
+    public static boolean hasState(String json) {
+        if (json == null) return false;
+        String t = json.trim();
+        if (t.isEmpty() || "{}".equals(t)) return false;
+        try {
+            JSONObject root = new JSONObject(t);
+            JSONObject st = root.optJSONObject("state");
+            if (st == null) st = root;
+            return st.length() > 0;
+        } catch (Throwable e) {
+            return false;
         }
     }
 

@@ -95,8 +95,22 @@ public class Update {
     // 没必要跑两套）。书 PDF 与 APK 统一放在 Pages，这条路一个域名管完。
     public static final String BOOK_BASE = "https://zsb-update.pages.dev/books/";
 
-    private static final String PAGES_JSON =
-            "https://zsb-update.pages.dev/update.json";
+    /**
+     * 第二个清单源。
+     *
+     * 这里原本写的是 "https://zsb-update.pages.dev/update.json" ——
+     * 和上面的 PRIMARY_JSON **逐字符相同**。它是在 Worker 通道撤掉时
+     * 留下的残留：当年这两条确实是两个不同域名（Pages 与 Worker），
+     * 合并到一个域名之后就成了同一个地址。
+     *
+     * 后果：fetchLatestAny() 会在每次检查更新时把同一个 URL 请求两遍。
+     * 请求本身很快，但它是**串行**的，网络差的时候白白多等一个超时，
+     * 而且与自己项目「不许对同一入口制造重复请求」的红线冲突。
+     *
+     * 现在统一指向 PRIMARY_JSON：留两个常量是为了让 fetchLatestAny()
+     * 的"多源"结构不用改，同时也给将来真的加第二个源留了位置。
+     */
+    private static final String PAGES_JSON = PRIMARY_JSON;
 
     /** 兜底：Pages 挂了时退到 GitHub API（注意是 api 域名，不是 github.com）。 */
     private static final String API =
@@ -186,12 +200,16 @@ public class Update {
      */
     private Latest fetchLatestAny() {
         // 探测顺序保持"自有域名优先"——只是不再提前返回，
-        // 三份都要拿到手才能比出最高的那个。
-        Latest[] all = {
-                fetchManifest(PRIMARY_JSON),        // zsb-update.pages.dev（Pages，主通道）
-                fetchManifest(PAGES_JSON),          // zsb-update.pages.dev（Pages 兜底）
-                fetchFromGithub(),                  // api.github.com
-        };
+        // 都要拿到手才能比出最高的那个。
+        //
+        // 注意 PAGES_JSON 现在就是 PRIMARY_JSON（见其声明处的说明），
+        // 所以这里显式去重：同一个地址不再请求第二遍。
+        // 原来写死三条的时候，网络差会白白多等一个完整超时。
+        java.util.List<Latest> probes = new java.util.ArrayList<>();
+        probes.add(fetchManifest(PRIMARY_JSON));
+        if (!PAGES_JSON.equals(PRIMARY_JSON)) probes.add(fetchManifest(PAGES_JSON));
+        probes.add(fetchFromGithub());
+        Latest[] all = probes.toArray(new Latest[0]);
 
         Latest best = null;
         for (Latest lt : all) {
@@ -600,6 +618,13 @@ public class Update {
                         : ("下载失败：" + last.getMessage());
                 ui.post(new Runnable() {
                     public void run() {
+                        // 与成功分支一致：界面已经销毁时不能再 dismiss / toast。
+                        // 原实现漏了这道守卫 —— 用户在下载中途退出这个页面，
+                        // 几秒后下载失败，就会对着一个已销毁的 Activity
+                        // 调 dismiss()，轻则 WindowLeaked 日志，重则崩溃。
+                        if (act == null || act.isFinishing() || act.isDestroyed()) {
+                            return;
+                        }
                         pd.dismiss();
                         toastOnUi(msg + "\n可在浏览器打开 zsb-update.pages.dev 手动下载。");
                     }
@@ -616,6 +641,25 @@ public class Update {
      *   ② api.github.com 必须带 Accept: octet-stream，同上
      *   ③ 若 out 已有部分内容且源支持 Range，就带 Range 续传，不让用户白等
      */
+    /**
+     * 把重定向的 Location 解析成绝对地址。
+     *
+     * HttpURLConnection 给的 Location 不一定带 scheme/host：
+     *   · 绝对：https://cdn.example.com/a.apk
+     *   · 绝对路径：/assets/a.apk
+     *   · 相对路径：a.apk、../a.apk
+     * 后三种都必须相对当前 URL 解析，否则 new URL() 直接抛异常。
+     */
+    static String resolveUrl(String base, String loc) {
+        try {
+            java.net.URI b = java.net.URI.create(base);
+            java.net.URI r = b.resolve(loc);
+            return r.toString();
+        } catch (Throwable t) {
+            return loc;   // 解析不了就原样返回，让调用方按原逻辑报错
+        }
+    }
+
     private long fetchResumable(String start, File out, ProgressDialog pd) throws Exception {
         long have = out.exists() ? out.length() : 0;
         String target = start;
@@ -639,7 +683,11 @@ public class Update {
                 String loc = c.getHeaderField("Location");
                 c.disconnect();
                 if (loc == null) throw new Exception("重定向无地址");
-                target = loc;
+                // Location 可能是相对路径（RFC 7231 允许 "/x/y.apk"、
+                // 甚至 "../y.apk"）。原实现直接 target = loc，下一轮
+                // new URL("/x/y.apk") 会抛 MalformedURLException，
+                // 整次更新失败。这里按当前地址解析一次相对路径。
+                target = resolveUrl(target, loc);
                 continue;
             }
             break;
@@ -695,6 +743,21 @@ public class Update {
 
     private void install(File apk) {
         try {
+            // 先确认「安装未知来源应用」这个权限开着。
+            //
+            // 不预检的后果：Android 8.0+ 上会**静默**跳到系统设置页让用户
+            // 自己找开关，或者干脆什么都不发生 —— 玩家下载完 20 MB，
+            // 看到的却是"点了没反应"，而他不知道要去哪里开权限。
+            // 这里明确告诉他在哪开。
+            if (Build.VERSION.SDK_INT >= 26) {
+                boolean can = act.getPackageManager().canRequestPackageInstalls();
+                if (!can) {
+                    toastOnUi("安装包已下载完成，但本应用没有「安装未知应用」权限。\n"
+                            + "请到 设置 › 应用 › 本应用 › 安装未知应用 里打开后重试。\n"
+                            + "APK 已保存，也可在文件管理器里手动安装。");
+                    return;
+                }
+            }
             Intent i = new Intent(Intent.ACTION_VIEW);
             Uri u;
             if (Build.VERSION.SDK_INT >= 24) {

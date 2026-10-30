@@ -271,6 +271,22 @@ public class GStore {
      * 的加血没法直接改「当前血量」，只能挂账，等下一场战斗开始时兑现。
      * 兑现后清零，避免一路攒着变成白嫖满血。
      */
+    /**
+     * 宝箱怪战里那个宝箱原本值多少金币。-1 表示当前不是宝箱怪战。
+     *
+     * 为什么要落盘：pendingChestGold 原来是 GModeView 的实例字段，
+     * 进程一被杀就丢。而宝箱格在 enterNode() 里已经 markVisited，
+     * 重进后不会重走 openChest()，那份金币就永久蒸发了。
+     * 存进 SharedPreferences 后，restoreUnfinishedFight() 能把它捞回来。
+     */
+    public int pendingChestGold() { return sp.getInt("pendingChestGold", -1); }
+
+    public void setPendingChestGold(int g) {
+        sp.edit().putInt("pendingChestGold", Math.max(-1, g)).apply();
+    }
+
+    public void clearPendingChestGold() { sp.edit().remove("pendingChestGold").apply(); }
+
     public int campHeal() { return sp.getInt("campHeal", 0); }
 
     public void addCampHeal(int h) {

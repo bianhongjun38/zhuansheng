@@ -189,6 +189,34 @@ public class GModeView extends LinearLayout {
             clearFightNode();
             return;
         }
+
+        // ── 宝箱怪必须原样恢复，不能重抽成普通怪 ──────────────────
+        //
+        // 宝箱节点的 type 是 N_CHEST，而 pickEnemy() 只认 N_ELITE，
+        // 其余一律落进 "mob1..3"。于是「开箱撞上宝箱怪 → 中途退出/被杀 →
+        // 重进」这条路径会变成一场普通小怪战：
+        //   · 打赢了拿的是普通奖励，pendingChestGold 已随进程丢失，
+        //     宝箱本来的金币永远拿不回来；
+        //   · 打输了走普通战败分支 resetRun()，**整局清零**——
+        //     而宝箱怪的设计是「只砍半生命上限、这一局继续」。
+        // 两条设计意图都会在进程被杀后失效。
+        //
+        // 所以宝箱节点重进一律按宝箱怪恢复；存一个"是否宝箱怪战"的标记
+        // 已经没必要 —— 节点类型本身就是这个信息，之前只是在恢复时把它
+        // 交给了一个不认宝箱的 pickEnemy。
+        if (type == GameData.N_CHEST) {
+            GameData.Enemy mim = data.enemyById("mimic");
+            if (mim != null) {
+                int g = store.pendingChestGold();
+                if (g < 0) g = 0;
+                startMimicFight(g);
+                return;
+            }
+            // 数据缺失：退回普通巢穴奖励，不给玩家卡死
+            clearFightNode();
+            return;
+        }
+
         GameData.Enemy e = data.pickEnemy(type, store.floorIndex(), rnd);
         if (e == null) { clearFightNode(); return; }
         startBattle(e);
@@ -829,12 +857,17 @@ public class GModeView extends LinearLayout {
             return;
         }
         pendingChestGold = chestGold;
+        // 宝箱金额必须落盘：进程被杀后重进，内存里的 pendingChestGold
+        // 已经没了，而宝箱格已经「打开过」不会再走 openChest()。
+        // 不存下来这一份金币就永久蒸发。
+        store.setPendingChestGold(chestGold);
         startBattle(e);
         if (battleView == null) return;
         battleView.setMimicFight(true);
         // 宝箱怪战败：不掉整局，只砍半生命上限，然后继续前进。
         battleView.setOnDefeatSoft(() -> {
             pendingChestGold = -1;
+            store.clearPendingChestGold();
             clearFightNode();
             store.clearBattleNode();
             endBattle();

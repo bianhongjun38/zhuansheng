@@ -31,6 +31,7 @@ PLATFORM = B.PLATFORM
 SRC = os.path.join(PROJ, "src", "com", "zsb", "plan")
 TEST = os.path.join(PROJ, "test")
 ASSETS_PLAN = os.path.join(PROJ, "assets", "plan.json")
+ASSETS_DIR = os.path.join(PROJ, "assets")
 
 # json jar：Android 自带 org.json，桌面端要单独一份
 # 本机在 D:\AndroidDev\libs，CI 上直接从 Maven 下载
@@ -150,6 +151,49 @@ def main():
     if not check("测试代码编译通过", rc == 0, "" if rc == 0 else out[-500:]):
         return summary()
 
+    # ── 1b. 词汇塔单独编译 ─────────────────────────────────
+    #
+    # 为什么不能和上面那批一起编：GameSimTest 依赖 GameData / GStore / GBattle
+    # 等**真的 import android** 的类（Context、SharedPreferences、AssetManager），
+    # 所以编它必须挂 android.jar；而运行它又必须**不挂** android.jar ——
+    # 否则 android.jar 里那个抽象的 android.content.Context 会赢过测试桩，
+    # 直接抛 java.lang.InstantiationError: android.content.Context。
+    #
+    # 编译顺序也有讲究：先用 android.jar 编主源码，再用「android.jar + 已编出的类」
+    # 编测试桩（让桩去满足真 android 的接口），最后不挂 android.jar 编测试本身。
+    # 桩的 SharedPreferences 必须是 interface 而不是 class，否则运行时
+    # invokeinterface 撞上 class 会抛 IncompatibleClassChangeError。
+    GSIM = os.path.join(PROJ, "build", "gsim")
+    shutil.rmtree(GSIM, ignore_errors=True)
+    os.makedirs(GSIM, exist_ok=True)
+    all_src = [os.path.join(SRC, f) for f in sorted(os.listdir(SRC))
+               if f.endswith(".java")]
+    gsrc = os.path.join(PROJ, "test", "game")
+    stub_src = []
+    for root, _dirs, files in os.walk(os.path.join(gsrc, "android")):
+        for f in sorted(files):
+            if f.endswith(".java"):
+                stub_src.append(os.path.join(root, f))
+    test_src = [os.path.join(gsrc, f) for f in sorted(os.listdir(gsrc))
+                if f.endswith(".java")]
+
+    okg = True
+    rc, out = run([JAVAC, "-encoding", "UTF-8", "-cp", PLATFORM + os.pathsep + JSON_JAR,
+                   "-d", GSIM] + all_src)
+    if not check("词汇塔：主源码编译", rc == 0, "" if rc == 0 else out[-500:]):
+        okg = False
+    if okg:
+        rc, out = run([JAVAC, "-encoding", "UTF-8",
+                       "-cp", PLATFORM + os.pathsep + JSON_JAR + os.pathsep + GSIM,
+                       "-d", GSIM] + stub_src)
+        if not check("词汇塔：Android 测试桩编译", rc == 0, "" if rc == 0 else out[-500:]):
+            okg = False
+    if okg:
+        rc, out = run([JAVAC, "-encoding", "UTF-8",
+                       "-cp", JSON_JAR + os.pathsep + GSIM, "-d", GSIM] + test_src)
+        if not check("词汇塔：测试代码编译", rc == 0, "" if rc == 0 else out[-500:]):
+            okg = False
+
     # ── 2. 跑七套测试 ───────────────────────────────────
     # 第 3 个元素是该测试自己的命令行参数：
     #   · 大部分测试要 plan.json 路径；
@@ -181,12 +225,22 @@ def main():
         ("com.zsb.plan.PosViewAudit", "词性题排版（英文主体/选项带中文，含 PNG）", audit_dir),
         ("com.zsb.plan.UidAudit", "任务 uid 稳定性（跨天重复/当天唯一）", ASSETS_PLAN),
         ("com.zsb.plan.BoardViewAudit", "登录页与排行榜（列宽/省略号/对比度，含 PNG）", audit_dir),
+        # 词汇塔（Roguelike 游戏）：地图生成 / 出题 / 战斗引擎 / 存档 / 文案。
+        # 参数是 assets 目录，它自己读 assets/game/vocab.json 与 cards.json。
+        ("com.zsb.plan.GameSimTest", "词汇塔（地图/出题/战斗/存档/文案）", ASSETS_DIR),
     )
     for cls, label, extra_arg in test_table:
         print("\n▶ " + label)
+        # 词汇塔那套跑在独立的 build/gsim 里，且**绝不能**把 android.jar
+        # 放进运行时 classpath（详见 1b 段：会让抽象的 android.content.Context
+        # 赢过测试桩，直接抛 InstantiationError）。
+        if cls == "com.zsb.plan.GameSimTest":
+            cls_path = JSON_JAR + os.pathsep + GSIM
+        else:
+            cls_path = JSON_JAR + os.pathsep + OUT
         cmd = [JAVA, "-Dfile.encoding=UTF-8", "-Dstdout.encoding=UTF-8",
                "-Djava.awt.headless=true",
-               "-cp", JSON_JAR + os.pathsep + OUT, cls]
+               "-cp", cls_path, cls]
         if extra_arg:
             cmd.append(extra_arg)
         rc, out = run(cmd)

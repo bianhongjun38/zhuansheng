@@ -320,7 +320,13 @@ public class SyncView {
             status(C_RED, "导出本地进度失败：" + t.getClass().getSimpleName());
             return;
         }
-        if (localJson == null || localJson.trim().isEmpty()) localJson = "{}";
+        // 空串 = exportJson 失败。**不能**悄悄换成 "{}"：
+        // 那样后续 merge 会把它当成"本地是一份空的合法进度"，
+        // 一旦回写就把本机进度全清。这里直接中止并告诉玩家。
+        if (localJson == null || localJson.trim().isEmpty()) {
+            status(C_RED, "读取本机进度失败，已中止同步（不会覆盖云端）");
+            return;
+        }
 
         savePrefs();
         start("正在读取云端…");
@@ -344,9 +350,15 @@ public class SyncView {
             }
 
             @Override public void fail(String msg) {
-                // 读不到云端（比如 gist 被删 / 首次创建）时，退化成直接推本地
-                status(C_AMBER, msg + "；改为直接上传本机进度…");
-                pushMerged(gs, local);
+                // 读不到云端时**绝对不能**把本机进度推上去。
+                //
+                // 原实现是"退化成直接推本地"，后果是：网络抖动一次、
+                // gist 被删一次、或 token 临时失效一次，就会用本机
+                // （可能是很旧的）进度覆盖掉云端那份真正的历史记录。
+                // 同步是合并语义，读不到远端就没有合并依据，
+                // 唯一安全动作是停下来让玩家重试。
+                status(C_RED, "读取云端失败：" + msg
+                        + "；为防止覆盖云端，本次未上传。请检查网络后重试。");
             }
         });
     }
@@ -395,10 +407,14 @@ public class SyncView {
                 }
                 String localJson;
                 try {
-                    localJson = store == null ? "{}" : store.exportJson();
+                    localJson = store == null ? "" : store.exportJson();
                 } catch (Throwable t) {
-                    localJson = "{}";
+                    localJson = "";
                 }
+                // 读不出本机状态就退回 "{}"：恢复场景下远端本来就是要写进来的，
+                // 这里写成 "{}" 只会让 merge 走「本地为空 → 拷贝远端」分支，
+                // 不会清空任何东西。与"上传"路径的严格拦截不同，这是安全的。
+                if (localJson == null || localJson.trim().isEmpty()) localJson = "{}";
                 // 恢复不是覆盖：两边的完成记录都保留，避免恢复把本机进度冲掉
                 String merged = GistSync.merge(localJson, remote);
                 boolean changed = applyLocal(merged);
@@ -435,6 +451,10 @@ public class SyncView {
      */
     private boolean applyLocal(String json) {
         if (store == null || json == null || json.isEmpty()) return false;
+        // "{}" 语法合法但没有任何状态。原实现只挡了空串，没挡空对象，
+        // 于是 applyLocal("{}") 会 importJson 成功 —— 而 importJson 是
+        // 「先 clear 再灌入」语义，结果本机进度被清空、界面还提示"已写入"。
+        if (!StateLogic.hasState(json)) return false;
         try {
             store.importJson(json);
             localChanged = true;

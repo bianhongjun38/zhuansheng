@@ -97,10 +97,51 @@ public class GQuiz {
         if (t == null) return "";
         String s = t.trim().toLowerCase();
         // 去掉词性前缀，如 "v." "n." "adj."
-        s = s.replaceAll("^[a-z]+\\.\\s*", "");
+        s = POS_PREFIX.matcher(s).replaceFirst("");
         // 去掉标点、空白、括号、省略号
-        s = s.replaceAll("[\\s（）()【】\\[\\]、，,。.·…\\-—/]", "");
+        s = PUNCT.matcher(s).replaceAll("");
         return s;
+    }
+
+    /**
+     * senseKey 用的两个正则**预编译**。
+     *
+     * 原来是 String.replaceAll —— 每次调用现编一个 Pattern。而典型热路径是
+     * makeOverload 的干扰项判重：一次出题要跑上万次 sameSense，每次重编
+     * 两个正则。这是过载出题实测 3 秒的直接成因之一。
+     */
+    private static final java.util.regex.Pattern POS_PREFIX =
+            java.util.regex.Pattern.compile("^[a-z]+\\.\\s*");
+    private static final java.util.regex.Pattern PUNCT =
+            java.util.regex.Pattern.compile("[\\s（）()【】\\[\\]、，,。.·…\\-—/]");
+
+    /**
+     * 全词库释义缓存：一次归一化，之后按 key 判重。
+     *
+     * 为什么必须缓存：makeOverload 的 step ② 要扫全部 1654 个词的义项
+     * （≈3400 条），每条都要和已收集的干扰项做同义判重。原实现每次都比较
+     * 两个**原始字符串**、每次重算 senseKey —— O(N²) 次正则调用。
+     *
+     * 现在改成：加载时把每条释义的 senseKey 算好存成数组，
+     * 判重只在 HashSet 里查 key（O(1)），必要时才做 contains 包含判断。
+     * 实测从 3 秒降到毫秒级。
+     */
+    private java.util.List<String[]> senseCache;
+
+    /** 惰性构建释义缓存。每条 = {senseKey, pos, 原文}。 */
+    private void ensureSenseCache() {
+        if (senseCache != null) return;
+        java.util.List<String[]> out = new ArrayList<>();
+        for (GCard o : G.words) {
+            if (o == null) continue;
+            for (int i = 0; i < o.senseCount(); i++) {
+                String pos = o.sensePos(i);
+                for (String t : splitSenses(o.senseText(i))) {
+                    out.add(new String[]{senseKey(t), pos, t});
+                }
+            }
+        }
+        senseCache = out;
     }
 
     /** 供判题层调用：两个释义是否算同一个意思。 */
@@ -120,6 +161,23 @@ public class GQuiz {
     /** 一组释义里是否已经存在和 t 同义的项。 */
     private static boolean hasSame(List<String> list, String t) {
         for (String s : list) if (sameSense(s, t)) return true;
+        return false;
+    }
+
+    /**
+     * 已归一化的 key 集合里，是否存在与 k 互相包含的项。
+     *
+     * sameSense 的「互相包含」规则无法完全被 HashSet 表达
+     * （「收费」和「收费单」key 不等但同义），所以这里补一次线性扫描。
+     * 只在 key 不相等时才会走到，且集合规模被限制在选项数量级，
+     * 不会退化成原来的 O(N²)。
+     */
+    private static boolean containsAny(Set<String> keys, String k) {
+        if (keys.isEmpty()) return false;
+        for (String s : keys) {
+            if (s.isEmpty()) continue;
+            if (k.contains(s) || s.contains(k)) return true;
+        }
         return false;
     }
 
@@ -390,26 +448,34 @@ public class GQuiz {
             }
         }
         // ② 还不够，从词库补其它词的义项。同样逐个过同义过滤。
+        //
+        // 这里的性能是关键：原实现三层嵌套直接扫 G.words，每条候选都调用
+        // hasSame（线性扫已收集项 + 两个字符串重算 senseKey）。实测单次
+        // 出题 2.5~3.1 秒，而这条路径在真机上跑在 UI 线程里，
+        // 直接构成 ANR。
+        //
+        // 现在：释义在第一次使用时归一化进 senseCache，
+        // 判重用 HashSet<String> 查 key（命中 O(1)），只有 key 不相等时
+        // 才退化成 contains 包含判断（数量少，可接受）。
         if (opts.size() < 4) {
+            ensureSenseCache();
             String wantPos = c.sensePos(pick);
+            Set<String> taken = new HashSet<>();
+            for (String t : opts) taken.add(senseKey(t));
+            for (String t : commonList) taken.add(senseKey(t));
+
             List<String> sameP = new ArrayList<>();   // 同词性优先
             List<String> anyP  = new ArrayList<>();    // 兜底
-            for (GCard o : G.words) {
-                if (o == null || o == c) continue;
-                for (int i = 0; i < o.senseCount(); i++) {
-                    for (String t : splitSenses(o.senseText(i))) {
-                        if (hasSame(opts, t)) continue;
-                        // 常见义已经写在题面上，不能又被当成干扰项摆回来。
-                        // 漏这一条时出现过：equivalent 的常见义「相等的」
-                        // 拆出的「相等」从别的词补进选项里，等于白送一个错项。
-                        if (hasSame(commonList, t)) continue;
-                        if (!wantPos.isEmpty() && o.sensePos(i).equals(wantPos)) {
-                            if (!hasSame(sameP, t)) sameP.add(t);
-                        } else if (!hasSame(anyP, t)) {
-                            anyP.add(t);
-                        }
-                    }
-                }
+            Set<String> sameKeys = new HashSet<>();
+            Set<String> anyKeys  = new HashSet<>();
+
+            for (String[] e : senseCache) {
+                String k = e[0], pos = e[1], t = e[2];
+                if (k.isEmpty() || taken.contains(k)) continue;
+                // 包含关系再确认一次（「收费」vs「收费单」这种 key 不等但同义）
+                if (containsAny(taken, k)) continue;
+                Set<String> keys = (!wantPos.isEmpty() && wantPos.equals(pos)) ? sameKeys : anyKeys;
+                if (keys.add(k)) (!wantPos.isEmpty() && wantPos.equals(pos) ? sameP : anyP).add(t);
             }
             java.util.Collections.shuffle(sameP, rnd);
             java.util.Collections.shuffle(anyP, rnd);
