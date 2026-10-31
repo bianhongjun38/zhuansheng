@@ -3,7 +3,7 @@
   "versionName": "1.5.48",
   "versionInt": 10548,
   "versionCode": 72,
-  "notes": "v1.5.48（versionCode 72）",
+  "notes": "v1.5.48 分段并发下载 + 忽略此版本",
   "source": "github-release",
   "apk": null,
   "apkTooBigForPages": true,
