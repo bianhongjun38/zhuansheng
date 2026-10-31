@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="zh-CN"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>数学工具</title>
+<style>
+:root{--bg:#14161C;--bg2:#1C1F27;--bg3:#262A34;--line:#2C313C;--fg:#E8EAF0;--fg2:#C3C9D6;--fg3:#6B7282;
+--teal:#3ECFAF;--purple:#7C6CF0;--amber:#E0A94A;--red:#E05A54}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+padding-bottom:32px;overscroll-behavior:none}
+.top{display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
+.top .x{font-size:22px;color:var(--fg2);padding:2px 10px 2px 2px;cursor:pointer}
+.top h1{font-size:16px;margin:0;flex:1;font-weight:700}
+.tabs{display:flex;gap:6px;padding:6px 12px 10px;overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{flex:1 0 auto;text-align:center;padding:8px 14px;border-radius:9px;background:var(--bg2);
+color:var(--fg3);font-size:13.5px;font-weight:600;cursor:pointer;white-space:nowrap;transition:.15s}
+.tab.on{background:var(--teal);color:var(--bg)}
+.pane{display:none;padding:0 12px}
+.pane.on{display:block}
+.card{background:var(--bg2);border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:13px;color:var(--fg3);margin:0 0 10px;font-weight:600;letter-spacing:.4px}
+.row{display:flex;gap:8px;align-items:center;margin-bottom:9px}
+.row:last-child{margin-bottom:0}
+label{font-size:12.5px;color:var(--fg3);flex:0 0 auto;min-width:52px}
+input[type=text],input[type=number]{flex:1;background:var(--bg3);border:1px solid var(--line);border-radius:8px;
+color:var(--fg);padding:10px 12px;font:15px ui-monospace,Menlo,Consolas,monospace;outline:none;min-width:0}
+input:focus{border-color:var(--purple)}
+.btn{background:var(--purple);color:#fff;border:0;border-radius:9px;padding:11px 16px;font-size:14px;
+font-weight:700;cursor:pointer;transition:.15s}
+.btn:active{transform:scale(.97)}
+.btn.teal{background:var(--teal);color:var(--bg)}
+.btn.ghost{background:var(--bg3);color:var(--fg2)}
+.btn.sm{padding:8px 13px;font-size:13px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{background:var(--bg3);color:var(--fg2);border-radius:7px;padding:7px 11px;font-size:13px;
+font-family:ui-monospace,Menlo,Consolas,monospace;cursor:pointer;transition:.15s}
+.chip:active{background:var(--teal);color:var(--bg)}
+.chip.on{background:var(--purple);color:#fff}
+#plot{background:var(--bg2);border-radius:12px;overflow:hidden;margin-bottom:12px;min-height:220px;
+display:flex;align-items:center;justify-content:center;color:var(--fg3);font-size:13px}
+#plot svg{display:block;width:100%;height:auto}
+.res{background:var(--bg3);border-radius:9px;padding:12px;font:14px/1.7 ui-monospace,Menlo,Consolas,monospace;
+color:var(--teal);word-break:break-all;white-space:pre-wrap;min-height:44px}
+.res.err{color:var(--red)}
+.res .lab{color:var(--fg3);font-size:12.5px;font-family:system-ui,sans-serif;display:block;margin-top:8px}
+.res .lab:first-child{margin-top:0}
+.res b{color:var(--amber);font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+td:first-child{color:var(--teal);font-family:ui-monospace,Menlo,Consolas,monospace;white-space:nowrap;width:44%}
+td:last-child{color:var(--fg2)}
+tr:last-child td{border-bottom:0}
+.badge{display:inline-block;background:var(--bg3);color:var(--fg3);font-size:11.5px;padding:2px 8px;
+border-radius:6px;margin-left:6px;font-weight:400}
+.ok{color:var(--teal)}.no{color:var(--red)}
+.hint{font-size:12.5px;color:var(--fg3);line-height:1.6;margin-top:8px}
+.q{font:20px ui-monospace,Menlo,Consolas,monospace;color:var(--amber);margin:6px 0 14px;word-break:break-all}
+select{background:var(--bg3);border:1px solid var(--line);border-radius:8px;color:var(--fg);
+padding:9px 10px;font-size:14px;outline:none}
+</style>
+</head><body>
+
+<div class="top"><span class="x" onclick="closeMe()">✕</span><h1>数学工具</h1>
+<span id="libinfo" style="font-size:11.5px;color:#6B7282"></span></div>
+
+<div class="tabs">
+<div class="tab on" onclick="showTab(0)">函数图像</div>
+<div class="tab" onclick="showTab(1)">符号运算</div>
+<div class="tab" onclick="showTab(2)">求导练习</div>
+<div class="tab" onclick="showTab(3)">公式表</div>
+</div>
+
+<div class="pane on">
+  <div id="plot">正在加载绘图库…</div>
+  <div class="card">
+    <div class="row"><input type="text" id="fexpr" placeholder="输入表达式，如 sin(x)、x^2/4、exp(-x)*cos(3*x)"
+      onkeydown="if(event.key==='Enter')addExpr()">
+    <button class="btn sm" onclick="addExpr()">画</button></div>
+    <div class="chips" id="exlist" style="margin-top:10px"></div>
+    <div class="hint">点式子可以删掉它。最多同时画 3 条。</div>
+  </div>
+  <div class="card">
+    <h2>显示范围</h2>
+    <div class="row"><label>x 从</label><input type="number" id="xmin" value="-6" style="flex:1">
+      <label style="min-width:0">到</label><input type="number" id="xmax" value="6" style="flex:1">
+      <button class="btn sm ghost" onclick="redraw()">重画</button></div>
+    <div class="row" style="margin-top:10px">
+      <span class="chip" id="cd" onclick="showDeriv=!showDeriv;this.classList.toggle('on',showDeriv);redraw()">叠加导数 f′(x)</span>
+      <span class="chip on" id="cg" onclick="showGrid=!showGrid;this.classList.toggle('on',showGrid);redraw()">网格</span>
+    </div>
+  </div>
+  <div class="card">
+    <h2>常用</h2>
+    <div class="chips">
+      <span class="chip" onclick="addExpr('sin(x)')">sin(x)</span>
+      <span class="chip" onclick="addExpr('cos(x)')">cos(x)</span>
+      <span class="chip" onclick="addExpr('x^2')">x^2</span>
+      <span class="chip" onclick="addExpr('x^3-3*x')">x^3-3x</span>
+      <span class="chip" onclick="addExpr('exp(x)')">e^x</span>
+      <span class="chip" onclick="addExpr('ln(x)')">ln x</span>
+      <span class="chip" onclick="addExpr('tan(x)')">tan x</span>
+      <span class="chip" onclick="addExpr('sqrt(x)')">√x</span>
+      <span class="chip" onclick="addExpr('1/x')">1/x</span>
+      <span class="chip" onclick="addExpr('x*sin(x)')">x·sin x</span>
+      <span class="chip" onclick="addExpr('exp(-x)*sin(3*x)')">衰减振荡</span>
+    </div>
+  </div>
+</div>
+
+<div class="pane">
+  <div class="card">
+    <h2>输入式子</h2>
+    <div class="row"><input type="text" id="sexpr" value="x^3+2*x" 
+      onkeydown="if(event.key==='Enter')symOp('diff')"></div>
+    <div class="hint">支持 x^n、sin/cos/tan、exp、ln、sqrt、分数、括号。</div>
+  </div>
+  <div class="card">
+    <h2>运算</h2>
+    <div class="chips">
+      <span class="chip" onclick="symOp('diff')">一阶导 d/dx</span>
+      <span class="chip" onclick="symOp('diff2')">二阶导 d²/dx²</span>
+      <span class="chip" onclick="symOp('integ')">积分 ∫dx</span>
+      <span class="chip" onclick="symOp('simpl')">化简</span>
+      <span class="chip" onclick="symOp('expand')">展开</span>
+      <span class="chip" onclick="symOp('factor')">因式分解</span>
+      <span class="chip" onclick="symOp('solve')">解 =0</span>
+    </div>
+  </div>
+  <div class="res" id="symres"><span class="lab">选一个运算</span></div>
+</div>
+
+<div class="pane">
+  <div class="card">
+    <h2>求 f′(x)　<span class="badge">程序判等价，写法不同也算对</span></h2>
+    <div class="q" id="qstem">f(x) = …</div>
+    <div class="row"><input type="text" id="qinput" placeholder="输入导数" 
+      onkeydown="if(event.key==='Enter')checkQuiz()">
+      <button class="btn sm teal" onclick="checkQuiz()">判</button></div>
+    <div class="row"><button class="btn sm ghost" onclick="newQuiz()">换一题</button></div>
+  </div>
+  <div class="res" id="qres"><span class="lab">写出 f′(x)</span></div>
+</div>
+
+<div class="pane">
+  <div class="card">
+    <h2>基本求导公式</h2>
+    <table>
+      <tr><td>(C)′</td><td>0</td></tr>
+      <tr><td>(xⁿ)′</td><td>n·xⁿ⁻¹</td></tr>
+      <tr><td>(sin x)′</td><td>cos x</td></tr>
+      <tr><td>(cos x)′</td><td>−sin x</td></tr>
+      <tr><td>(tan x)′</td><td>sec²x = 1/cos²x</td></tr>
+      <tr><td>(cot x)′</td><td>−csc²x</td></tr>
+      <tr><td>(sec x)′</td><td>sec x·tan x</td></tr>
+      <tr><td>(csc x)′</td><td>−csc x·cot x</td></tr>
+      <tr><td>(eˣ)′</td><td>eˣ</td></tr>
+      <tr><td>(aˣ)′</td><td>aˣ·ln a</td></tr>
+      <tr><td>(ln x)′</td><td>1/x</td></tr>
+      <tr><td>(logₐx)′</td><td>1/(x·ln a)</td></tr>
+      <tr><td>(√x)′</td><td>1/(2√x)</td></tr>
+      <tr><td>(arcsin x)′</td><td>1/√(1−x²)</td></tr>
+      <tr><td>(arccos x)′</td><td>−1/√(1−x²)</td></tr>
+      <tr><td>(arctan x)′</td><td>1/(1+x²)</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>运算法则</h2>
+    <table>
+      <tr><td>(u±v)′</td><td>u′ ± v′</td></tr>
+      <tr><td>(uv)′</td><td>u′v + uv′　（乘积法则）</td></tr>
+      <tr><td>(u/v)′</td><td>(u′v − uv′)/v²　（商法则）</td></tr>
+      <tr><td>[f(g(x))]′</td><td>f′(g(x))·g′(x)　（链式法则）</td></tr>
+    </table>
+    <div class="hint">链式法则是专升本最常考的：看到复合函数先剥外层。</div>
+  </div>
+  <div class="card">
+    <h2>常用积分</h2>
+    <table>
+      <tr><td>∫xⁿ dx</td><td>xⁿ⁺¹/(n+1) + C　(n≠−1)</td></tr>
+      <tr><td>∫(1/x) dx</td><td>ln|x| + C</td></tr>
+      <tr><td>∫eˣ dx</td><td>eˣ + C</td></tr>
+      <tr><td>∫sin x dx</td><td>−cos x + C</td></tr>
+      <tr><td>∫cos x dx</td><td>sin x + C</td></tr>
+      <tr><td>∫sec²x dx</td><td>tan x + C</td></tr>
+      <tr><td>∫1/(1+x²) dx</td><td>arctan x + C</td></tr>
+    </table>
+  </div>
+</div>
+
+<script>
+var $ = function(s){ return document.querySelector(s); };
+var $$ = function(s){ return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+// ── 页签 ──────────────────────────────────────────
+function showTab(i){
+  $$('.tab').forEach(function(t,k){ t.classList.toggle('on', k===i); });
+  $$('.pane').forEach(function(p,k){ p.classList.toggle('on', k===i); });
+  if(i===0) setTimeout(redraw, 30);
+}
+
+// ── 库加载状态 ────────────────────────────────────
+var LIB = { nerdamer:false, fp:false };
+function libStatus(){
+  var s=[];
+  s.push('nerdamer ' + (LIB.nerdamer ? '✓' : '✗'));
+  s.push('function-plot ' + (LIB.fp ? '✓' : '✗'));
+  $('#libinfo').textContent = s.join('   ');
+}
+
+// ── 图像 ──────────────────────────────────────────
+var exprs = ['sin(x)'];
+var colors = ['#3ECFAF','#7C6CF0','#E0A94A','#E05A54','#5AB9E0'];
+var showDeriv = false, showGrid = true;
+
+function redraw(){
+  if(!LIB.fp){ $('#plot').textContent = '绘图库未加载'; return; }
+  var lo = parseFloat($('#xmin').value), hi = parseFloat($('#xmax').value);
+  if(!isFinite(lo) || !isFinite(hi) || lo>=hi){ lo=-6; hi=6; $('#xmin').value=-6; $('#xmax').value=6; }
+
+  // 采样求 y 值域，让曲线不会挤成一条线或冲出画面
+  var ys=[];
+  for(var i=0;i<=200;i++){
+    var x = lo + (hi-lo)*i/200;
+    for(var k=0;k<exprs.length;k++){
+      try{
+        var v = nerdamer(exprs[k], {x: String(x)}).evaluate().text('decimals');
+        v = parseFloat(v);
+        if(isFinite(v)) ys.push(v);
+      }catch(e){}
+    }
+  }
+  ys.sort(function(a,b){return a-b});
+  var ylo=-5, yhi=5;
+  if(ys.length>8){
+    // 取 2%~98% 分位，避开 tan 这类断点造成的巨大值
+    ylo = ys[Math.floor(ys.length*0.02)];
+    yhi = ys[Math.floor(ys.length*0.98)];
+    if(!isFinite(ylo)||!isFinite(yhi)||ylo>=yhi){ ylo=-5; yhi=5; }
+    var pad = (yhi-ylo)*0.15 || 1;
+    ylo-=pad; yhi+=pad;
+  }
+
+  var data = [];
+  for(var j=0;j<exprs.length;j++){
+    data.push({ fn: exprs[j], color: colors[j%colors.length], graphType:'polyline' });
+    if(showDeriv && LIB.nerdamer){
+      try{
+        var d = nerdamer('diff('+exprs[j]+',x)').toString();
+        data.push({ fn: d, color: colors[j%colors.length], graphType:'polyline', nSamples: 400 });
+      }catch(e){}
+    }
+  }
+
+  try{
+    $('#plot').innerHTML = '';
+    functionPlot({
+      target:'#plot', width: Math.min(window.innerWidth-24, 900), height: 300,
+      xAxis:{ domain:[lo,hi] }, yAxis:{ domain:[ylo,yhi] },
+      grid: showGrid, disableZoom: false,
+      data: data
+    });
+  }catch(e){
+    $('#plot').innerHTML = '<div style="padding:20px;color:#E05A54">画不出来：'+esc(e.message)+'</div>';
+  }
+}
+
+function esc(s){ return String(s).replace(/[&<>]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]}); }
+
+function addExpr(s){
+  if(s) { exprs = [s]; }
+  else {
+    var v = $('#fexpr').value.trim();
+    if(!v) return;
+    if(exprs.length>=3) exprs.shift();
+    exprs.push(v);
+  }
+  $('#fexpr').value = '';
+  renderExprList();
+  redraw();
+}
+
+function renderExprList(){
+  var h = '';
+  for(var i=0;i<exprs.length;i++){
+    h += '<span class="chip" style="border-left:3px solid '+colors[i%colors.length]+'" '+
+         'onclick="dropExpr('+i+')">'+esc(exprs[i])+' ✕</span>';
+  }
+  $('#exlist').innerHTML = h;
+}
+function dropExpr(i){ exprs.splice(i,1); if(!exprs.length) exprs=['sin(x)']; renderExprList(); redraw(); }
+
+// ── 符号运算 ──────────────────────────────────────
+function symOp(op){
+  if(!LIB.nerdamer){ $('#symres').innerHTML='<span class="lab">nerdamer 未加载</span>'; return; }
+  var e = $('#sexpr').value.trim();
+  if(!e){ $('#symres').innerHTML='<span class="lab">先输入一个式子</span>'; return; }
+  var r = $('#symres'); r.classList.remove('err');
+  try{
+    var out='';
+    if(op==='diff')      out = nerdamer('diff('+e+',x)').toString();
+    else if(op==='diff2')out = nerdamer('diff(diff('+e+',x),x)').toString();
+    else if(op==='integ')out = nerdamer('integrate('+e+',x)').toString() + ' + C';
+    else if(op==='simpl')out = nerdamer('simplify('+e+')').toString();
+    else if(op==='expand')out = nerdamer('expand('+e+')').toString();
+    else if(op==='factor')out = nerdamer('factor('+e+')').toString();
+    else if(op==='solve'){
+      var s = nerdamer.solve(e===''?'x':e, 'x');
+      out = s.toString();
+    }
+    var label = {diff:'一阶导',diff2:'二阶导',integ:'不定积分',simpl:'化简',
+                 expand:'展开',factor:'因式分解',solve:'解方程 = 0'}[op];
+    r.innerHTML = '<span class="lab">'+label+'</span>'+esc(out);
+  }catch(err){
+    r.classList.add('err');
+    r.innerHTML = '<span class="lab">算不了</span>'+esc(err.message);
+  }
+}
+
+// ── 求导练习 ──────────────────────────────────────
+var QUIZ = [
+  ['x^3','3*x^2'], ['sin(x)','cos(x)'], ['cos(x)','-sin(x)'],
+  ['exp(x)','exp(x)'], ['ln(x)','1/x'], ['x^2*sin(x)','2*x*sin(x)+x^2*cos(x)'],
+  ['sqrt(x)','1/(2*sqrt(x))'], ['tan(x)','sec(x)^2'], ['1/x','-1/x^2'],
+  ['x*exp(x)','exp(x)+x*exp(x)'], ['sin(x)^2','2*sin(x)*cos(x)'],
+  ['(x^2+1)^3','6*x*(x^2+1)^2'], ['x/(x+1)','1/(x+1)^2']
+];
+var curQ=null, qRight=0, qAll=0;
+
+function newQuiz(){
+  var pick = QUIZ[Math.floor(Math.random()*QUIZ.length)];
+  curQ = { f: pick[0], d: pick[1] };
+  $('#qstem').textContent = 'f(x) = ' + curQ.f;
+  $('#qinput').value='';
+  $('#qres').innerHTML='<span class="lab">写出 f′(x)</span>';
+  $('#qres').classList.remove('err');
+}
+
+function checkQuiz(){
+  if(!curQ) return;
+  var mine = $('#qinput').value.trim();
+  if(!mine){ return; }
+  var r = $('#qres');
+  var ok = false, why='';
+  if(LIB.nerdamer){
+    try{
+      // 判等价：两者相减化简为 0
+      var diff = nerdamer('simplify(('+mine+')-( '+curQ.d+' ))').toString();
+      ok = (diff==='0');
+      if(!ok){
+        // 再试数值抽样，防止化简器卡住
+        var same=true, tested=0;
+        for(var i=1;i<=6;i++){
+          var x = (i*0.37+0.11);
+          try{
+            var a = parseFloat(nerdamer(mine,{x:String(x)}).evaluate().text('decimals'));
+            var b = parseFloat(nerdamer(curQ.d,{x:String(x)}).evaluate().text('decimals'));
+            if(isFinite(a)&&isFinite(b)){ tested++; if(Math.abs(a-b)>1e-6*Math.max(1,Math.abs(b))){ same=false; break; } }
+          }catch(e){}
+        }
+        ok = same && tested>=3;
+      }
+    }catch(e){ why = e.message; }
+  }
+  qAll++;
+  if(ok) qRight++;
+  r.classList.toggle('err', !ok);
+  r.innerHTML = '<span class="lab">'+(ok?'✅ 对了':'❌ 不对')+'　本轮 '+qRight+'/'+qAll+'</span>'+
+      (ok ? esc(mine) : '正确答案：'+esc(curQ.d) + (why?'<span class="lab">('+esc(why)+')</span>':''));
+  if(ok) setTimeout(newQuiz, 1200);
+}
+
+// ── 启动 ──────────────────────────────────────────
+function boot(){
+  renderExprList();
+  newQuiz();
+  libStatus();
+  if(LIB.fp) redraw();
+}
+
+// 按顺序加载，nerdamer 必须先于绘图（要拿它算导数与值域）
+(function(){
+  var s1 = document.createElement('script');
+  s1.src = 'nerdamer.js';
+  s1.onload = function(){
+    LIB.nerdamer = true; libStatus();
+    var s2 = document.createElement('script');
+    s2.src = 'function-plot.js';
+    s2.onload = function(){ LIB.fp = true; libStatus(); redraw(); };
+    s2.onerror = function(){ libStatus(); };
+    document.head.appendChild(s2);
+  };
+  s1.onerror = function(){ libStatus(); };
+  document.head.appendChild(s1);
+})();
+
+document.addEventListener('DOMContentLoaded', boot);
+if(document.readyState!=='loading') setTimeout(boot,0);
+</script>
+<script>function closeMe(){ if(window.MathHost && MathHost.close) MathHost.close(); }</script>
+</body></html>

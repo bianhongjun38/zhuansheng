@@ -497,16 +497,28 @@ def main():
               encoding="utf-8").read(),
           "用户要能看到自己装的是哪一版")
 
-    # ── 更新取值策略（2026-10-27 真实故障）────────────────
-    # 现场：update.json 停在 1.2.3，GitHub 上已 1.4.1，App 却报「已是最新」。
-    # 根因是三源降级"读到第一份就返回"，过期的那份排第一。
-    # 光靠 VerTest 断言不够 —— 还得钉死源码真的改成了取最大值。
+    # ── 更新取值策略（2026-10-27 真实故障 → 2026-10-31 架构升级）────
+    # 当时的现场：update.json 停在 1.2.3，GitHub 上已 1.4.1，App 却报
+    # 「已是最新」；第一版修法是"三源取最大值"。
+    # 2026-10-31 起策略再升级：GitHub Release 成为**唯一权威**清单源 ——
+    # fetchLatestAny() 先读 GitHub，读到即用它的版本号做判定；
+    # update.json 降级为兜底（GitHub 完全读不到时才用）+ 补充更新说明，
+    # 它的版本号不再参与判定。原因：两份静态清单各说各话的分裂状态
+    # （tag 停 v1.5.24、update.json 已 1.5.39）排查极其困难，
+    # 版本判定必须只有一个事实来源（Update.java fetchLatestAny 内注释）。
+    # 因此老断言（要求出现 lt.code > best.code 的取最大值逻辑）已过时：
+    # 不是代码退步，是策略换成了"单一权威源"。本断言改钉现行结构：
+    #   ① 先调 fetchFromGithub()，读到（gh != null）立即返回；
+    #   ② fetchManifest 只能出现在它之后（兜底位）；
+    #   ③ 老的取最大值逻辑不允许回来。
     body = extract_fn(upd_src, "private Latest fetchLatestAny")
-    check("三源取版本最高者，而非读到即返回",
+    check("更新版本判定以 GitHub Release 为唯一权威（update.json 仅兜底）",
           body is not None
-          and "lt.code > best.code" in body
-          and "if (lt != null) return lt;" not in body,
-          "过期清单不能压住更新的来源")
+          and "fetchFromGithub()" in body
+          and "if (gh != null)" in body
+          and "lt.code > best.code" not in body
+          and body.find("fetchFromGithub()") < body.find("fetchManifest("),
+          "2026-10-31 架构：GitHub 权威优先读到即用；update.json 只兜底/补说明")
 
     # 清单必须存在且不比 version.json 旧。
     # 这次翻车就是"发了版没更新清单"，光看代码看不出来。
@@ -523,12 +535,22 @@ def main():
                   man_int >= loc_int,
                   "清单 %s / 本地 %s" % (man.get("versionName"), vj["versionName"]))
             apk = man.get("apk") or {}
+            # 2026-10-31：APK 447 MB 远超 Cloudflare Pages 单文件 25 MiB 上限，
+            # 清单把 apk 置为 null（apkTooBigForPages=true），安装包地址改写在
+            # 顶层 apkUrl（GitHub 资产 API 端点），文件名/体积在 apkName/apkSize。
+            # 发版pages.py 按是否超限二选一输出（≤25MiB 时仍是老形态 apk.url），
+            # 客户端 Update.fetchManifest 两种形态都认（Update.java:410-419）。
+            # 所以断言也做双形态兼容：apk.url 或顶层 apkUrl 任一存在即算有地址；
+            # 包名断言同理认 apk.name 或顶层 apkName。不是放水 —— 两种形态
+            # 都是发版脚本会真实产出的、客户端真实会读的结构。
+            apk_url = apk.get("url") or man.get("apkUrl") or ""
             check("update.json 带安装包地址",
-                  bool(apk.get("url")),
-                  str(apk.get("url")))
+                  bool(apk_url),
+                  str(apk_url))
+            apk_name = apk.get("name") or man.get("apkName") or ""
             check("update.json 记录的包就是本地这版",
-                  apk.get("name") == "zhuansheng-v%s.apk" % vj["versionName"],
-                  str(apk.get("name")))
+                  apk_name == "zhuansheng-v%s.apk" % vj["versionName"],
+                  str(apk_name))
     except Exception as e:
         check("update.json 可解析", False, str(e))
 

@@ -284,6 +284,28 @@ def sync_atlas(mode):
     return n, total
 
 
+# 数学工具站点（assets/math/）：nerdamer + function-plot + index.html。
+# 这三个文件在 APK 里必须有 —— 缺了 MainActivity 会退回手写的老 MathView，
+# 求导练习就只剩"比字符串"，学生写法不同一律判错。构建时直接拦下来。
+MATH_ASSETS = ("index.html", "nerdamer.js", "function-plot.js")
+
+
+def check_math_assets():
+    """确认数学工具的三个文件都在。缺一个就退出，不产出残废包。"""
+    d = os.path.join(ASSETS, "math")
+    if not os.path.isdir(d):
+        print("\n❌ 缺少数学工具目录：%s" % d)
+        print("   这一版会退回手写 MathView（判不了等价）。")
+        print("   真要这样发包，先删掉 MainActivity 里的 mathTool 引用。")
+        sys.exit(1)
+    missing = [f for f in MATH_ASSETS if not os.path.isfile(os.path.join(d, f))]
+    if missing:
+        print("\n❌ assets/math/ 缺文件：%s" % ", ".join(missing))
+        sys.exit(1)
+    total = sum(os.path.getsize(os.path.join(d, f)) for f in MATH_ASSETS)
+    print("\n▶ 数学工具：%d 个文件，%.0f KB" % (len(MATH_ASSETS), total / 1024.0))
+
+
 def zip_add(z, fp, arcname):
     """按扩展名决定压缩级别。媒体文件直接 store。"""
     ext = os.path.splitext(fp)[1].lower()
@@ -441,6 +463,10 @@ def main():
     # ── 4.5 同步雅思词图 ─────────────────────────────────
     if atlas_mode:
         sync_atlas(atlas_mode)
+
+    # 数学工具是独立目录，sync_atlas 不会碰它。
+    # 放这里校验是为了让缺文件在打包前就报错，而不是等用户装上发现没这个功能。
+    check_math_assets()
 
     # ── 5. 把 dex + assets 塞进 APK ─────────────────────
     print("\n▶ 把 classes.dex 与 assets 写入 APK")

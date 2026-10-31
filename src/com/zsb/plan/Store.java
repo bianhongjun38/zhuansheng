@@ -29,7 +29,7 @@ import java.util.List;
 public class Store extends StateLogic {
 
     private static final String DB = "zsb.db";
-    private static final int DB_VER = 3;
+    private static final int DB_VER = 4;
 
     private final Db db;
     private final SharedPreferences legacy;
@@ -101,6 +101,20 @@ public class Store extends StateLogic {
                     + " r INTEGER NOT NULL, w INTEGER NOT NULL, ms INTEGER NOT NULL,"
                     + " started INTEGER NOT NULL, rev TEXT UNIQUE, up INTEGER NOT NULL DEFAULT 0)");
 
+            // 英语五练的逐词进度（v4 新增）。
+            //
+            // 以前每进一次五练都从词库第 1 个字开始 —— open() 传 from=0，
+            // next() 用 queue.get(idx++)，idx 进门就归零，一个进度字节都没存。
+            // 练第 20 次和第 1 次看到的完全是同一批词，等于每次都在做无用功。
+            //
+            // 记的是「每个词最后一次被练到的时间 + 累计对错」，
+            // 不是「学到第几个」—— 因为五练是抽题型、会跳词，
+            // 用下标记录会在跳词时错位。用 w（单词）做主键天然幂等。
+            d.execSQL("CREATE TABLE IF NOT EXISTS eng_word ("
+                    + "w TEXT NOT NULL PRIMARY KEY,"
+                    + " r INTEGER NOT NULL DEFAULT 0, wc INTEGER NOT NULL DEFAULT 0,"
+                    + " last INTEGER NOT NULL DEFAULT 0)");
+
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_done_d ON done(d)");
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_timing_d ON timing(d)");
             d.execSQL("CREATE INDEX IF NOT EXISTS idx_wrong_s ON wrong(s)");
@@ -122,6 +136,15 @@ public class Store extends StateLogic {
                         + "d TEXT NOT NULL, mode INTEGER NOT NULL,"
                         + " r INTEGER NOT NULL, w INTEGER NOT NULL, ms INTEGER NOT NULL,"
                         + " started INTEGER NOT NULL, rev TEXT UNIQUE, up INTEGER NOT NULL DEFAULT 0)");
+            }
+            // v3 → v4：加五练逐词进度表。只加表，不动已有进度。
+            // 老用户升级后这张表是空的，第一次练会从头开始 —— 那正好是
+            // 修复前的行为，不会比现在更差，之后才开始真正记住练到哪。
+            if (o < 4) {
+                d.execSQL("CREATE TABLE IF NOT EXISTS eng_word ("
+                        + "w TEXT NOT NULL PRIMARY KEY,"
+                        + " r INTEGER NOT NULL DEFAULT 0, wc INTEGER NOT NULL DEFAULT 0,"
+                        + " last INTEGER NOT NULL DEFAULT 0)");
             }
         }
     }
@@ -181,6 +204,37 @@ public class Store extends StateLogic {
         } catch (Exception ignored) {
             // 迁移失败就当新用户，不让 App 起不来
         }
+    }
+
+    // ── 通用键值（更新忽略版本、下载偏好等）──────────────────
+    // 放 kv 表而不是另开 SharedPreferences：偏好已经分散在
+    // zsb_state / 各自 SP 里，再开一个新的只会让"这设置存哪了"更难查。
+
+    /** 读一个字符串设置，没有就返回 def。 */
+    public String kvGet(String k, String def) {
+        try {
+            android.database.Cursor c = db.getReadableDatabase().rawQuery(
+                    "SELECT v FROM kv WHERE k=?", new String[]{k});
+            String v = null;
+            if (c.moveToFirst()) v = c.getString(0);
+            c.close();
+            return v == null ? def : v;
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /** 写一个字符串设置。value 为 null 表示删除。 */
+    public void kvSet(String k, String v) {
+        try {
+            if (v == null) {
+                db.getWritableDatabase().execSQL(
+                        "DELETE FROM kv WHERE k=?", new Object[]{k});
+            } else {
+                db.getWritableDatabase().execSQL(
+                        "INSERT OR REPLACE INTO kv(k,v) VALUES(?,?)", new Object[]{k, v});
+            }
+        } catch (Exception ignored) { }
     }
 
     // ── 写库（关键动作立即写）──────────────────────────────
@@ -515,5 +569,91 @@ public class Store extends StateLogic {
         }
         c.close();
         return out;
+    }
+
+    // ══ 英语五练的逐词进度（v4）═════════════════════════════
+    //
+    // 为什么要有这一块：
+    //   修复前每进一次五练都从词库第 1 个字开始，练第 N 次和第 1 次
+    //   看到的完全是同一批词。用户说的是"完全没必要，每次进去都是从 a 开始"。
+    //
+    // 为什么按单词记而不是记下标：
+    //   五练是抽题型、会跳词（某个词出不了题就 idx++ 跳过）。
+    //   记下标会在跳词时错位，记单词本身永远对得上。
+
+    /** 单词进度：练过几次、对几次、最后一次是什么时候。 */
+    public static class WordProg {
+        public String w = "";
+        public int right;      // 累计答对次数
+        public int wrong;      // 累计答错次数
+        public long last;      // 最后一次练到的时间戳（毫秒）
+        public int seen() { return right + wrong; }
+    }
+
+    /**
+     * 读出全部单词进度。
+     *
+     * 一次全读（词库几千条，SQLite 全表扫描是毫秒级），
+     * 比每道题查一次数据库快得多，也不用管游标泄漏。
+     */
+    public java.util.Map<String, WordProg> engWordProgress() {
+        java.util.Map<String, WordProg> out = new java.util.HashMap<>();
+        Cursor c = db.getReadableDatabase().rawQuery(
+                "SELECT w,r,wc,last FROM eng_word", null);
+        while (c.moveToNext()) {
+            WordProg p = new WordProg();
+            p.w = c.getString(0);
+            p.right = c.getInt(1);
+            p.wrong = c.getInt(2);
+            p.last = c.getLong(3);
+            if (p.w != null) out.put(p.w, p);
+        }
+        c.close();
+        return out;
+    }
+
+    /**
+     * 记一道题的结果。
+     *
+     * 用「先查再写」而不是 SQL 里的 r=r+1：
+     * 后者一条语句就够，但要求 API 24+ 的 upsert 语法，
+     * 本项目 minSdk 23，得走兼容路径。这里并发压力为 0（一个人在答题），
+     * 读改写完全够用，代码也更好读。
+     */
+    public void recordEngWord(String word, boolean correct, long when) {
+        if (word == null || word.isEmpty()) return;
+        SQLiteDatabase w = db.getWritableDatabase();
+        Cursor c = w.rawQuery("SELECT r,wc FROM eng_word WHERE w=?", new String[]{word});
+        int r = 0, wc = 0;
+        boolean exists = c.moveToNext();
+        if (exists) { r = c.getInt(0); wc = c.getInt(1); }
+        c.close();
+        if (correct) r++; else wc++;
+        ContentValues cv = new ContentValues();
+        cv.put("w", word);
+        cv.put("r", r);
+        cv.put("wc", wc);
+        cv.put("last", when);
+        w.insertWithOnConflict("eng_word", null, cv, SQLiteDatabase.CONFLICT_REPLACE);
+    }
+
+    /**
+     * 进度总览：[已练词数, 总词数]。
+     *
+     * 首页要显示"五练进度 128/3500"，没有这个数字用户根本不知道
+     * 自己练到哪了 —— 这也是"每次都从头"最让人恼火的地方：
+     * 看不到进度，就没有推进感。
+     */
+    public int engWordTouched() {
+        Cursor c = db.getReadableDatabase().rawQuery("SELECT COUNT(*) FROM eng_word", null);
+        int n = 0;
+        if (c.moveToNext()) n = c.getInt(0);
+        c.close();
+        return n;
+    }
+
+    /** 清空五练进度（"重新开始"用）。 */
+    public void resetEngWordProgress() {
+        db.getWritableDatabase().execSQL("DELETE FROM eng_word");
     }
 }

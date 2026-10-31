@@ -1,18 +1,18 @@
 {
   "ok": true,
-  "versionName": "1.5.45",
-  "versionInt": 10545,
-  "versionCode": 69,
-  "notes": "词图并入后安装包 447.5MB，超出 Cloudflare Pages 单文件 25MiB 上限，APK 改由 GitHub Release 分发；下载前对候选源测速择优，国内直连不稳时自动切加速镜像；教材 PDF 仍在 pages.dev。",
+  "versionName": "1.5.48",
+  "versionInt": 10548,
+  "versionCode": 72,
+  "notes": "v1.5.48（versionCode 72）",
   "source": "github-release",
   "apk": null,
   "apkTooBigForPages": true,
-  "apkUrl": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/assets/694156227",
-  "apkSize": 469234099,
-  "apkName": "zhuansheng-v1.5.45.apk",
+  "apkUrl": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/assets/695055002",
+  "apkSize": 469475974,
+  "apkName": "zhuansheng-v1.5.48.apk",
   "github": {
-    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.45",
-    "tag": "v1.5.45",
-    "downloadUrl": "https://github.com/bianhongjun38/zhuansheng/releases/download/v1.5.45/zhuansheng-v1.5.45.apk"
+    "release": "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/tags/v1.5.48",
+    "tag": "v1.5.48",
+    "downloadUrl": "https://github.com/bianhongjun38/zhuansheng/releases/download/v1.5.48/zhuansheng-v1.5.48.apk"
   }
 }

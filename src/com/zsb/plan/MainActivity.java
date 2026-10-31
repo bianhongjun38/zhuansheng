@@ -59,6 +59,14 @@ public class MainActivity extends Activity {
     private QuizView quizView;
     private WordView wordView;
     private MathView mathView;
+    /**
+     * 数学工具（开源库版）。
+     *
+     * 与 mathView 并存：老的 MathView 是手写的表达式解析 + Canvas 画图，
+     * 算不出 d/dx(x²·sin x)。新版用 nerdamer + function-plot，能真算。
+     * 但新版依赖 assets/math 打包，构建时没带就退回老版 —— 不让用户看到白屏。
+     */
+    private MathToolView mathTool;
     private EngView engView;
     private AtlasView atlasView;
     private BoardView boardView;
@@ -107,6 +115,7 @@ public class MainActivity extends Activity {
         quizView = new QuizView(this, store);
         wordView = new WordView(this);
         mathView = new MathView(this);
+        mathTool = new MathToolView(this);
         engView = new EngView(this, store);
         atlasView = new AtlasView(this);
         atlasView.setOnExit(() -> { tab = TAB_ATLAS; render(); });
@@ -292,6 +301,12 @@ public class MainActivity extends Activity {
     private void renderAtlas() {
         boolean ready = AssetBridge.hasSite(this);
 
+        // ── 打卡状态，放最上面 ─────────────────────────────
+        // 用户的话："雅思模块的打卡点亮的直接显示在这个界面下，方便看每日打卡"。
+        // 放最顶是因为它回答的是"我今天做完了没"——这是打开这一栏时
+        // 最想确认的一件事，不该藏在入口按钮下面。
+        content.addView(buildCheckinCard());
+
         LinearLayout head = card("雅思词图 · IELTS Word Atlas", null);
 
         TextView h = new TextView(this);
@@ -373,6 +388,184 @@ public class MainActivity extends Activity {
             note.addView(t);
         }
         content.addView(note);
+    }
+
+    /**
+     * 雅思打卡卡：今天打卡没、连了几天、这一周什么样。
+     *
+     * 数据从 WebView 的 localStorage 读（见 {@link AtlasStats}），
+     * 异步回来之前先显示占位，读到再填 —— 不让这一栏出现"先空一下再跳到 0"。
+     */
+    private View buildCheckinCard() {
+        final LinearLayout box = card("今日打卡", "背了就亮，断签从零算");
+
+        final LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        box.addView(body);
+
+        // 占位
+        TextView wait = new TextView(this);
+        wait.setText("正在读取…");
+        wait.setTextColor(C_FG3);
+        wait.setTextSize(13);
+        wait.setPadding(0, dp(6), 0, dp(6));
+        body.addView(wait);
+
+        if (!AssetBridge.hasSite(this)) return box;
+
+        // 挂载点是 1×1 的隐形容器，AtlasStats 用它放临时 WebView
+        final android.widget.FrameLayout host = new android.widget.FrameLayout(this);
+        box.addView(host, new LinearLayout.LayoutParams(1, 1));
+
+        final java.util.concurrent.atomic.AtomicBoolean once =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        AtlasStats.load(this, host, new AtlasStats.OnCheckin() {
+            @Override public void on(final AtlasStats.Checkin c) {
+                if (!once.compareAndSet(false, true)) return;
+                body.removeAllViews();
+                fillCheckin(body, c);
+            }
+        });
+        return box;
+    }
+
+    /** 把读到的打卡数据画出来。 */
+    private void fillCheckin(LinearLayout body, AtlasStats.Checkin c) {
+        if (c == null || !c.ok) {
+            TextView t = new TextView(this);
+            t.setText("还没有雅思学习记录。点下面的「打开雅思词图」开始，"
+                    + "背完今天的词这里就会亮起来。");
+            t.setTextColor(C_FG3);
+            t.setTextSize(12.5f);
+            t.setLineSpacing(dp(3), 1f);
+            body.addView(t);
+            return;
+        }
+
+        // ── 状态行 ────────────────────────────────────────
+        LinearLayout stateRow = new LinearLayout(this);
+        stateRow.setOrientation(LinearLayout.HORIZONTAL);
+        stateRow.setGravity(Gravity.CENTER_VERTICAL);
+        stateRow.setPadding(0, dp(2), 0, dp(10));
+
+        TextView dot = new TextView(this);
+        boolean today = c.checkedToday();
+        dot.setText(today ? "●" : "○");
+        dot.setTextSize(17);
+        dot.setTextColor(today ? C_TEAL : C_FG3);
+        dot.setPadding(0, 0, dp(8), 0);
+        stateRow.addView(dot);
+
+        TextView main = new TextView(this);
+        main.setText(today ? "今天已打卡" : "今天还没打卡");
+        main.setTextSize(14.5f);
+        main.setTypeface(Typeface.DEFAULT_BOLD);
+        main.setTextColor(today ? C_TEAL : C_FG2);
+        main.setLayoutParams(new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        stateRow.addView(main);
+
+        TextView streak = new TextView(this);
+        streak.setText(c.streak > 0 ? "🔥 连续 " + c.streak + " 天" : "还没开始连");
+        streak.setTextSize(12.5f);
+        streak.setTypeface(Typeface.DEFAULT_BOLD);
+        streak.setTextColor(c.streak > 0 ? C_AMBER : C_FG3);
+        stateRow.addView(streak);
+        body.addView(stateRow);
+
+        // ── 今日数字 ──────────────────────────────────────
+        if (today) {
+            TextView d = new TextView(this);
+            d.setText("新词 " + c.todayNew + " 个　复习 " + c.todayReview + " 个　共 "
+                    + c.todayTotal() + " 个词");
+            d.setTextColor(C_FG2);
+            d.setTextSize(12.5f);
+            d.setPadding(0, 0, 0, dp(10));
+            body.addView(d);
+        }
+
+        // ── 一周柱状图 ────────────────────────────────────
+        body.addView(buildWeekBars(c));
+
+        TextView total = new TextView(this);
+        total.setText("累计学过 " + c.learned + " 个词");
+        total.setTextColor(C_FG3);
+        total.setTextSize(11.5f);
+        total.setPadding(0, dp(8), 0, 0);
+        body.addView(total);
+    }
+
+    /**
+     * 最近 7 天柱状图。
+     *
+     * 用 TextView 拼而不是画 Canvas：柱高就是 layout_weight，
+     * 不用自己算像素、不用处理 dp/px 换算，屏幕旋转也不会错位。
+     */
+    private View buildWeekBars(AtlasStats.Checkin c) {
+        LinearLayout wrap = new LinearLayout(this);
+        wrap.setOrientation(LinearLayout.HORIZONTAL);
+        wrap.setGravity(Gravity.BOTTOM);
+        wrap.setPadding(0, dp(4), 0, 0);
+
+        final int max = c.weekMax();
+        final int barMaxH = dp(44);
+        String[] labels = {"6天前", "5天前", "4天前", "3天前", "前天", "昨天", "今天"};
+
+        for (int i = 0; i < 7; i++) {
+            final int v = c.week[i];
+            final boolean isToday = (i == 6);
+
+            LinearLayout col = new LinearLayout(this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            col.setGravity(Gravity.CENTER_HORIZONTAL | Gravity.BOTTOM);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            col.setLayoutParams(clp);
+
+            // 数值
+            TextView num = new TextView(this);
+            num.setText(v > 0 ? String.valueOf(v) : "");
+            num.setTextSize(9.5f);
+            num.setTextColor(isToday && v > 0 ? C_TEAL : C_FG3);
+            num.setGravity(Gravity.CENTER);
+            col.addView(num);
+
+            // 柱子：占位条 + 实心条
+            android.widget.FrameLayout slot = new android.widget.FrameLayout(this);
+            LinearLayout.LayoutParams slp = new LinearLayout.LayoutParams(
+                    dp(16), barMaxH);
+            slp.topMargin = dp(2);
+            slp.bottomMargin = dp(4);
+            slot.setLayoutParams(slp);
+
+            View empty = new View(this);
+            empty.setBackground(roundRect(C_BG3, dp(4), 0));
+            slot.addView(empty, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+            if (v > 0) {
+                int h = Math.max(dp(4), (int) (barMaxH * (v / (float) max)));
+                View bar = new View(this);
+                bar.setBackground(roundRect(isToday ? C_TEAL : C_PURPLE, dp(4), 0));
+                android.widget.FrameLayout.LayoutParams blp =
+                        new android.widget.FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, h);
+                blp.gravity = Gravity.BOTTOM;
+                slot.addView(bar, blp);
+            }
+            col.addView(slot);
+
+            // 标签
+            TextView lab = new TextView(this);
+            lab.setText(labels[i]);
+            lab.setTextSize(8.5f);
+            lab.setTextColor(isToday ? C_TEAL : C_FG3);
+            lab.setGravity(Gravity.CENTER);
+            col.addView(lab);
+
+            wrap.addView(col);
+        }
+        return wrap;
     }
 
     // ══ 今日 ══════════════════════════════════════════════
@@ -1194,10 +1387,30 @@ public class MainActivity extends Activity {
         // 常驻工具入口：数学和英语的能力不该只在某一天的任务里出现。
         // 数学题库已经删了（用户不要），换成能画图、能查公式表的工具。
         LinearLayout tools = card("学习工具", "随时可用，不用等到某一天的任务");
-        tools.addView(wideBtn("📈 函数图像（可叠导数曲线、看切线）", () -> mathView.open(0)));
-        tools.addView(wideBtn("📋 求导公式对照表（40 条，点一条就画图）", () -> mathView.open(1)));
-        tools.addView(wideBtn("✍ 求导练习（写答案，程序判等价）", () -> mathView.open(2)));
-        tools.addView(wideBtn("🔤 英语五练（英译中/中译英/拼写/填空/词性）", () -> engView.open()));
+        // 数学入口：新版优先，没打包就退回老版。
+        // 判断放在点击时而不是构建时 —— 用户装了哪个包就决定走哪条路。
+        final boolean hasMathTool = AssetBridge.hasMath(this);
+        tools.addView(wideBtn(
+                hasMathTool ? "📈 函数图像（可叠导数、可缩放拖拽）" : "📈 函数图像（可叠导数曲线、看切线）",
+                () -> { if (AssetBridge.hasMath(MainActivity.this)) mathTool.open(0); else mathView.open(0); }));
+        tools.addView(wideBtn(
+                hasMathTool ? "📋 求导与积分公式表" : "📋 求导公式对照表（40 条，点一条就画图）",
+                () -> { if (AssetBridge.hasMath(MainActivity.this)) mathTool.open(3); else mathView.open(1); }));
+        tools.addView(wideBtn(
+                hasMathTool ? "✍ 求导练习（真算等价，写法不同也算对）" : "✍ 求导练习（写答案，程序判等价）",
+                () -> { if (AssetBridge.hasMath(MainActivity.this)) mathTool.open(2); else mathView.open(2); }));
+        if (hasMathTool) {
+            tools.addView(wideBtn("∫ 符号运算（求导/积分/化简/解方程）",
+                    () -> mathTool.open(1)));
+        }
+        // 五练入口带上真实进度。不带的话用户完全看不出练到哪了 ——
+        // 而"每次都从 a 开始"正是因为没有进度可看、也没有进度可用。
+        int touched = 0;
+        try { touched = store.engWordTouched(); } catch (Exception ignored) {}
+        String drillLabel = touched > 0
+                ? "🔤 英语五练　已练 " + touched + " 词 · 继续"
+                : "🔤 英语五练（英译中/中译英/拼写/填空/词性）";
+        tools.addView(wideBtn(drillLabel, () -> engView.open()));
         tools.addView(wideBtn("🔄 线性变换（2×2 矩阵怎么拉扯平面、特征方向）",
                 () -> linalgView.open()));
         content.addView(tools);
@@ -1313,6 +1526,20 @@ public class MainActivity extends Activity {
                 btnUpd.setText("检查更新 · 当前 v" + local + "（已是最新）");
             }
         });
+        // 忽略过版本的用户需要一条回来的路，否则"忽略"就成了永久关闭更新提示。
+        // 只在真的忽略过某个版本时出现，平时不占位置。
+        final String skipped = updater.skippedVersion();
+        if (skipped != null) {
+            c2.addView(wideBtn("已忽略 v" + skipped + " · 点此恢复更新提示", () ->
+                    new AlertDialog.Builder(this)
+                            .setMessage("恢复后会重新提示 v" + skipped + " 及其后的版本。")
+                            .setNegativeButton("取消", null)
+                            .setPositiveButton("恢复", (x, y) -> {
+                                updater.clearSkip();
+                                toast("已恢复更新提示");
+                                render();
+                            }).show()));
+        }
         c2.addView(wideBtn("清空全部进度", () -> new AlertDialog.Builder(this)
                 .setMessage("清空全部勾选、默写和计时？无法撤销。")
                 .setNegativeButton("取消", null)

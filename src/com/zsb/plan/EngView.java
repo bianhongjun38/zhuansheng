@@ -60,6 +60,19 @@ public class EngView {
 
     private List<EngTrain.W> all = new ArrayList<EngTrain.W>();
     private List<EngTrain.W> queue = new ArrayList<EngTrain.W>();
+
+    /**
+     * 逐词进度（v4 新增）。
+     *
+     * 修复前：每次 open() 都从 queue 第 0 个开始，idx 进门归零，
+     * 练过多少次都回到 a 开头。用户原话："完全没必要，每次进去都是从 a 开始"。
+     *
+     * 现在这轮练哪些词由这份进度决定：没练过的优先，练过但上次很差的其次，
+     * 刚练完对的排最后。开一轮时算一次，这一轮内不再变。
+     */
+    private java.util.Map<String, Store.WordProg> prog = new java.util.HashMap<String, Store.WordProg>();
+    /** 本轮待练词数上限。一轮几百题没人做得完，50 是个能做完的量。 */
+    private static final int ROUND_SIZE = 50;
     private int[] modes = {1, 2, 3, 4, 5};
     private String title = "英语训练";
 
@@ -117,8 +130,16 @@ public class EngView {
         queue.clear();
         int a = Math.max(1, from);
         int b = to <= 0 ? all.size() : Math.min(to, all.size());
-        for (int i = a - 1; i < b && i < all.size(); i++) queue.add(all.get(i));
-        if (queue.isEmpty()) queue.addAll(all);
+        List<EngTrain.W> pool = new ArrayList<EngTrain.W>();
+        for (int i = a - 1; i < b && i < all.size(); i++) pool.add(all.get(i));
+        if (pool.isEmpty()) pool.addAll(all);
+
+        // 从候选池里按进度挑本轮要练的词。
+        // 入口传了区间（比如"练今天这批词"）就老老实实练这批，
+        // 只是批内按进度排序；全量入口才做整库挑选。
+        boolean scoped = (from > 0 || to > 0);
+        queue = pickByProgress(pool, scoped ? pool.size() : ROUND_SIZE);
+        if (queue.isEmpty()) queue.addAll(pool);
         idx = 0;
         right = 0;
         wrong = 0;
@@ -154,6 +175,80 @@ public class EngView {
         build();
         next();
         dlg.show();
+    }
+
+    /**
+     * 按进度挑本轮要练的词。
+     *
+     * 排序依据（这是"每次都从 a 开始"的正解）：
+     *   ① 没练过的排最前 —— 新词最该练；
+     *   ② 练过但错误率高的次之 —— 错题优先复习；
+     *   ③ 练过且全对的排最后 —— 已经会了，别一直重复。
+     *
+     * 同档内随机打散：原来顺序取词导致每次都是 a、abandon、ability……
+     * 词表按字母序，等于永远在背 A 开头的词。
+     *
+     * @param limit 本轮取多少个词；<=0 表示全取
+     */
+    private List<EngTrain.W> pickByProgress(List<EngTrain.W> pool, int limit) {
+        List<EngTrain.W> out = new ArrayList<EngTrain.W>();
+        if (pool.isEmpty()) return out;
+
+        if (store != null) {
+            try {
+                prog = store.engWordProgress();
+            } catch (Exception ignored) {
+                prog = new java.util.HashMap<String, Store.WordProg>();
+            }
+        }
+
+        List<EngTrain.W> fresh = new ArrayList<EngTrain.W>();   // 没练过
+        List<EngTrain.W> weak = new ArrayList<EngTrain.W>();    // 练过错得多
+        List<EngTrain.W> known = new ArrayList<EngTrain.W>();   // 练过且都对
+
+        for (EngTrain.W w : pool) {
+            Store.WordProg p = prog.get(w.w);
+            if (p == null || p.seen() == 0) fresh.add(w);
+            else if (p.wrong > 0) weak.add(w);
+            else known.add(w);
+        }
+
+        java.util.Collections.shuffle(fresh, rnd);
+        java.util.Collections.shuffle(weak, rnd);
+        java.util.Collections.shuffle(known, rnd);
+
+        // 错题按错误次数从多到少再排一次，错得最多的最先复习
+        java.util.Collections.sort(weak, new java.util.Comparator<EngTrain.W>() {
+            @Override public int compare(EngTrain.W x, EngTrain.W y) {
+                Store.WordProg a = prog.get(x.w), b = prog.get(y.w);
+                int wa = a == null ? 0 : a.wrong, wb = b == null ? 0 : b.wrong;
+                return wb - wa;
+            }
+        });
+
+        out.addAll(fresh);
+        out.addAll(weak);
+        out.addAll(known);
+
+        if (limit > 0 && out.size() > limit) {
+            // 截断也要保证配比：新词占多数，其余留给错题复习。
+            // 全给新词会让错题一直压着不复习；全给错题又推进不了新词。
+            List<EngTrain.W> sel = new ArrayList<EngTrain.W>();
+            int wantFresh = Math.min(fresh.size(), (int) (limit * 0.7));
+            int wantWeak = Math.min(weak.size(), limit - wantFresh);
+            sel.addAll(fresh.subList(0, wantFresh));
+            sel.addAll(weak.subList(0, wantWeak));
+            // 还没凑满就从已知词里补
+            if (sel.size() < limit) {
+                int need = Math.min(known.size(), limit - sel.size());
+                sel.addAll(known.subList(0, need));
+            }
+            // 仍然不够（比如这批词大部分都已掌握且不够 limit）就全给
+            if (sel.isEmpty()) sel.addAll(out.subList(0, Math.min(limit, out.size())));
+            java.util.Collections.shuffle(sel, rnd);
+            out = sel;
+        }
+        return out;
     }
 
     // ── 词库 ──────────────────────────────────────────────
@@ -415,6 +510,7 @@ public class EngView {
                         wrong++;
                         recordWrong(cur);
                     }
+                    saveWordProgress(cur, verdict == EngTrain.J_RIGHT);
                     feedback = "";
                     renderQuestion();
                 });
@@ -643,6 +739,13 @@ public class EngView {
         lp.topMargin = dp(12);
         again.setLayoutParams(lp);
         again.setOnClickListener(v -> {
+            // ⚠ 以前这里只是把 idx 归零、原样再走一遍同一批词。
+            // 配合"每次进门都从 a 开始"，用户看到的就是无穷无尽的同一批词。
+            // 现在按最新进度重挑一批 —— 刚才答对的排后面，答错的优先回来。
+            int keepRight = right, keepWrong = wrong;
+            List<EngTrain.W> next = pickByProgress(all, ROUND_SIZE);
+            if (next.isEmpty()) next.addAll(all);
+            queue = next;
             idx = 0;
             right = 0;
             wrong = 0;
@@ -650,6 +753,10 @@ public class EngView {
             roundStart = System.currentTimeMillis();
             roundRev = "";
             next();
+            // 上一轮的对错已经进进度表，这里不再叠加显示
+            if (keepRight + keepWrong > 0) {
+                tvProgress.setText("新一轮 " + queue.size() + " 词");
+            }
         });
         cardBody.addView(again);
     }
@@ -729,6 +836,28 @@ public class EngView {
                     android.widget.Toast.makeText(act, "已上传 " + n + " 轮成绩",
                             android.widget.Toast.LENGTH_SHORT).show());
         }).start();
+    }
+
+    /**
+     * 记一个词这一题的结果（决定下次还练不练它）。
+     *
+     * 存不上不能影响答题 —— 进度丢了下次从头练，比崩掉好。
+     */
+    private void saveWordProgress(EngTrain.Item it, boolean correct) {
+        if (it == null || it.word == null || store == null) return;
+        try {
+            store.recordEngWord(it.word.w, correct, System.currentTimeMillis());
+            // 内存里也更新一份，"再来一轮"时不用重读数据库
+            Store.WordProg p = prog.get(it.word.w);
+            if (p == null) {
+                p = new Store.WordProg();
+                p.w = it.word.w;
+                prog.put(it.word.w, p);
+            }
+            if (correct) p.right++; else p.wrong++;
+            p.last = System.currentTimeMillis();
+        } catch (Exception ignored) {
+        }
     }
 
     // ── 错题入库 ──────────────────────────────────────────

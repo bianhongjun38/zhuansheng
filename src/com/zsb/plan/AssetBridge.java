@@ -63,6 +63,21 @@ final class AssetBridge {
     /** 给 WebView 的入口地址。 */
     static final String ENTRY = ORIGIN + "/index.html";
 
+    /**
+     * 数学工具站点。
+     *
+     * 为什么另起一个 host 而不是塞进 /atlas/ 下面：
+     *   构建时 sync_atlas() 会 <b>整个删掉</b> assets/atlas/ 再重拷，
+     *   数学库放在里面会被一起删掉。用独立 host + 独立目录，
+     *   两边互不干扰，任何一边重建都动不到另一边。
+     *
+     * 代价是两个站点各自有独立的 localStorage —— 数学工具目前不存进度，无影响。
+     */
+    static final String MATH_HOST = "mathassets.androidplatform.net";
+    static final String MATH_ORIGIN = SCHEME + "://" + MATH_HOST;
+    static final String MATH_ASSET_ROOT = "math/";
+    static final String MATH_ENTRY = MATH_ORIGIN + "/index.html";
+
     private static final Map<String, String> MIME = new HashMap<>();
 
     static {
@@ -97,9 +112,44 @@ final class AssetBridge {
     private AssetBridge() {
     }
 
-    /** 这个 URL 是否属于本站点。 */
+    /** 这个 URL 是否属于本站点（词图或数学工具）。 */
     static boolean owns(String url) {
-        return url != null && (url.equals(ORIGIN) || url.startsWith(ORIGIN + "/"));
+        if (url == null) return false;
+        return url.startsWith(ORIGIN + "/") || url.equals(ORIGIN)
+                || url.startsWith(MATH_ORIGIN + "/") || url.equals(MATH_ORIGIN);
+    }
+
+    /** 这个 URL 属于哪个站点根。不属于则返回 null。 */
+    private static String rootOf(String url) {
+        if (url == null) return null;
+        if (url.startsWith(MATH_ORIGIN + "/") || url.equals(MATH_ORIGIN)) return MATH_ASSET_ROOT;
+        if (url.startsWith(ORIGIN + "/") || url.equals(ORIGIN)) return ASSET_ROOT;
+        return null;
+    }
+
+    private static String baseOf(String url) {
+        return MATH_ASSET_ROOT.equals(rootOf(url)) ? MATH_ORIGIN : ORIGIN;
+    }
+
+    /**
+     * 读打卡数据用的空白页。
+     *
+     * 不给它做文件，直接在拦截器里现场生成：它只有一个作用 ——
+     * 提供一个同源的 document，让 evaluateJavascript 能读到 localStorage。
+     * 放进 assets 里反而要多维护一个文件，还得担心被 sync_atlas 清掉。
+     */
+    static final String BLANK_PATH = "/__stats_blank.html";
+
+    private static WebResourceResponse blankPage() {
+        try {
+            return new WebResourceResponse("text/html", "utf-8", 200, "OK",
+                    new java.util.HashMap<String, String>(),
+                    new java.io.ByteArrayInputStream(
+                            "<!doctype html><meta charset=utf-8><title>b</title>"
+                                    .getBytes(java.nio.charset.Charset.forName("UTF-8"))));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -108,8 +158,10 @@ final class AssetBridge {
      * 不属于本站点时返回 null。
      */
     static String toAssetPath(String url) {
-        if (!owns(url)) return null;
-        String rest = url.substring(ORIGIN.length());
+        String root = rootOf(url);
+        if (root == null) return null;
+        String base = baseOf(url);
+        String rest = url.substring(base.length());
         while (rest.startsWith("/")) rest = rest.substring(1);
         int q = rest.indexOf('?');
         if (q >= 0) rest = rest.substring(0, q);
@@ -117,13 +169,22 @@ final class AssetBridge {
         if (h >= 0) rest = rest.substring(0, h);
         // 目录请求 → index.html
         if (rest.isEmpty() || rest.endsWith("/")) rest = rest + "index.html";
-        return ASSET_ROOT + rest;
+        return root + rest;
     }
 
     /** 站点是否已经被打进 APK。构建时没跑 --atlas 就是 false。 */
     static boolean hasSite(Activity act) {
+        return hasAsset(act, ASSET_ROOT + "index.html");
+    }
+
+    /** 数学工具站点是否已打进 APK（构建时没带 assets/math 就是 false）。 */
+    static boolean hasMath(Activity act) {
+        return hasAsset(act, MATH_ASSET_ROOT + "index.html");
+    }
+
+    private static boolean hasAsset(Activity act, String path) {
         try {
-            InputStream in = act.getAssets().open(ASSET_ROOT + "index.html");
+            InputStream in = act.getAssets().open(path);
             in.close();
             return true;
         } catch (IOException e) {
@@ -139,6 +200,9 @@ final class AssetBridge {
      *         而不是让 WebView 去撞真实网络。
      */
     static WebResourceResponse serve(Activity act, String url) {
+        // 这个路径是现场生成的，不在 assets 里
+        if (url != null && url.endsWith(BLANK_PATH)) return blankPage();
+
         AssetManager am = act.getAssets();
         String path = toAssetPath(url);
         // 防目录穿越：assets 路径里不允许出现 ..

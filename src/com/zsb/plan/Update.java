@@ -199,7 +199,33 @@ public class Update {
      * 只保留实测能用的，避免每次更新都白等一堆超时。
      * 以后要加新镜像：先手动拉一个完整包计时，通了且够快再加进来。
      */
+    /**
+     * 加速镜像前缀。用法：镜像前缀 + 完整的 github.com 地址。
+     *
+     * 2026-10-31 实测（1 MB Range 样本，代理关闭）。三条同时成立才收进来：
+     *   ① 认 Range（回 206 + Content-Range），否则没法分段；
+     *   ② 对同一资产返回同一个 ETag，否则混拉会拼出错包；
+     *   ③ 单连接 400 KB/s 以上。
+     *
+     *   gh.monlor.com        602→7521 KB/s（1→12 路）  ETag 0x8DF3726C07913E5
+     *   ghproxy.imciel.com   523 KB/s                   ETag 同上
+     *   gitproxy.eu.org      498 KB/s                   ETag 同上
+     *   gh.catmak.name       454 KB/s                   ETag 同上
+     *   ghproxy.net          193 KB/s（1 路）→ 3.15 MB/s（16 路），按 IP 限速
+     *
+     * 剔除过：gh-proxy.com（10 KB/s）、ghfast.top / ghp.ci / hub.gitmirror.com /
+     * github.moeyy.xyz / gh.xxooo.cf（DNS 死）、ghproxy.cc（TLS 失败）、
+     * gh-proxy.net / gitproxy.click / ghproxy.org（302 跳广告页，判定劫持）。
+     *
+     * 注意：所有镜像都只是"能连上"的候选，实际用哪个由 rankSources()
+     * 当场测速决定 —— 同一台机器 20 分钟内 GitHub 直连能从 4183 KB/s
+     * 掉到 297 KB/s，写死顺序一定会踩坑。
+     */
     private static final String[] MIRROR_PREFIXES = {
+            "https://gh.monlor.com/",
+            "https://ghproxy.imciel.com/",
+            "https://gitproxy.eu.org/",
+            "https://gh.catmak.name/",
             "https://ghproxy.net/",
     };
 
@@ -228,8 +254,53 @@ public class Update {
     private final Activity act;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
+    /**
+     * 「忽略此版本」用。
+     *
+     * 只记一个版本号：忽略 1.5.47 不该连带忽略 1.5.48。
+     * 键放 kv 表，和进度同库 —— 清空进度不会清这个，
+     * 因为它属于"我自己的选择"而不是学习数据。
+     */
+    private static final String KV_SKIP_VER = "update_skip_ver";
+
     public Update(Activity a) {
         this.act = a;
+    }
+
+    /** 这个版本用户是不是说过「忽略」。 */
+    public boolean isSkipped(String ver) {
+        if (ver == null || ver.length() == 0) return false;
+        try {
+            Store s = new Store(act);
+            String v = s.kvGet(KV_SKIP_VER, null);
+            return v != null && parseVer(v) == parseVer(ver);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 记下「忽略此版本」。只影响这一个版本号。 */
+    public void skip(String ver) {
+        if (ver == null || ver.length() == 0) return;
+        try {
+            new Store(act).kvSet(KV_SKIP_VER, ver);
+        } catch (Exception ignored) { }
+    }
+
+    /** 取消忽略（设置页「恢复更新提示」用）。 */
+    public void clearSkip() {
+        try {
+            new Store(act).kvSet(KV_SKIP_VER, null);
+        } catch (Exception ignored) { }
+    }
+
+    /** 当前被忽略的版本号，没有则 null。 */
+    public String skippedVersion() {
+        try {
+            return new Store(act).kvGet(KV_SKIP_VER, null);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** 启动时调用。silent=true 时只在有新版本才提示。 */
@@ -250,6 +321,15 @@ public class Update {
                     }
                     if (remoteCode <= localCode) {
                         if (!silent) toastOnUi("已是最新版本 v" + localVersionName());
+                        return;
+                    }
+                    // 用户点过「忽略此版本」：静默检查时完全不打扰；
+                    // 手动点「检查更新」时要说清楚为什么没弹窗，
+                    // 否则用户会以为检查功能坏了。
+                    if (isSkipped(lt.ver)) {
+                        if (!silent) {
+                            toastOnUi("已忽略 v" + lt.ver + "，可在设置里恢复");
+                        }
                         return;
                     }
                     if (lt.apkUrl == null) {
@@ -681,8 +761,12 @@ public class Update {
             ts[i].setDaemon(true);
             ts[i].start();
         }
+        // 等 8 秒，与 probeSpeed 的读超时对齐。
+        // 以前是 6 秒 —— 那时样本只有 128 KB，6 秒够；
+        // 换成 1 MB 后，一个 200 KB/s 的源要约 5 秒才读完，
+        // 6 秒会把"慢但确实能用"的源判成死源。
         for (int i = 0; i < n; i++) {
-            try { ts[i].join(6000); } catch (InterruptedException ignored) { }
+            try { ts[i].join(8000); } catch (InterruptedException ignored) { }
         }
 
         // 稳定排序：快的在前，测不出速度的在后，但保留原有相对次序。
@@ -701,17 +785,26 @@ public class Update {
 
     /**
      * 量一个源的速度（字节/秒）。拿不到就返回 0。
-     * 只读 128 KB 就断开，不浪费用户流量。
+     *
+     * 读 1 MB 而不是 128 KB。
+     *
+     * 2026-10-31 实测：同样两个源，64 KB 样本测出 69 和 72 KB/s（几乎分不出高下），
+     * 换成 1 MB 样本是 983 和 702 KB/s。小样本量到的主要是 **TCP 慢启动和握手延迟**，
+     * 不是带宽 —— 用它排序等于随机排序。
+     *
+     * 代价是多花 1 MB 流量（相对 447 MB 可忽略），换来的是排序真的有意义。
      */
     private long probeSpeed(String url) {
         HttpURLConnection c = null;
         try {
             c = (HttpURLConnection) new URL(url).openConnection();
             c.setConnectTimeout(4000);
-            c.setReadTimeout(5000);
+            // 读超时放到 8 秒：1 MB 样本比 128 KB 需要更长时间，
+            // 卡在 5 秒会把"慢但能用"的源误判成死源。
+            c.setReadTimeout(8000);
             c.setInstanceFollowRedirects(true);
             c.setRequestProperty("User-Agent", "zsb-plan");
-            c.setRequestProperty("Range", "bytes=0-131071");
+            c.setRequestProperty("Range", "bytes=0-1048575");
             if (url.contains("api.github.com")) {
                 c.setRequestProperty("Accept", "application/octet-stream");
                 c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
@@ -722,17 +815,18 @@ public class Update {
 
             long t0 = System.currentTimeMillis();
             InputStream in = c.getInputStream();
-            byte[] buf = new byte[16384];
+            byte[] buf = new byte[16 * 1024];
             long got = 0;
-            while (got < 131072) {
+            while (got < 1048576) {
                 int r = in.read(buf, 0, buf.length);
                 if (r <= 0) break;
                 got += r;
             }
             long ms = System.currentTimeMillis() - t0;
             in.close();
-            // 至少拿到 8 KB 才算有效样本，否则是握手成功但没数据
-            if (got < 8192) return 0;
+            // 至少拿到 128 KB 才算有效样本：低于这个量仍是握手开销占主导，
+            // 算出来的"速度"没有参考价值。
+            if (got < 131072) return 0;
             return got * 1000L / Math.max(ms, 1);
         } catch (Exception e) {
             return 0;
@@ -779,6 +873,14 @@ public class Update {
                 .setPositiveButton("立即更新", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) { download(url); }
                 })
+                // 「以后再说」每次启动都还会问；「忽略此版本」不会。
+                // 两者都要保留：多数更新用户只是想推迟，不是不想要。
+                .setNeutralButton("忽略此版本", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        skip(ver);
+                        toastOnUi("已忽略 v" + ver + "，不再提示（设置里可恢复）");
+                    }
+                })
                 .setNegativeButton("以后再说", null)
                 .show();
     }
@@ -824,7 +926,7 @@ public class Update {
                 for (String src : sources) {
                     HttpURLConnection c = null;
                     try {
-                        long got = fetchResumable(src, out, pd);
+                        long got = fetchAny(src, out, pd);
                         if (got < 1024 * 1024) {
                             throw new Exception("文件不完整（" + got + " 字节）");
                         }
@@ -918,6 +1020,55 @@ public class Update {
             return r.toString();
         } catch (Throwable t) {
             return loc;   // 解析不了就原样返回，让调用方按原逻辑报错
+        }
+    }
+
+    /**
+     * 下载入口：优先分段并发，服务端不支持 Range 时退回单流。
+     *
+     * 为什么值得多写一套：447 MB 单流实测 600~780 KB/s（约 10 分钟），
+     * 8 路并发 4.3 MB/s（约 2 分钟）。这不是调优，是能不能用的问题。
+     * 但分段要求服务端认 Range，镜像不一定都认 —— 所以两条路都要有。
+     *
+     * 分段失败**不直接放弃这个源**：退回单流仍可能成功。
+     * 只有两条路都失败才换下一个源。
+     */
+    private long fetchAny(String url, File out, final ProgressDialog pd) throws Exception {
+        if (out.exists()) out.delete();
+
+        final int[] pct = new int[1];
+        ParallelFetch.Listener l = new ParallelFetch.Listener() {
+            public void onBytes(long done, long total) {
+                if (total <= 0) return;
+                int p = (int) (done * 100L / total);
+                if (p != pct[0]) {
+                    pct[0] = p;
+                    ui.post(new Runnable() {
+                        public void run() {
+                            if (act == null || act.isFinishing() || act.isDestroyed()) return;
+                            pd.setMessage(p + "%");
+                        }
+                    });
+                }
+            }
+            public boolean cancelled() {
+                return act == null || act.isFinishing() || act.isDestroyed();
+            }
+        };
+
+        try {
+            long got = ParallelFetch.fetch(url, out, ParallelFetch.MAX_CONNS, l);
+            ui.post(new Runnable() {
+                public void run() {
+                    if (act == null || act.isFinishing() || act.isDestroyed()) return;
+                    pd.setMessage("100%");
+                }
+            });
+            return got;
+        } catch (ParallelFetch.NoRange e) {
+            // 服务端不认 Range，退回单流。这条路径有断点续传。
+            out.delete();
+            return fetchResumable(url, out, pd);
         }
     }
 
