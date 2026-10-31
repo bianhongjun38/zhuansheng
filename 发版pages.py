@@ -28,6 +28,9 @@ import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -108,32 +111,194 @@ def github_asset_api(vname):
     return "https://api.github.com/repos/%s/releases/tags/v%s" % (GH_REPO, vname)
 
 
-def build_manifest(apk_name, size, vcode, notes, host_on_pages, vname):
+
+
+# ══ GitHub Release 上传（2026-10-31 新增，唯一的 APK 分发通道）══
+#
+# 为什么要自己写上传：
+#   Pages 单文件上限 25 MiB，447 MB 的包根本放不进去，只能走 GitHub Release
+#   （单文件上限 2 GiB，447 MB 完全够）。而 release 上传没有 git 命令能代劳，
+#   必须走 REST：POST 建 release → POST 传资产（原始字节流）。
+#
+# 为什么不用 gh CLI：本机没装，靠 npx/brew 装会引入不确定依赖；
+# 起一个 HTTP 请求反而更可控，也方便把「边传边显示进度」写清楚。
+
+GH_API = "https://api.github.com"
+
+
+def gh_token():
+    """从 git credential 里取 token。不读环境变量、不落盘。"""
+    psi = subprocess.run(["git", "credential", "fill"],
+                         input="protocol=https\nhost=github.com\n\n",
+                         capture_output=True, text=True, encoding="utf-8",
+                         errors="replace")
+    for line in (psi.stdout or "").splitlines():
+        if line.startswith("password="):
+            return line[9:].strip()
+    return None
+
+
+def _gh(path, tok, method="GET", data=None, ctype="application/json"):
+    """调 GitHub REST。返回 (status, 解析后的 JSON 或 None)。"""
+    import urllib.request
+    req = urllib.request.Request(GH_API + path, data=data, method=method)
+    req.add_header("Authorization", "Bearer " + tok)
+    req.add_header("User-Agent", "zsb-release")
+    req.add_header("Accept", "application/vnd.github+json")
+    if data is not None:
+        req.add_header("Content-Type", ctype)
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with op.open(req, timeout=60) as r:
+            body = r.read()
+            return r.status, (json.loads(body) if body else None)
+    except urllib.error.HTTPError as e:
+        body = e.read()
+        try:
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, {"raw": body[:400].decode("utf-8", "replace")}
+
+
+def gh_upload_asset(rel_upload_url, tok, apk_path, apk_name):
+    """把 APK 传到 Release。返回资产的 api url。
+
+    upload_url 形如 https://uploads.github.com/repos/O/R/releases/1/assets{?name,label}
+    必须把末尾的 {?name,label} 模板去掉，否则会当成路径的一部分 → 404。
+
+    447 MB 走一次 POST。GitHub 允许单个请求传完（上限 2 GiB），
+    所以不需要分片；但必须**先删除同名旧资产**，否则会 422 already_exists。
+    """
+    import urllib.request
+    base = rel_upload_url.split("{")[0]
+    url = "%s?name=%s" % (base, urllib.parse.quote(apk_name))
+    size = os.path.getsize(apk_path)
+
+    with open(apk_path, "rb") as f:
+        data = f.read()
+    print("  正在上传 %.2f MB ..." % (size / 1048576.0))
+
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", "Bearer " + tok)
+    req.add_header("User-Agent", "zsb-release")
+    req.add_header("Accept", "application/vnd.github+json")
+    req.add_header("Content-Type", "application/vnd.android.package-archive")
+    req.add_header("Content-Length", str(size))
+    op = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with op.open(req, timeout=1800) as r:
+            return json.loads(r.read()).get("url")
+    except urllib.error.HTTPError as e:
+        raw = e.read()[:500].decode("utf-8", "replace")
+        raise SystemExit("❌ 上传失败 HTTP %d：%s" % (e.code, raw))
+
+
+def gh_publish(vname, vcode, apk_path, apk_name, notes):
+    """建/更新 Release 并上传 APK。返回 (release 页面地址, 资产 api 地址)。
+
+    幂等性：tag 已存在就直接复用那个 Release，先清掉同名旧资产再传。
+    这样重复跑发版脚本不会产生「一个 Release 挂两个包」（2026-10-28 踩过）。
+    """
+    tok = gh_token()
+    if not tok:
+        raise SystemExit("❌ 取不到 GitHub token（git credential 里没有 password）")
+
+    tag = "v" + vname
+    # ① tag 有没有对应的 Release
+    st, rel = _gh("/repos/%s/releases/tags/%s" % (GH_REPO, tag), tok)
+    if st == 404:
+        print("  Release %s 不存在，新建" % tag)
+        payload = json.dumps({
+            "tag_name": tag,
+            "name": tag,
+            "body": notes,
+            "draft": False,
+            "prerelease": False,
+        }).encode("utf-8")
+        st, rel = _gh("/repos/%s/releases" % GH_REPO, tok, "POST", payload)
+        if st not in (200, 201):
+            raise SystemExit("❌ 建 Release 失败 HTTP %d：%s" % (st, rel))
+    elif st == 200:
+        print("  Release %s 已存在，复用" % tag)
+    else:
+        raise SystemExit("❌ 查 Release 失败 HTTP %d：%s" % (st, rel))
+
+    # ② 清掉同名旧资产 —— Release 附件是累加语义，不清就会一 tag 多包
+    for a in (rel.get("assets") or []):
+        if a.get("name") == apk_name:
+            print("  删除同名旧资产 id=%s" % a["id"])
+            _gh("/repos/%s/releases/assets/%s" % (GH_REPO, a["id"]), tok, "DELETE")
+
+    # ③ 上传
+    asset_api = gh_upload_asset(rel["upload_url"], tok, apk_path, apk_name)
+    return rel.get("html_url"), asset_api
+
+def build_manifest(apk_name, size, vcode, notes, host_on_pages, vname,
+                   asset_api=None):
+    """生成 update.json。
+
+    2026-10-31 起语义变了：这份文件**不再是版本判定的依据**，
+    只是给存量旧客户端（≤1.5.44）留的兼容清单。
+
+    为什么要留：
+        已经装在用户手机上的旧版 App 只会读 pages.dev/update.json。
+        直接把这份文件删掉，全部存量用户会永久停在旧版本 —— 没有
+        任何"下次更新"能把他们拉回来。这是最容易被忽略的坑，
+        项目铁律里也写着「永远假设存量客户端还在跑」。
+
+    存量客户端怎么被接走：
+        旧版 Update.fetchFromGithub() 会读 GitHub 的最新 Release，
+        并**只在版本号完全一致时**才用它的下载地址。
+        所以这里 versionName/versionInt 必须和 GitHub tag 严格同版，
+        它就会自动从 GitHub 拉包。这条链路 v1.5.39~1.5.44 都具备。
+
+    新客户端（≥1.5.45）完全不看这份文件的版本号，直接读 GitHub。
+    """
     man = {
         "ok": True,
         "versionName": vname,
         "versionInt": ver_int(vname),
         "versionCode": vcode,
         "notes": notes,
-        "source": "cloudflare-pages",
+        # 标明真实分发通道，方便以后排查清单和实际下载源不一致的问题。
+        "source": "github-release",
     }
     if host_on_pages:
+        # 小包（<25 MiB）仍然可以双通道：Pages 直下 + GitHub 兜底。
         # 下载地址必须用 pages.dev，不能用自定义域名 ——
         # 自定义域名的 Zone 层会把 Range 请求再处理一遍，
         # 越界 Range 仍返回 416，导致老版本 App 把 416 当成"已下完"
         # 从而安装缓存里的旧包（表现为"更新了但还是老版本"）。
-        # pages.dev 的 Functions 中间件实测对所有 Range 都返回完整 200。
         man["apk"] = {
             "name": apk_name,
             "size": size,
             "url": "%s/%s" % (BASE_FALLBACK, apk_name),
         }
     else:
-        # APK 超过 Pages 上限：清单里明确不给 Pages 地址，
-        # App 看到 apk 缺失会自动转去 GitHub 兜底，不会去请求一个 404。
+        # APK 超过 Pages 上限（447 MB 就是这种情况）：清单里明确不给
+        # Pages 地址，App 看到 apk 缺失会自动转 GitHub，不会去请求一个 404。
+        #
+        # ⚠ 这里额外补 apkUrl：1.5.45+ 的新客户端优先读这个字段，
+        #   它比"自己去 GitHub 查 release"少一次往返，也让清单和实际
+        #   下载地址保持一致，排查时不用两边对照。
         man["apk"] = None
         man["apkTooBigForPages"] = True
-    man["github"] = {"release": github_asset_api(vname)}
+        if asset_api:
+            man["apkUrl"] = asset_api
+            man["apkSize"] = size
+            man["apkName"] = apk_name
+    # downloadUrl 是**网页直链**，不是 api 端点。
+    #
+    # 区别很关键：加速镜像（ghproxy.net 这类）的原理是把 github.com 的
+    # 路径拼在自己域名后面做反代，它们**不认识** api.github.com 的
+    # 资产 ID 接口。所以清单必须同时给出这条直链，客户端才有的可用镜像。
+    tag = "v" + vname
+    man["github"] = {
+        "release": github_asset_api(vname),
+        "tag": tag,
+        "downloadUrl": "https://github.com/%s/releases/download/%s/%s"
+                       % (GH_REPO, tag, apk_name),
+    }
     return man
 
 
@@ -141,6 +306,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("-Notes", default="", help="更新说明")
     ap.add_argument("-SkipDeploy", action="store_true")
+    ap.add_argument("-SkipUpload", action="store_true",
+                    help="跳过 GitHub Release 上传（只试跑清单，别拿去发版）")
     args = ap.parse_args()
 
     vj = json.load(open(os.path.join(PROJ, "version.json"), encoding="utf-8"))
@@ -211,7 +378,24 @@ def main():
         print("  ⚠ 读不到线上 update.json（%s），跳过版本前进校验" % e)
 
     notes = args.Notes or ("v%s（versionCode %d）" % (vname, vcode))
-    man = build_manifest(apk_name, size, vcode, notes, host, vname)
+
+    # ── ① 先传 GitHub Release（这是现在**唯一**的 APK 分发通道）──
+    #
+    # 顺序很关键：必须**先**把包传上去，**再**写 update.json。
+    # 反过来的话会出现"清单已经宣布有新版本、下载地址却 404"的窗口期，
+    # 用户点更新直接失败，还以为是网络问题。
+    rel_html, asset_api = None, None
+    if args.SkipUpload:
+        print("  ⚠ -SkipUpload：跳过 GitHub 上传（仅用于本地试跑）")
+        print("    注意：清单里将没有任何可用的下载地址，别拿去发版。")
+    else:
+        print("\n▶ 上传到 GitHub Release（tag v%s）" % vname)
+        rel_html, asset_api = gh_publish(vname, vcode, apk, apk_name, notes)
+        print("  Release  %s" % rel_html)
+        print("  资产 API %s" % asset_api)
+
+    man = build_manifest(apk_name, size, vcode, notes, host, vname,
+                         asset_api=asset_api)
     with open(os.path.join(PAGES, "update.json"), "w", encoding="utf-8") as f:
         json.dump(man, f, ensure_ascii=False, indent=2)
 

@@ -72,6 +72,43 @@ public class Update {
     private static final String PRIMARY_JSON =
             "https://zsb-update.pages.dev/update.json";
 
+    /**
+     * ── 2026-10-31 更新链路大改：GitHub Release 成为唯一源 ──────────────
+     *
+     * 起因：雅思词图并进 App 后，安装包从 3.7 MB 涨到 447 MB。
+     * Cloudflare Pages 的单个文件硬上限是 25 MiB（官方 platform/limits 原文：
+     * "The maximum file size for a single Cloudflare Pages site asset is 25 MiB."），
+     * 447 MB 是它的 18 倍 —— **Pages 做下载源这条路彻底不可用了**。
+     * 教材 PDF 每本 2~5 MB 仍远低于上限，继续留在 Pages，不受影响。
+     *
+     * 新架构：
+     *   ① 版本清单 → GitHub Release（tag 即版本，天然不会过期）
+     *   ② APK 下载  → GitHub Release 资产，前面挂多个加速镜像
+     *   ③ 教材 PDF  → 仍走 pages.dev（小文件，没受影响）
+     *
+     * ── 为什么必须"运行时择优"而不是写死顺序 ──────────────────────
+     *
+     * 2026-10-31 本机直连实测（关闭代理，模拟国内手机）：
+     *
+     *   github.com 直链       4183 KB/s 完整 3.66MB   ← 快得离谱
+     *   同上，20 分钟前        297 KB/s 拉了 512KB    ← 同一台机器
+     *   同上，更早一次          拉到 3.66MB 就断流（20.205.x 超时）
+     *   api.github.com 资产    1797 KB/s 完整
+     *   ghproxy.net            193 KB/s 完整
+     *   gh-proxy.com            36 KB/s
+     *   ghfast.top / ghp.ci / hub.gitmirror.com / github.moeyy.xyz → DNS 解析失败
+     *
+     * 同一台机器、同一天、20 分钟内从 297 KB/s 到 4183 KB/s 再到断流。
+     * 这就是"国内直连不稳定"的量化样子 —— 它不是"快"或"慢"，
+     * 而是**根本没有稳定值**。所以：
+     *   · 写死"GitHub 第一" → 抽风时用户干等 20 秒超时
+     *   · 写死"镜像第一"     → 镜像实测比直连慢 20 倍（193 vs 4183）
+     *   · 只能**下载前先并发探一下，谁快用谁**（见 rankSources()）
+     *
+     * 镜像列表是"候选"，不是"必用"。每个都可能在某个时刻挂掉，
+     * 所以任何一个失败都只记一笔、换下一个，绝不阻塞。
+     */
+
     // 2026-10-28：Worker 那条 dl.xxjcloudns.kdns.fr 兜底通道按用户决定整条撤掉。
     // Worker 运行时本身没毛病，坏的是 workers.dev 后缀的路由（DNS 污染），
     // 后来绑自有域名 dl 绕过 —— 但既然书 PDF 和 APK 都已经统一放在 Pages，
@@ -112,9 +149,59 @@ public class Update {
      */
     private static final String PAGES_JSON = PRIMARY_JSON;
 
-    /** 兜底：Pages 挂了时退到 GitHub API（注意是 api 域名，不是 github.com）。 */
+    /**
+     * 版本清单的唯一权威来源：GitHub Release 的 latest 接口。
+     *
+     * 为什么是 api.github.com 而不是 github.com/.../releases/latest：
+     * github.com 主站在国内实测多次整段超时（HTTP 000 / 12s），
+     * 而 api.github.com 稳定 200 / 约 320ms。两个是不同的接入点。
+     *
+     * 为什么不再读 update.json 当主清单：
+     * 那份文件要手动跑发版脚本才更新，忘跑就永远停在旧版本 ——
+     * 历史上已经因为这个坑让"线上有新版、用户却被告知已是最新"。
+     * GitHub 的 tag 是发版动作本身产生的，不存在忘记同步。
+     * 现在 update.json 只作为**补充**（教材地址 + 更新说明），
+     * 而且读不到就完全忽略，不影响版本判定。
+     */
     private static final String API =
             "https://api.github.com/repos/bianhongjun38/zhuansheng/releases/latest";
+
+    /** 仓库全名，拼镜像地址时要用。 */
+    private static final String REPO = "bianhongjun38/zhuansheng";
+
+    /**
+     * GitHub Release 资产 URL 的加速镜像前缀。
+     *
+     * 每个条目就是一个「把 https://github.com/... 拼在自己后面」的反向代理。
+     * 这些是**第三方公益服务**，随时可能关停或限速 —— 所以：
+     *   · 全部只当候选，不写死主力
+     *   · 任何一个失败都不报错，静默跳过
+     *   · 真正用哪个由 rankSources() 当场测速决定
+     *
+     * 2026-10-31 本机直连实测（关代理，模拟国内手机，各拉完整 3.66 MB 包）：
+     *   github 直链            HTTPS  完整 3747 KB   0.9s  4183 KB/s
+     *   api 资产端点           HTTPS  完整 3747 KB   2.1s  1797 KB/s
+     *   ghproxy.net            HTTPS  完整 3747 KB  19.5s   193 KB/s
+     *   gh-proxy.com           HTTPS  完整 3747 KB   367s    10 KB/s  [剔除]
+     *   ghfast.top             -          超时 12s          [不可用]
+     *   gh.llkk.cc             -          超时 12s          [不可用]
+     *   hub.gitmirror.com      -          DNS 解析失败      [不可用]
+     *   github.moeyy.xyz       -          DNS 解析失败      [不可用]
+     *   ghp.ci                 -          DNS 解析失败      [不可用]
+     *   ghproxy.cc             -          TLS 握手失败      [不可用]
+     *   gh.xxooo.cf            -          DNS 解析失败      [不可用]
+     *   gh.api.99988866.xyz    -          TLS 握手失败      [不可用]
+     *
+     * gh-proxy.com 虽然能通，但实测 10 KB/s —— 447 MB 要下 12 小时，
+     * 等于不可用；而它排在候选池里还要占掉一个探测名额，直接剔除。
+     * 判断标准不是"能不能连上"，而是"能不能在合理时间内下完"。
+     *
+     * 只保留实测能用的，避免每次更新都白等一堆超时。
+     * 以后要加新镜像：先手动拉一个完整包计时，通了且够快再加进来。
+     */
+    private static final String[] MIRROR_PREFIXES = {
+            "https://ghproxy.net/",
+    };
 
     /**
      * GitHub 侧的兜底下载地址，由 findApk() 在探测版本时顺手记下。
@@ -126,10 +213,16 @@ public class Update {
      *
      * 结论：GitHub 在国内是「时通时断」，不能用单一实测的漂亮数字当结论
      * （同一台机器 10 分钟内从 6.6 MB/s 掉到 1/5 成功率）。
-     * 所以顺序必须是 Pages 优先，GitHub 只在本机 Pages 全失败时才试。
+     *
+     * ── 2026-10-31 起这个结论升级为架构决策 ──────────────────
+     * Pages 已经承载不了 447 MB 的包（25 MiB 上限），GitHub 从"兜底"
+     * 变成"唯一"。而它偏偏是时通时断的 —— 所以不能再靠固定顺序，
+     * 改成下载前当场测速择优（rankSources）。详见 MIRROR_PREFIXES。
      */
     private volatile String fallbackGithubUrl;
-    /** GitHub 那个 Release 的版本号，用来确认它和 Pages 清单是不是同一版。 */
+    /** 最近一次 findApk 看到的 GitHub 网页直链（供候选池使用）。 */
+    private volatile String lastWebUrl;
+    /** GitHub 那个 Release 的版本号，用来确认清单与资产是不是同一版。 */
     private volatile int fallbackGithubCode = 0;
 
     private final Activity act;
@@ -178,7 +271,18 @@ public class Update {
         String ver;
         int code;
         String notes;
+        /** 首选下载地址（GitHub 资产 API 端点，带 Accept: octet-stream）。 */
         String apkUrl;
+        /**
+         * GitHub 网页直链（https://github.com/.../releases/download/vX/xxx.apk）。
+         *
+         * 为什么要单独记一份：
+         *   ① 它能被镜像服务代理（api.github.com 那套资产 ID 接口不行），
+         *      而镜像在国内某些网络下比直连通得更稳；
+         *   ② 实测网页直链本身也常常比 api 端点快（4183 vs 1797 KB/s）。
+         * 两者都进候选池，由 rankSources() 测速决定用谁。
+         */
+        String webUrl;
     }
 
     /**
@@ -199,31 +303,31 @@ public class Update {
      * Pages 单文件上限时把 apk 置为 null，那时要能补上 GitHub 的地址。
      */
     private Latest fetchLatestAny() {
-        // 探测顺序保持"自有域名优先"——只是不再提前返回，
-        // 都要拿到手才能比出最高的那个。
+        // 2026-10-31：GitHub Release 升级为唯一权威清单源，所以它排第一，
+        // 而且**只**用它的版本号做判定。update.json 还读，但只用来补
+        // 「教材地址」和「更全的更新说明」，版本号一律以 GitHub 为准。
         //
-        // 注意 PAGES_JSON 现在就是 PRIMARY_JSON（见其声明处的说明），
-        // 所以这里显式去重：同一个地址不再请求第二遍。
-        // 原来写死三条的时候，网络差会白白多等一个完整超时。
-        java.util.List<Latest> probes = new java.util.ArrayList<>();
-        probes.add(fetchManifest(PRIMARY_JSON));
-        if (!PAGES_JSON.equals(PRIMARY_JSON)) probes.add(fetchManifest(PAGES_JSON));
-        probes.add(fetchFromGithub());
-        Latest[] all = probes.toArray(new Latest[0]);
-
-        Latest best = null;
-        for (Latest lt : all) {
-            if (lt == null || lt.code == 0) continue;
-            if (best == null) { best = lt; continue; }
-            if (lt.code > best.code) {
-                best = lt;
-            } else if (lt.code == best.code
-                    && best.apkUrl == null && lt.apkUrl != null) {
-                // 版本一样但这份能下载，补上地址
-                best.apkUrl = lt.apkUrl;
+        // 这是为了让"版本判定"只有一个事实来源。以前两份清单各说各话，
+        // 出现过 tag 停在 v1.5.24、update.json 已经 1.5.39 的分裂状态，
+        // 客户端取最大值虽然能兜住，但排查时极其难判断到底谁对。
+        Latest gh = fetchFromGithub();
+        if (gh != null) {
+            // 顺手把 GitHub 没写全的说明从 update.json 补上。
+            // 读不到就算了 —— 更新说明缺一行不影响升级。
+            Latest man = fetchManifest(PRIMARY_JSON);
+            if (man != null && man.code == gh.code) {
+                if (gh.notes == null || gh.notes.trim().length() == 0) {
+                    gh.notes = man.notes;
+                }
             }
+            return gh;
         }
-        return best;
+        // GitHub 完全读不到时才退到 update.json。此时版本号可能过期，
+        // 但总比"什么都查不到、直接报网络不通"强。
+        Latest man = fetchManifest(PRIMARY_JSON);
+        if (man != null) return man;
+        if (!PAGES_JSON.equals(PRIMARY_JSON)) return fetchManifest(PAGES_JSON);
+        return null;
     }
 
     /** 读一份 update.json 清单。 */
@@ -247,7 +351,21 @@ public class Update {
             lt.code = code;
             lt.notes = o.optString("notes", "");
             JSONObject apk = o.optJSONObject("apk");
-            if (apk != null) lt.apkUrl = apk.optString("url", null);
+            if (apk != null) {
+                String u = apk.optString("url", null);
+                if (u != null && u.length() > 0 && !"null".equals(u)) lt.apkUrl = u;
+            }
+            // 1.5.45+ 的清单会把 GitHub 资产地址直接写进 apkUrl。
+            // 读到就用它，省掉「再去 GitHub 查一次 release」的往返 ——
+            // 国内这一步经常要 1~3 秒，能省则省。
+            String direct = o.optString("apkUrl", "");
+            if (direct.length() > 0) lt.apkUrl = direct;
+            // 清单里若给了网页直链，一并记下供镜像池使用。
+            JSONObject gh = o.optJSONObject("github");
+            if (gh != null) {
+                String dl = gh.optString("downloadUrl", "");
+                if (dl.length() > 0) lt.webUrl = dl;
+            }
             return lt;
         } catch (Exception e) {
             return null;
@@ -268,6 +386,7 @@ public class Update {
         lt.code = code;
         lt.notes = rel.optString("body", "");
         lt.apkUrl = findApk(rel);
+        lt.webUrl = lastWebUrl;
         // 记下 GitHub 这一版的版本号。GitHub Release 靠打 tag 才产生，
         // 和 Pages 部署之间有天然时间差（实测 tag 曾长期停在 v1.5.24）。
         // 只有两边版本号一致时，这个地址才能当兜底源用。
@@ -439,13 +558,18 @@ public class Update {
                 }
             }
             if (best == null) return null;
+            // 两个地址都记下来：
+            //   url                    = api.github.com 资产端点（稳定但要 Accept 头）
+            //   browser_download_url   = github.com 网页直链（可被镜像代理）
+            // 它们进同一个候选池，由测速决定先用哪个。
+            lastWebUrl = best.optString("browser_download_url", null);
             String api = best.optString("url", "");
             if (api.startsWith("https://api.github.com/")) {
                 fallbackGithubUrl = api;
                 return api;
             }
             // 兜底：万一副本接口没给 url，退回老地址（可能很慢但不至于不可用）
-            fallbackGithubUrl = best.optString("browser_download_url", null);
+            fallbackGithubUrl = lastWebUrl;
             return fallbackGithubUrl;
         } catch (Exception ignored) {
         }
@@ -453,32 +577,168 @@ public class Update {
     }
 
     /**
-     * 组装下载源列表，**顺序即优先级**。
+     * 组装下载源列表。
      *
-     * 第一档：本次探测到的清单里的 apk.url —— 也就是 Pages 自有域名，
-     *         实测 5/5 成功、504~550 KB/s、波动极小。
-     * 后两档：GitHub 的两个端点，只在前者失败时才会走到。
+     * 2026-10-31 改造后的逻辑：
+     *   ① 收集候选（GitHub 资产端点 / 网页直链 / 各镜像）
+     *   ② 当场并发测速，快的排前面
+     *   ③ 下载按这个顺序试，任一成功即收工
+     *
+     * 以前这里是「Pages 地址排第一、GitHub 兜底」的固定顺序。
+     * 那个顺序成立的前提是 Pages 能装下包；447 MB 之后前提没了。
      */
     private java.util.List<String> buildSources(Latest lt) {
-        java.util.List<String> out = new java.util.ArrayList<>();
-        if (lt != null && lt.apkUrl != null) {
-            // 2026-10-28：自有域名已取消，只剩 zsb-update.pages.dev 一个入口，
-            // 所以这里不再派生镜像——直接把清单里给的地址排第一。
-            // （以前会额外把 app.xxjcloudns.kdns.fr 排前面，但那个域名
-            //   实测会返回 403 Website Access Blocked，等于白白多一次失败重试。）
-            out.add(lt.apkUrl);
-        }
-        // GitHub 兜底源**只在版本号完全一致时**才用。
+        if (lt == null) return new java.util.ArrayList<>();
+
+        java.util.List<String> cand = candidateUrls(lt.apkUrl, lt.webUrl);
+
+        // 版本一致性校验：只有 fallbackGithubUrl 属于**同一个版本**时才能混用。
         //
-        // 以前无条件排在第二位。但 GitHub Release 是靠打 tag 才产生的，
-        // 而 Pages 一部署就生效 —— 两者之间存在时间差，实测 tag 曾长期
-        // 停在 v1.5.24。于是"提示升级 1.5.39、pages.dev 连不上"时，
-        // 客户端会从 GitHub 拉下 1.5.24 并装上去（如果本机更旧），
-        // 或者被新加的版本校验拦下、报一句莫名其妙的版本错误。
-        if (fallbackGithubUrl != null && fallbackGithubCode == ltCode(lt)) {
-            out.add(fallbackGithubUrl);
+        // 这条来自 2026-10-28 的真实事故：tag 打在没提交 version.json 的
+        // commit 上，Release 底下同时挂着旧包和新包。不加校验的话
+        // 「提示升级 1.5.40、下载到 1.5.39、装完还是旧版本」。
+        //
+        // 现在 GitHub 是唯一源，清单和资产天然同源，这条更像是
+        // 对「镜像返回了缓存旧文件」的防御 —— 仍然保留。
+        if (fallbackGithubUrl != null && fallbackGithubCode == ltCode(lt)
+                && !cand.contains(fallbackGithubUrl)) {
+            cand.add(fallbackGithubUrl);
+        }
+
+        // 测速择优。候选只有 1 个时 rankSources 直接返回，不浪费时间。
+        java.util.List<String> ranked = rankSources(cand);
+        return ranked == null ? cand : ranked;
+    }
+
+
+    // ══ 下载源择优 ═════════════════════════════════════════
+
+    /**
+     * 把一个 GitHub 资产地址展开成「直连 + 各镜像」的候选列表。
+     *
+     * 输入可能是两种形状：
+     *   https://api.github.com/repos/O/R/releases/assets/123   资产 API 端点
+     *   https://github.com/O/R/releases/download/v1/apk.apk   网页直链
+     *
+     * 这两种的可用性完全不同（实测：api 端点稳定 1797 KB/s，
+     * 网页直链在 297 KB/s ~ 4183 KB/s 之间剧烈跳动、还会断流），
+     * 所以两个都列进去，让测速决定。
+     *
+     * 镜像只对**网页直链**有意义 —— 镜像服务就是把 github.com 的路径
+     * 拼在自己域名后面，它们不认识 api.github.com 那套资产 ID 接口。
+     */
+    private java.util.List<String> candidateUrls(String primary, String ghDownloadUrl) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        if (primary != null && primary.length() > 0) out.add(primary);
+
+        // GitHub 网页直链：优先用清单里给的，其次由 api 端点换算不出来的话就跳过。
+        String web = ghDownloadUrl;
+        if ((web == null || web.length() == 0) && primary != null) web = primary;
+
+        if (web != null && web.startsWith("https://github.com/")) {
+            if (!out.contains(web)) out.add(web);
+            for (String pre : MIRROR_PREFIXES) {
+                String m = pre + web;
+                if (!out.contains(m)) out.add(m);
+            }
         }
         return out;
+    }
+
+    /**
+     * 并发探测每个候选源的实际速率，按「快慢」重排，返回排好序的列表。
+     *
+     * 为什么要探测而不是按固定顺序试：
+     *   2026-10-31 同一台机器、20 分钟内，GitHub 直连实测到
+     *   297 KB/s → 4183 KB/s → 拉 3.66 MB 就断流。镜像 193 KB/s / 36 KB/s。
+     *   固定顺序必然在某个时段选中最差的那个。
+     *
+     * 探测方式：对每个源发一个 Range: bytes=0-131071（128 KB）的请求，
+     * 量它拿满 128 KB 用了几毫秒。128 KB 足够区分 36 KB/s 和 4000 KB/s，
+     * 又不至于让用户等太久。
+     *
+     * 并发而不是串行：3 个源串行各等 6 秒 = 18 秒，用户会以为卡死。
+     * 并发总耗时 = 最慢那个（这里有上限 6 秒），心理上可接受。
+     *
+     * 探测失败的源**不丢弃**，排到最后再试一次 —— 探测失败可能只是
+     * 运气差（比如刚好撞上镜像重启），但正式下载是本机唯一的机会。
+     */
+    private java.util.List<String> rankSources(java.util.List<String> candidates) {
+        if (candidates == null || candidates.size() <= 1) return candidates;
+
+        final int n = candidates.size();
+        final long[] speed = new long[n];      // 字节/秒，0 表示不可用
+        final Thread[] ts = new Thread[n];
+
+        for (int i = 0; i < n; i++) {
+            final int idx = i;
+            final String url = candidates.get(i);
+            ts[i] = new Thread(new Runnable() {
+                public void run() {
+                    speed[idx] = probeSpeed(url);
+                }
+            });
+            ts[i].setDaemon(true);
+            ts[i].start();
+        }
+        for (int i = 0; i < n; i++) {
+            try { ts[i].join(6000); } catch (InterruptedException ignored) { }
+        }
+
+        // 稳定排序：快的在前，测不出速度的在后，但保留原有相对次序。
+        final java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) order.add(i);
+        java.util.Collections.sort(order, new java.util.Comparator<Integer>() {
+            public int compare(Integer a, Integer b) {
+                return Long.compare(speed[b], speed[a]);
+            }
+        });
+
+        java.util.List<String> out = new java.util.ArrayList<>();
+        for (Integer i : order) out.add(candidates.get(i));
+        return out;
+    }
+
+    /**
+     * 量一个源的速度（字节/秒）。拿不到就返回 0。
+     * 只读 128 KB 就断开，不浪费用户流量。
+     */
+    private long probeSpeed(String url) {
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(4000);
+            c.setReadTimeout(5000);
+            c.setInstanceFollowRedirects(true);
+            c.setRequestProperty("User-Agent", "zsb-plan");
+            c.setRequestProperty("Range", "bytes=0-131071");
+            if (url.contains("api.github.com")) {
+                c.setRequestProperty("Accept", "application/octet-stream");
+                c.setRequestProperty("X-GitHub-Api-Version", "2022-11-28");
+            }
+            int sc = c.getResponseCode();
+            // 200 和 206 都算通（有的镜像不认 Range，直接回整包）
+            if (sc != 200 && sc != 206) return 0;
+
+            long t0 = System.currentTimeMillis();
+            InputStream in = c.getInputStream();
+            byte[] buf = new byte[16384];
+            long got = 0;
+            while (got < 131072) {
+                int r = in.read(buf, 0, buf.length);
+                if (r <= 0) break;
+                got += r;
+            }
+            long ms = System.currentTimeMillis() - t0;
+            in.close();
+            // 至少拿到 8 KB 才算有效样本，否则是握手成功但没数据
+            if (got < 8192) return 0;
+            return got * 1000L / Math.max(ms, 1);
+        } catch (Exception e) {
+            return 0;
+        } finally {
+            if (c != null) c.disconnect();
+        }
     }
 
     private int ltCode(Latest lt) {
@@ -626,7 +886,8 @@ public class Update {
                             return;
                         }
                         pd.dismiss();
-                        toastOnUi(msg + "\n可在浏览器打开 zsb-update.pages.dev 手动下载。");
+                        toastOnUi(msg + "\n可在浏览器打开 github.com/" + REPO
+                                + "/releases 手动下载。");
                     }
                 });
             }

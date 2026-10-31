@@ -49,3 +49,10 @@ _shot*.png
 _cls*/
 test/com/
 *.class
+
+# ── 雅思词图（构建时同步，绝不提交）─────────────────────
+# 30,342 个文件 / 441 MB，其中 22,905 段音频、14,596 张图。
+# 它是 ielts-atlas/dist 的拷贝，可随时 npm run build 再生。
+# 提交它会让 clone 变成灾难，也让每次改动都变成几百 MB 的 diff。
+# 构建时用 python build_apk.py --atlas-lite 自动同步。
+assets/atlas/

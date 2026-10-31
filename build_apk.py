@@ -217,11 +217,99 @@ def check_keystore():
         sys.exit(1)
 
 
+# ══ 雅思词图（独立模块）══════════════════════════════════════
+#
+# 词图是另一个目录里的 React 应用（E:/小黑盒运营/ielts-atlas）。
+# 它构建出来的 dist/ 就是一套静态站点，拷进 assets/atlas/ 即可运行。
+#
+# 为什么不提交到本仓库：dist 有 37,000 个文件 / 635 MB，其中 22,905 段音频
+# 和 14,596 张图。放进 git 会让 clone 变成灾难，而且它们是可再生的构建产物。
+# 所以这里在构建时从源目录同步过来，源目录路径可通过环境变量覆盖。
+
+# 词图与本仓库同级：小黑盒运营/ielts-atlas。
+# PROJ = .../小黑盒运营/cq-zhuanshengbens/mobile，往上两级就到 小黑盒运营。
+ATLAS_SRC = os.environ.get(
+    "IELTS_ATLAS_DIST",
+    os.path.join(os.path.dirname(os.path.dirname(PROJ)),
+                 "ielts-atlas", "dist"))
+
+# 已经压过的格式：再 deflate 一遍几乎不减小，只是白花 CPU 和安装时间。
+ATLAS_STORE_EXT = {".webp", ".jpg", ".jpeg", ".png", ".mp3", ".m4a", ".ogg",
+                   ".wav", ".mp4", ".woff2", ".woff", ".gif"}
+
+# lite 模式丢掉的重目录（相对 dist/）
+ATLAS_LITE_SKIP = ("atlas/audio/ex/",)
+
+
+def sync_atlas(mode):
+    """把 ielts-atlas/dist 同步到 assets/atlas/。返回 (文件数, 字节数)。"""
+    dst = os.path.join(ASSETS, "atlas")
+    if not os.path.isdir(ATLAS_SRC):
+        print("\n❌ 找不到词图构建产物：%s" % ATLAS_SRC)
+        print("   先在词图目录构建：")
+        print("     cd ielts-atlas && npm run build")
+        print("   或用 IELTAS_ATLAS_DIST 环境变量指向别处")
+        sys.exit(1)
+    idx = os.path.join(ATLAS_SRC, "index.html")
+    if not os.path.isfile(idx):
+        print("\n❌ %s 里没有 index.html，不像构建产物" % ATLAS_SRC)
+        sys.exit(1)
+
+    print("\n▶ 同步雅思词图（%s）" % ("全量" if mode == "full" else "精简"))
+    print("  源：%s" % ATLAS_SRC)
+    print("  目标：%s" % dst)
+
+    if os.path.isdir(dst):
+        shutil.rmtree(dst)
+
+    n, total, skipped = 0, 0, 0
+    for root, _, files in os.walk(ATLAS_SRC):
+        rel_root = os.path.relpath(root, ATLAS_SRC).replace("\\", "/")
+        if rel_root == ".":
+            rel_root = ""
+        for fn in files:
+            relp = (rel_root + "/" + fn) if rel_root else fn
+            if mode == "lite" and any(relp.startswith(p) for p in ATLAS_LITE_SKIP):
+                skipped += 1
+                continue
+            src = os.path.join(root, fn)
+            out = os.path.join(dst, relp.replace("/", os.sep))
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            shutil.copy2(src, out)
+            n += 1
+            total += os.path.getsize(src)
+
+    print("  %d 个文件，%.1f MB%s" % (n, total / 1048576.0,
+                                    ("，跳过 %d 个" % skipped) if skipped else ""))
+    return n, total
+
+
+def zip_add(z, fp, arcname):
+    """按扩展名决定压缩级别。媒体文件直接 store。"""
+    ext = os.path.splitext(fp)[1].lower()
+    method = zipfile.ZIP_STORED if ext in ATLAS_STORE_EXT else zipfile.ZIP_DEFLATED
+    if method == zipfile.ZIP_STORED:
+        # ZIP_STORED 时 compresslevel 必须省略
+        z.write(fp, arcname, compress_type=method)
+    else:
+        z.write(fp, arcname, compress_type=method, compresslevel=6)
+
+
 def main():
     bump = "--bump" in sys.argv
     # --debug：出 debuggable 包，可用 adb run-as 直接读写存档。
     # 只在本地验证时用；发版永远不带这个参数（生产包必须不可调试）。
     debug = "--debug" in sys.argv
+    # --atlas / --atlas-lite：把雅思词图（独立 React 应用）打进 assets/atlas/。
+    # 默认不打 —— 它让 APK 从 3.7 MB 涨到 600 MB 以上，必须是显式选择。
+    #   --atlas       全量：词库 + 插画 + 英美发音 + 雅思语境朗读
+    #   --atlas-lite  省掉 atlas/audio/ex/（雅思语境朗读，约 193 MB），
+    #                 单词发音和插画都在，听写题型仍可用
+    atlas_mode = None
+    if "--atlas" in sys.argv:
+        atlas_mode = "full"
+    elif "--atlas-lite" in sys.argv:
+        atlas_mode = "lite"
     vcode, vname = read_version(bump)
     if debug:
         print("! 调试构建：application 标记为 debuggable，不要拿去发版")
@@ -350,6 +438,10 @@ def main():
         sys.exit(1)
     print("  classes.dex  %.1f KB" % (os.path.getsize(dex_file) / 1024))
 
+    # ── 4.5 同步雅思词图 ─────────────────────────────────
+    if atlas_mode:
+        sync_atlas(atlas_mode)
+
     # ── 5. 把 dex + assets 塞进 APK ─────────────────────
     print("\n▶ 把 classes.dex 与 assets 写入 APK")
     tmp_apk = os.path.join(outdir, "with-dex.apk")
@@ -357,7 +449,9 @@ def main():
     # 用 zipfile 追加（aapt2 产出的 APK 是标准 zip）
     with zipfile.ZipFile(tmp_apk, "a", zipfile.ZIP_DEFLATED) as z:
         z.write(dex_file, "classes.dex")
-        # assets/ 整棵目录打进去，保留相对路径
+        # assets/ 整棵目录打进去，保留相对路径。
+        # 媒体（webp/mp3/woff2）用 STORED：它们本身已压缩，再 deflate
+        # 只多花时间、几乎不减体积，还会让 WebView 每次解码多一步。
         assets_dir = os.path.join(PROJ, "assets")
         n_asset = 0
         if os.path.isdir(assets_dir):
@@ -365,7 +459,7 @@ def main():
                 for f in files:
                     fp = os.path.join(root, f)
                     rel = os.path.relpath(fp, assets_dir).replace("\\", "/")
-                    z.write(fp, "assets/" + rel)
+                    zip_add(z, fp, "assets/" + rel)
                     n_asset += 1
         print("  classes.dex + %d 个 asset" % n_asset)
     print("  写入完成")

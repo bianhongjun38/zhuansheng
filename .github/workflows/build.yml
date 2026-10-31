@@ -50,7 +50,33 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > keystore/release.keystore
           ls -l keystore/release.keystore
 
-      - name: 构建 APK
+      - name: 检查是否需要本地构建
+        id: guard
+        # ⚠ 2026-10-31 起，GitHub CI **不再负责出正式安装包**。
+        #
+        # 原因：词图并进 App 后，构建需要 ielts-atlas/dist（30,342 个文件、
+        # 441.7 MB 媒体），它不在这个仓库里（.gitignore 排除，否则仓库会被
+        # 撑爆）。CI runner 上根本没有它，build_apk.py 会 sys.exit(1)。
+        #
+        # 更糟的是：这次实测到 v1.5.45 的 tag 曾指向旧 commit，
+        # CI 用旧 version.json 构建出了 3.66 MB 的**空壳包**并发布了
+        # Release —— 版本号写着 1.5.45、包里没有词图、文件名还是
+        # zhuansheng-v1.5.44.apk。用户装上去等于没升级。
+        #
+        # 所以：正式包一律本地构建 + 本地上传（发版pages.py 会走
+        # GitHub REST 传 447 MB 资产）。CI 只做「代码能编译、测试能过」
+        # 的守门，不再产 Release。
+        run: |
+          if [ -d "ielts-atlas/dist" ] || [ -d "../ielts-atlas/dist" ]; then
+            echo "有词图源码，可以完整构建"
+            echo "build=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::没有 ielts-atlas/dist，跳过正式构建（正式包走本地发布）"
+            echo "build=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 构建 APK（仅在词图源码存在时）
+        if: steps.guard.outputs.build == '1'
         env:
           JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
         # 不用 --bump：版本号以仓库里的 version.json 为准。
@@ -60,6 +86,7 @@ jobs:
         run: python build_apk.py
 
       - name: 跑全部测试与检查
+        if: steps.guard.outputs.build == '1'
         env:
           JAVA_TOOL_OPTIONS: '-Duser.language=en -Duser.country=US'
         # 把 verify 的输出同时落到文件。失败时用 ::error:: 打出来，
@@ -90,6 +117,7 @@ jobs:
           echo "版本: $NAME (code $CODE)"
 
       - name: 上传产物（Actions 页可下载）
+        if: steps.guard.outputs.build == '1'
         uses: actions/upload-artifact@v4
         with:
           name: zhuansheng-v${{ steps.ver.outputs.name }}-c${{ steps.ver.outputs.code }}
@@ -104,7 +132,7 @@ jobs:
       # 而且旧的排在前面。客户端按附件名挑最高版本能挡住，但人点 Release
       # 页面就会下错。发布前先把本 Release 已有的 .apk 附件清干净。
       - name: 清掉本 Release 已有的 APK 附件
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/v') && steps.guard.outputs.build == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -115,8 +143,10 @@ jobs:
             echo "删除旧附件 id=$id"
             gh api -X DELETE "repos/${{ github.repository }}/releases/assets/$id" || true
           done
-      - name: 发 Release（仅打 tag 时）
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: 发 Release（仅打 tag 且确实构建过时）
+        # 没有词图源码时不发 Release —— 否则会把 3.66 MB 的空壳包
+        # 挂到 tag 上，覆盖本地传上去的 447 MB 真包（实测已发生过一次）。
+        if: startsWith(github.ref, 'refs/tags/v') && steps.guard.outputs.build == '1'
         uses: softprops/action-gh-release@v2
         with:
           files: build/*.apk

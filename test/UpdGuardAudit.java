@@ -75,10 +75,52 @@ public class UpdGuardAudit {
         ok("只用 pages.dev，自有域名已彻底移除",
                 src.contains("zsb-update.pages.dev/")
                         && !src.contains("PRIMARY_JSON =\n            \"https://app.xxjcloudns"));
-        ok("清单主通道指向 pages.dev",
-                src.contains("\"https://zsb-update.pages.dev/update.json\""));
         ok("教材基地址指向 pages.dev",
                 src.contains("BOOK_BASE = \"https://zsb-update.pages.dev/books/\""));
+
+        // ── 2026-10-31：APK 分发迁到 GitHub Release ────────────
+        // 触发原因：词图并进来后包 447.5 MB，Pages 单文件硬上限 25 MiB，
+        // 超 18 倍，Pages 已经装不下包了。这些检查防止以后有人
+        // 按老思路把 APK 又塞回 Pages。
+        System.out.println();
+        System.out.println("=== ④b APK 分发必须走 GitHub Release ===");
+        ok("清单权威源是 api.github.com releases/latest",
+                src.contains("api.github.com/repos/bianhongjun38/zhuansheng/releases/latest"));
+        ok("仓库名统一到常量子单（镜像拼地址要用）",
+                src.contains("REPO = \"bianhongjun38/zhuansheng\""));
+        ok("GitHub 是唯一权威清单（先读它，失败才退清单文件）",
+                src.indexOf("fetchFromGithub()") < src.indexOf("fetchManifest(PRIMARY_JSON)"));
+        ok("清单里的 apkUrl 直读（省一次往返）",
+                src.contains("optString(\"apkUrl\""));
+        ok("下载源组装走测速择优而不是固定顺序",
+                src.contains("rankSources(") && src.contains("probeSpeed("));
+        ok("镜像表存在且是常量数组", src.contains("MIRROR_PREFIXES"));
+        ok("镜像只对 github.com 直链生效（api 端点不能拼镜像）",
+                src.contains("startsWith(\"https://github.com/\")"));
+        // 10 KB/s 的镜像混进候选池会让用户下 12 小时，必须清掉。
+        // 只查数组字面量里有没有，注释里提到"为何剔除"是好事，不算违规。
+        String mirrors = src.contains("MIRROR_PREFIXES = {")
+                ? src.substring(src.indexOf("MIRROR_PREFIXES = {"),
+                                src.indexOf("};", src.indexOf("MIRROR_PREFIXES = {")))
+                : "";
+        ok("已剔除实测不可用的镜像 gh-proxy.com（10 KB/s）",
+                !mirrors.contains("gh-proxy.com")
+                        && !mirrors.contains("ghfast.top"));
+        ok("下载失败提示指向 GitHub Releases（不是 pages.dev）",
+                src.contains("\"/releases 手动下载"));
+
+        // 兼容性红线：update.json 是存量客户端（<=1.5.44）唯一的入口，
+        // 它必须继续存在并且版本号与 GitHub tag 同版，否则老用户永久失联。
+        System.out.println();
+        System.out.println("=== ④c 存量客户端兼容（10 月发出去的包还在用户手机上）===");
+        ok("发版脚本仍然生成 pages/update.json",
+                rel.contains("update.json"));
+        ok("清单里同时给出 GitHub 网页直链（镜像只能代理它）",
+                rel.contains("\"downloadUrl\""));
+        ok("清单 source 标为 github-release",
+                rel.contains("\"source\": \"github-release\""));
+        ok("发版必须先传 GitHub 再写清单（避免 404 窗口期）",
+                rel.indexOf("gh_publish(") < rel.indexOf("json.dump(man"));
 
         System.out.println();
         System.out.println("=== ⑤ 版本号进位（1.5.100 会与 1.6.0 碰撞）===");

@@ -60,6 +60,7 @@ public class MainActivity extends Activity {
     private WordView wordView;
     private MathView mathView;
     private EngView engView;
+    private AtlasView atlasView;
     private BoardView boardView;
     private LinalgView linalgView;
     private GModeView gameView;
@@ -90,7 +91,12 @@ public class MainActivity extends Activity {
      * 而且检索本身不该单独成页：它属于当天的动作，逾期会累积到当天，
      * 所以「今日」就是它唯一正确的位置。删掉不丢功能。
      */
-    private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "词汇塔", "数据"};
+    private static final String[] TAB_NAMES = {"今日", "错题库", "全表", "雅思", "词汇塔", "数据"};
+
+    /** 「雅思」在 TAB_NAMES 里的下标。词图是独立模块，单独占一栏。 */
+    static final int TAB_ATLAS = 3;
+    /** 「词汇塔」。原来写死 3 / 4，加了雅思后必须跟着改，否则切错页。 */
+    static final int TAB_GAME = 4;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -102,6 +108,8 @@ public class MainActivity extends Activity {
         wordView = new WordView(this);
         mathView = new MathView(this);
         engView = new EngView(this, store);
+        atlasView = new AtlasView(this);
+        atlasView.setOnExit(() -> { tab = TAB_ATLAS; render(); });
         boardView = new BoardView(this);
         linalgView = new LinalgView(this);
         gameStore = new GStore(this);
@@ -224,7 +232,7 @@ public class MainActivity extends Activity {
      */
     @Override
     public void onBackPressed() {
-        if (tab == 3) {
+        if (tab == TAB_GAME) {
             if (gameView != null && gameView.inBattle()) {
                 Toast.makeText(this, "战斗中不能退出 —— 打完这一场再用「继续」推进",
                         Toast.LENGTH_SHORT).show();
@@ -256,16 +264,115 @@ public class MainActivity extends Activity {
         content.removeAllViews();
         // 游戏页要贴满屏幕，其它页保留统一的左右留白。
         // 在这里集中设置，避免各 render 方法各设一套、切 tab 后互相残留。
-        if (tab == 3) content.setPadding(0, 0, 0, 0);
+        if (tab == TAB_GAME) content.setPadding(0, 0, 0, 0);
         else content.setPadding(dp(12), dp(10), dp(12), dp(10));
 
         switch (tab) {
             case 0: renderToday(); break;
             case 1: renderHard(); break;
             case 2: renderPlanList(); break;
-            case 3: renderGame(); break;
+            case TAB_ATLAS: renderAtlas(); break;
+            case TAB_GAME: renderGame(); break;
             default: renderStats(); break;
         }
+    }
+
+    // ══ 雅思词图 ══════════════════════════════════════════
+    /**
+     * 雅思词图入口页。
+     *
+     * 为什么单独一栏而不是塞进「今日」：
+     *   专升本考的是英语（四六级难度），雅思是另一条线 —— 7,298 词、
+     *   有自己的 SRS 节奏和成就体系。混进今日页会让"今天该背哪个"
+     *   变成一道选择题，而背单词最怕的就是每天先做一次选择。
+     *   所以它自成一栏：想学雅思就点进来，不想就完全看不见。
+     *
+     * 词图本体是网页（见 {@link AtlasView}），这里只做入口和状态说明。
+     */
+    private void renderAtlas() {
+        boolean ready = AssetBridge.hasSite(this);
+
+        LinearLayout head = card("雅思词图 · IELTS Word Atlas", null);
+
+        TextView h = new TextView(this);
+        h.setText("一词一画，稳步上岸。");
+        h.setTextColor(C_FG);
+        h.setTextSize(16);
+        h.setTypeface(Typeface.DEFAULT_BOLD);
+        head.addView(h);
+
+        TextView sub = new TextView(this);
+        sub.setText("7,298 个雅思词 · 每词一幅插画 · 英美双发音 · FSRS 间隔复习");
+        sub.setTextColor(C_FG3);
+        sub.setTextSize(12);
+        sub.setPadding(0, dp(4), 0, dp(0));
+        head.addView(sub);
+        content.addView(head);
+
+        if (!ready) {
+            LinearLayout warn = card("还没打包", null);
+            TextView w = new TextView(this);
+            w.setText("APK 里缺少 assets/atlas/。\n\n"
+                    + "构建时加 --atlas 参数即可：\n"
+                    + "  python build_apk.py --atlas");
+            w.setTextColor(C_AMBER);
+            w.setTextSize(12.5f);
+            w.setLineSpacing(dp(3), 1f);
+            warn.addView(w);
+            content.addView(warn);
+            return;
+        }
+
+        // ── 主入口 ────────────────────────────────────────
+        LinearLayout go = card("开始学习", null);
+
+        TextView start = new TextView(this);
+        start.setText("打开雅思词图 →");
+        start.setTextColor(C_TEAL);
+        start.setTextSize(15);
+        start.setTypeface(Typeface.DEFAULT_BOLD);
+        start.setPadding(0, dp(6), 0, dp(8));
+        start.setOnClickListener(v -> atlasView.open());
+        go.addView(start);
+
+        // 分入口：直接跳某页
+        String[][] jumps = {
+                {"今日旅程", "#/"},
+                {"词图大全", "#/atlas"},
+                {"星空图谱", "#/atlas?view=galaxy"},
+                {"打字练习", "#/practice"},
+                {"我的数据", "#/me"},
+        };
+        for (String[] j : jumps) {
+            final String route = j[1];
+            TextView t = new TextView(this);
+            t.setText("· " + j[0]);
+            t.setTextColor(C_FG2);
+            t.setTextSize(13);
+            t.setPadding(0, dp(5), 0, dp(5));
+            t.setOnClickListener(v -> atlasView.open(route));
+            go.addView(t);
+        }
+        content.addView(go);
+
+        // ── 说明 ──────────────────────────────────────────
+        LinearLayout note = card("说明", null);
+        String[] lines = {
+                "· 完全独立：雅思进度与四六级词汇塔互不影响，各存各的。",
+                "· 不联网：词库、插画、发音全部打包在 APK 里，飞行模式也能背。",
+                "· 本地优先：进度只存在这台手机上，卸载即清空。",
+                "· 素材署名：词库与插画来自 Word Atlas 开源项目，CC BY 4.0。",
+        };
+        for (String line : lines) {
+            TextView t = new TextView(this);
+            t.setText(line);
+            t.setTextColor(C_FG3);
+            t.setTextSize(11.5f);
+            t.setLineSpacing(dp(2), 1f);
+            t.setPadding(0, dp(2), 0, dp(2));
+            note.addView(t);
+        }
+        content.addView(note);
     }
 
     // ══ 今日 ══════════════════════════════════════════════
@@ -363,6 +470,24 @@ public class MainActivity extends Activity {
             drill.setPadding(0, dp(9), 0, dp(2));
             drill.setOnClickListener(v -> engView.open(vf, vt, "练今天这批词"));
             vcard.addView(drill);
+
+            // 雅思线入口：专升本英语之外的另一条线。
+            // 放在这里是因为用户看到"背单词"时最可能也想要雅思词库，
+            // 不用跑去别的 tab 找。
+            TextView ielts = new TextView(this);
+            ielts.setText("雅思词图 · 7,298 词（独立进度）→");
+            ielts.setTextColor(C_AMBER);
+            ielts.setTextSize(13.5f);
+            ielts.setTypeface(Typeface.DEFAULT_BOLD);
+            ielts.setPadding(0, dp(9), 0, dp(2));
+            ielts.setOnClickListener(v -> {
+                if (AssetBridge.hasSite(this)) {
+                    atlasView.open();
+                } else {
+                    toast("词图还没打包进来，构建时加 --atlas");
+                }
+            });
+            vcard.addView(ielts);
 
             // 复习按钮：只在有旧词时出现
             final String rvJson = d.vocabReviewJson;
